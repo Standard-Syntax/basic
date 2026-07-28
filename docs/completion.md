@@ -62,6 +62,11 @@ phase01/review-and-integration: make check passed
 `git diff --check` passed throughout. The final validation is repeated after
 this report is committed.
 
+Fresh independent review and security audit were repeated after remediation.
+Both returned `PASS` on the final contract changes. The security pass is limited
+to the manifest and reasoning-contract layer; artifact-store provenance,
+execution enforcement, and workflow authorization remain deferred.
+
 ## Acceptance coverage
 
 - Repeated and differently ordered manifest definitions compile to identical
