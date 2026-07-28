@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package harness.reasoning.v1;
+
+import "harness/reasoning/v1/common.proto";
+
+option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
+
+message RepositoryContextFile {
+  string path = 1;
+  string sha256 = 2;
+  string content = 3;
+}
+
+message ImplementationRequest {
+  ReasoningRequestEnvelope envelope = 1;
+  string approved_task_id = 16;
+  string approved_task_digest = 17;
+  string approved_specification_id = 18;
+  string approved_specification_digest = 19;
+  string base_commit = 20;
+  repeated string readable_paths = 21;
+  repeated string writable_paths = 22;
+  repeated string prohibited_paths = 23;
+  repeated string acceptance_criterion_ids = 24;
+  repeated string available_check_ids = 25;
+  repeated RepositoryContextFile repository_context = 26;
+}
+
+enum FileOperation {
+  FILE_OPERATION_UNSPECIFIED = 0;
+  FILE_OPERATION_CREATE = 1;
+  FILE_OPERATION_UPDATE = 2;
+  FILE_OPERATION_DELETE = 3;
+}
+
+message FileChange {
+  string path = 1;
+  FileOperation operation = 2;
+  string expected_original_sha256 = 3;
+  optional string replacement_content = 4;
+  string rationale = 5;
+  repeated string acceptance_criterion_ids = 6;
+}
+
+message ScopeChangeRequest {
+  string summary = 1;
+  repeated string requested_readable_paths = 2;
+  repeated string requested_writable_paths = 3;
+  repeated string requested_acceptance_criterion_ids = 4;
+  repeated string requested_check_ids = 5;
+}
+
+message ImplementationProposal {
+  ProposalIdentity identity = 1;
+  string approved_task_id = 16;
+  string approved_task_digest = 17;
+  string approved_specification_digest = 18;
+  string summary = 19;
+  repeated FileChange changes = 20;
+  repeated string requested_declared_check_ids = 21;
+  repeated string assumptions = 22;
+  repeated string unresolved_questions = 23;
+  optional ScopeChangeRequest scope_change_request = 24;
+}

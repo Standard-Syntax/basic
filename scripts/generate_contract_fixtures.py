@@ -5,6 +5,7 @@ from pathlib import Path
 from google.protobuf.timestamp_pb2 import Timestamp
 from harness_agents._generated.harness.reasoning.v1 import (
     common_pb2,
+    implementation_pb2,
     planning_pb2,
     specification_pb2,
 )
@@ -12,6 +13,7 @@ from harness_agents._generated.harness.reasoning.v1 import (
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tests" / "contracts" / "v1" / "specification"
 PLANNING_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "planning"
+IMPLEMENTATION_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "implementation"
 
 
 def timestamp(seconds: int) -> Timestamp:
@@ -158,6 +160,82 @@ def planning_proposal() -> planning_pb2.TaskGraphProposal:
     )
 
 
+def implementation_request() -> implementation_pb2.ImplementationRequest:
+    value = request().envelope
+    value.request_id = "request-impl-001"
+    value.task_id = "TASK-001"
+    value.stage = common_pb2.REASONING_STAGE_IMPLEMENTATION
+    return implementation_pb2.ImplementationRequest(
+        envelope=value,
+        approved_task_id="TASK-001",
+        approved_task_digest="c" * 64,
+        approved_specification_id="spec-001",
+        approved_specification_digest="d" * 64,
+        base_commit="e" * 40,
+        readable_paths=["go"],
+        writable_paths=["go/internal/reasoning"],
+        prohibited_paths=["go/gen"],
+        acceptance_criterion_ids=["AC-001", "AC-002", "AC-003"],
+        available_check_ids=["CHECK-GO-TEST"],
+        repository_context=[
+            implementation_pb2.RepositoryContextFile(
+                path="go/internal/reasoning/existing.go",
+                sha256="f" * 64,
+                content="package reasoning\n",
+            )
+        ],
+    )
+
+
+def implementation_proposal() -> implementation_pb2.ImplementationProposal:
+    return implementation_pb2.ImplementationProposal(
+        identity=common_pb2.ProposalIdentity(
+            schema_version="1",
+            request_id="request-impl-001",
+            run_id="run-001",
+            task_id="TASK-001",
+            stage=common_pb2.REASONING_STAGE_IMPLEMENTATION,
+            attempt=1,
+            agent_manifest_digest="b" * 64,
+            input_artifact_digests=["a" * 64],
+        ),
+        approved_task_id="TASK-001",
+        approved_task_digest="c" * 64,
+        approved_specification_digest="d" * 64,
+        summary="Propose three complete-file operations.",
+        changes=[
+            implementation_pb2.FileChange(
+                path="go/internal/reasoning/create.go",
+                operation=implementation_pb2.FILE_OPERATION_CREATE,
+                expected_original_sha256=(
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                ),
+                replacement_content="package reasoning\n",
+                rationale="Add the bounded contract.",
+                acceptance_criterion_ids=["AC-001"],
+            ),
+            implementation_pb2.FileChange(
+                path="go/internal/reasoning/existing.go",
+                operation=implementation_pb2.FILE_OPERATION_UPDATE,
+                expected_original_sha256="f" * 64,
+                replacement_content="package reasoning\n\n// Updated.\n",
+                rationale="Update the bounded contract.",
+                acceptance_criterion_ids=["AC-002"],
+            ),
+            implementation_pb2.FileChange(
+                path="go/internal/reasoning/obsolete.go",
+                operation=implementation_pb2.FILE_OPERATION_DELETE,
+                expected_original_sha256="9" * 64,
+                rationale="Remove obsolete transport logic.",
+                acceptance_criterion_ids=["AC-003"],
+            ),
+        ],
+        requested_declared_check_ids=["CHECK-GO-TEST"],
+        assumptions=["kernel verifies original digests"],
+        unresolved_questions=[],
+    )
+
+
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "request.bin").write_bytes(request().SerializeToString(deterministic=True))
@@ -168,6 +246,13 @@ def main() -> None:
     )
     (PLANNING_OUTPUT / "proposal.bin").write_bytes(
         planning_proposal().SerializeToString(deterministic=True)
+    )
+    IMPLEMENTATION_OUTPUT.mkdir(parents=True, exist_ok=True)
+    (IMPLEMENTATION_OUTPUT / "request.bin").write_bytes(
+        implementation_request().SerializeToString(deterministic=True)
+    )
+    (IMPLEMENTATION_OUTPUT / "proposal.bin").write_bytes(
+        implementation_proposal().SerializeToString(deterministic=True)
     )
 
 
