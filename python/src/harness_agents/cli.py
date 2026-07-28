@@ -144,8 +144,11 @@ def _write_outputs(output: Path, manifest: bytes, digest_output: Path, digest: s
                 temporary.flush()
                 os.fsync(temporary.fileno())
                 temporary_paths.append(Path(temporary.name))
-        os.replace(temporary_paths.pop(0), output)
-        os.replace(temporary_paths.pop(0), digest_output)
+        manifest_temporary, digest_temporary = temporary_paths
+        os.replace(manifest_temporary, output)
+        temporary_paths.remove(manifest_temporary)
+        os.replace(digest_temporary, digest_output)
+        temporary_paths.remove(digest_temporary)
     finally:
         for path in temporary_paths:
             path.unlink(missing_ok=True)

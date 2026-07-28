@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 import rfc8785
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
+from referencing.exceptions import Unresolvable
 
 SCHEMA_ID = "urn:agent-harness:schema:agent-manifest:v1"
 SCHEMA_VERSION = "1"
@@ -208,6 +209,8 @@ class AgentDefinition:
                 )
             except SchemaError as error:
                 raise ManifestError(f"invalid manifest schema: {error.message}") from error
+            except Unresolvable as error:
+                raise ManifestError(f"cannot resolve manifest schema reference: {error}") from error
             if errors:
                 first = errors[0]
                 raise ManifestError(f"{first.json_path}: {first.message}")

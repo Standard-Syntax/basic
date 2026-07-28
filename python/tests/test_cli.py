@@ -98,6 +98,59 @@ def test_cli_cleans_temporary_files_after_write_failure(
     assert not list(tmp_path.glob(".*.tmp"))
 
 
+def test_cli_cleans_temporary_files_after_replace_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "manifest.json"
+    output.mkdir()
+    digest = tmp_path / "manifest.sha256"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harness-agents",
+            "compile",
+            str(ROOT / "python/agents/implementation.json"),
+            "--output",
+            str(output),
+            "--digest-output",
+            str(digest),
+        ],
+    )
+    assert main() == 2
+    assert output.is_dir()
+    assert not digest.exists()
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_cli_rejects_unresolvable_schema_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    schema = tmp_path / "schema.json"
+    schema.write_text('{"$ref":"urn:missing-schema"}')
+    output = tmp_path / "manifest.json"
+    digest = tmp_path / "manifest.sha256"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harness-agents",
+            "compile",
+            str(ROOT / "python/agents/implementation.json"),
+            "--schema",
+            str(schema),
+            "--output",
+            str(output),
+            "--digest-output",
+            str(digest),
+        ],
+    )
+    assert main() == 2
+    assert "cannot resolve manifest schema reference" in capsys.readouterr().err
+    assert not output.exists()
+    assert not digest.exists()
+
+
 def test_installed_wheel_compiles_outside_repository(tmp_path: Path) -> None:
     wheel_dir = tmp_path / "wheel"
     environment = tmp_path / "venv"
@@ -117,7 +170,9 @@ def test_installed_wheel_compiles_outside_repository(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    wheel = next(wheel_dir.glob("*.whl"))
+    wheels = list(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel = wheels[0]
     python = environment / "bin/python"
     subprocess.run(
         ["uv", "pip", "install", "--python", str(python), str(wheel)],
