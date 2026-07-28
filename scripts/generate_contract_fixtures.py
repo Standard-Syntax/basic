@@ -11,12 +11,15 @@ from harness_agents._generated.harness.reasoning.v1 import (
     review_pb2,
     specification_pb2,
 )
+from harness_agents.cli import _definition, _load_json
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tests" / "contracts" / "v1" / "specification"
 PLANNING_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "planning"
 IMPLEMENTATION_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "implementation"
 REVIEW_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "review"
+MANIFEST_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "manifest"
+AGENT_DEFINITIONS = ROOT / "python" / "agents"
 
 
 def timestamp(seconds: int) -> Timestamp:
@@ -363,6 +366,15 @@ def main() -> None:
     (REVIEW_OUTPUT / "proposal.bin").write_bytes(
         review_proposal().SerializeToString(deterministic=True)
     )
+    MANIFEST_OUTPUT.mkdir(parents=True, exist_ok=True)
+    for stage in ("specification", "planning", "implementation", "review"):
+        definition_path = AGENT_DEFINITIONS / f"{stage}.json"
+        compiled = _definition(
+            _load_json(definition_path, f"{stage} definition"),
+            definition_path.parent,
+        ).compile()
+        (MANIFEST_OUTPUT / f"{stage}.json").write_bytes(compiled.canonical_bytes + b"\n")
+        (MANIFEST_OUTPUT / f"{stage}.sha256").write_bytes(compiled.digest.encode("ascii") + b"\n")
 
 
 if __name__ == "__main__":

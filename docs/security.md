@@ -1,12 +1,21 @@
 # Security
 
-## Phase 0–2 boundaries
+## Phase 0–3 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
   workflow-transition, approval, publication, or task-scope capability.
 - Manifests are schema-validated, canonicalized, immutable, and SHA-256
   addressed.
+- The installed compiler always applies its packaged v1 schema; an override can
+  only add restrictions. Python and Go enforce the same closed stage/output
+  mapping.
+- Prompt files must be UTF-8, but their exact bytes are hashed without newline
+  or encoding normalization. Definition parsing rejects duplicate and unknown
+  fields before any output write.
+- The CLI performs local authoring I/O only. It cannot call a model, provider,
+  network, database, Git, shell, registry, workflow, approval, or publication
+  interface.
 - Generated transports carry data but do not authorize it.
 - Review recommendations are advisory and cannot encode approval.
 - No production secrets, runtime side effects, automatic merge, or deployment

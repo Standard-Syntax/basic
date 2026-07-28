@@ -1,0 +1,33 @@
+{
+  "name": "bounded-planning",
+  "version": "1.0.0",
+  "stage": "planning",
+  "prompt_file": "../prompts/planning.md",
+  "model": {
+    "capability_class": "general_reasoning",
+    "temperature": 0.1,
+    "maximum_output_tokens": 16000
+  },
+  "context": {
+    "include_specification": true,
+    "include_task": false,
+    "repository_selection": "kernel_selected",
+    "maximum_context_tokens": 140000
+  },
+  "tools": {
+    "allowed_requests": [
+      "read_repository_file",
+      "search_repository",
+      "request_declared_check",
+      "report_blocker"
+    ],
+    "arbitrary_shell": false,
+    "arbitrary_network": false,
+    "direct_file_write": false
+  },
+  "output": {"schema": "task_graph_proposal.v1"},
+  "metadata": {
+    "description": "Bounded task-graph proposal agent",
+    "labels": ["golden", "planning"]
+  }
+}

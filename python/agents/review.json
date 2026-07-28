@@ -1,0 +1,33 @@
+{
+  "name": "independent-review",
+  "version": "1.0.0",
+  "stage": "review",
+  "prompt_file": "../prompts/review.md",
+  "model": {
+    "capability_class": "independent_review",
+    "temperature": 0,
+    "maximum_output_tokens": 16000
+  },
+  "context": {
+    "include_specification": true,
+    "include_task": true,
+    "repository_selection": "kernel_selected",
+    "maximum_context_tokens": 160000
+  },
+  "tools": {
+    "allowed_requests": [
+      "read_repository_file",
+      "search_repository",
+      "request_declared_check",
+      "report_blocker"
+    ],
+    "arbitrary_shell": false,
+    "arbitrary_network": false,
+    "direct_file_write": false
+  },
+  "output": {"schema": "review_proposal.v1"},
+  "metadata": {
+    "description": "Independent evidence-based review proposal agent",
+    "labels": ["golden", "review"]
+  }
+}

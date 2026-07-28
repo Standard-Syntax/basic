@@ -38,6 +38,12 @@ var validOutputs = []string{
 	"specification_proposal.v1",
 	"task_graph_proposal.v1",
 }
+var stageOutputs = map[string]string{
+	"specification":  "specification_proposal.v1",
+	"planning":       "task_graph_proposal.v1",
+	"implementation": "implementation_proposal.v1",
+	"review":         "review_proposal.v1",
+}
 
 // Manifest is a transport-safe representation of agent-manifest v1.
 type Manifest struct {
@@ -195,6 +201,9 @@ func (m Manifest) Validate() error {
 	}
 	if !slices.Contains(validOutputs, m.Output.Schema) {
 		return errors.New("unsupported output schema")
+	}
+	if m.Output.Schema != stageOutputs[m.Stage] {
+		return errors.New("output schema does not match stage")
 	}
 	if len(m.Metadata.Description) > 500 || !sortedUniqueLabels(m.Metadata.Labels) {
 		return errors.New("invalid metadata")
