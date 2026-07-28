@@ -374,10 +374,7 @@ def main() -> None:
             definition_path.parent,
         ).compile()
         (MANIFEST_OUTPUT / f"{stage}.json").write_bytes(compiled.canonical_bytes + b"\n")
-        (MANIFEST_OUTPUT / f"{stage}.sha256").write_text(
-            compiled.digest + "\n",
-            encoding="ascii",
-        )
+        (MANIFEST_OUTPUT / f"{stage}.sha256").write_bytes(compiled.digest.encode("ascii") + b"\n")
 
 
 if __name__ == "__main__":
