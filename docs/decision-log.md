@@ -68,21 +68,22 @@ Arbitrary shell and model-generated scripts remain prohibited.
 ### Date
 2026-07-27
 
-## DEC-005: PostgreSQL is planned for authoritative metadata
+## DEC-005: PostgreSQL stores authoritative metadata
 
 ### Decision
-Use PostgreSQL for future authoritative workflow metadata and external artifact
+Use PostgreSQL for authoritative workflow metadata and external artifact
 storage for large immutable content.
 ### Options considered
 Files only; embedded database; PostgreSQL plus artifact storage.
 ### Pros
 Transactional state/event updates and operational maturity.
 ### Cons
-Future infrastructure and migrations.
+Database infrastructure and migrations are required.
 ### Why this option
 Atomic state plus append-only event requirements need transactional storage.
 ### Consequences
-No database runtime or migration is added in Phase 0–1.
+Phase 2 uses pgx/v5, embedded forward-only migrations, an advisory migration
+lock, serializable command transactions, and external artifact bodies.
 ### Date
 2026-07-27
 
@@ -134,5 +135,24 @@ Provider behavior is not exercised initially.
 Authority and validation must be provider-independent.
 ### Consequences
 Phase 0–1 contains no fake adapter or real provider runtime.
+
+## DEC-009: Commands are idempotent transactional decisions
+
+### Decision
+Bind every command ID to a deterministic request digest and persist its result
+with snapshot and event changes in one serializable transaction.
+### Options considered
+At-least-once mutation; event-only deduplication; command ledger plus result.
+### Pros
+Safe replay, conflict detection, ordered events, and atomic recovery.
+### Cons
+Command retention and deterministic request encoding are required.
+### Why this option
+Retries must not repeat a transition or accept different content silently.
+### Consequences
+Exact replay returns the recorded result; conflicting reuse fails closed, and
+pre-commit errors leave no command, event, or state change.
+### Date
+2026-07-27
 ### Date
 2026-07-27

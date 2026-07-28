@@ -1,11 +1,50 @@
 # Workflow state machine
 
-The future kernel will own explicit run and task state machines. Every
-transition must validate current state, actor authority, and required artifacts,
-then append an event and update current state atomically. Invalid transitions
-must make no change.
+The Go kernel owns closed run and task state enums. Every command validates the
+actor, aggregate identity, expected revision, current state, and required
+immutable bindings before producing a copied next snapshot and event. Errors
+produce neither a partial snapshot nor events.
 
-Phase 0–1 intentionally implements no state, persistence, transition, command,
-approval, or event runtime. Reasoning messages are proposals only and cannot
-advance a workflow. The complete state enumeration remains in
-`docs/plan-brief.md` until the Phase 2 audited design is implemented.
+## Run transitions
+
+| From | Command result |
+|---|---|
+| new | `DRAFT` |
+| `DRAFT` | `SPECIFICATION_REVIEW` |
+| `SPECIFICATION_REVIEW` | `DRAFT`, `TASK_PLANNING`, or `REJECTED` |
+| `TASK_PLANNING` | `TASK_PLAN_REVIEW` |
+| `TASK_PLAN_REVIEW` | `TASK_PLANNING`, `READY`, or `REJECTED` |
+| `READY` | `EXECUTING` |
+| `EXECUTING` | `VERIFYING` after every persisted task is accepted |
+| `VERIFYING` | `REVIEWING` |
+| `REVIEWING` | `AWAITING_APPROVAL` |
+| `AWAITING_APPROVAL` | `MERGE_READY` or `REJECTED` |
+| `MERGE_READY` | `MERGED` by recording an external merge fact |
+
+An authorized service may fail any nonterminal run. A human may cancel any
+nonterminal run; cancellation atomically cancels its nonterminal tasks. Terminal
+run states are `MERGED`, `REJECTED`, `FAILED`, and `CANCELLED`.
+
+## Task transitions
+
+| From | Command result |
+|---|---|
+| new | `READY` without dependencies, otherwise `PENDING` |
+| `PENDING` | `READY` when all prerequisites are accepted |
+| `READY` | `LEASED`, incrementing the attempt |
+| `LEASED` | `REASONING`, or `READY` on release/expiry recording |
+| `REASONING` | `PROPOSAL_REJECTED` or `EXECUTING` |
+| `PROPOSAL_REJECTED` | `READY`, or `FAILED` when attempts are exhausted |
+| `EXECUTING` | `VERIFYING` |
+| `VERIFYING` | `REVIEWING` or `REWORK_REQUIRED` |
+| `REVIEWING` | `AWAITING_APPROVAL` or `REWORK_REQUIRED` |
+| `REWORK_REQUIRED` | `READY`, or `FAILED` when attempts are exhausted |
+| `AWAITING_APPROVAL` | `ACCEPTED` or `REWORK_REQUIRED` |
+
+An authorized operational service may record a non-retryable failure for any
+nonterminal task. Run cancellation may cancel any nonterminal task. Terminal
+task states are `ACCEPTED`, `FAILED`, and `CANCELLED`.
+
+Task-graph approval validates uniqueness, references, attempt limits, and
+acyclicity, then atomically creates snapshots, dependency edges, creation or
+readiness events, and the run transition. Models and Python have no authority.
