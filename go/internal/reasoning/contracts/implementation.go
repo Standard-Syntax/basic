@@ -82,55 +82,20 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 	if err != nil {
 		return ImplementationRequest{}, err
 	}
-	if !taskIDPattern.MatchString(value.GetApprovedTaskId()) ||
-		!digestPattern.MatchString(value.GetApprovedTaskDigest()) ||
-		value.GetApprovedSpecificationId() == "" ||
-		!digestPattern.MatchString(value.GetApprovedSpecificationDigest()) ||
-		!commitPattern.MatchString(value.GetBaseCommit()) ||
-		!validCriteria(value.GetAcceptanceCriterionIds()) ||
-		len(value.GetAvailableCheckIds()) == 0 {
-		return ImplementationRequest{}, errors.New("invalid implementation request identity or limits")
+	if err := validateImplementationRequestFields(value); err != nil {
+		return ImplementationRequest{}, err
 	}
 	if err := validatePathScopes(
 		value.GetReadablePaths(), value.GetWritablePaths(), value.GetProhibitedPaths(),
 	); err != nil {
 		return ImplementationRequest{}, err
 	}
-	for _, check := range value.GetAvailableCheckIds() {
-		if !checkIDPattern.MatchString(check) {
-			return ImplementationRequest{}, errors.New("invalid available check ID")
-		}
+	if err := validateAvailableChecks(value.GetAvailableCheckIds()); err != nil {
+		return ImplementationRequest{}, err
 	}
-	repositoryContext := make([]RepositoryContextFile, 0, len(value.GetRepositoryContext()))
-	for _, file := range value.GetRepositoryContext() {
-		if !validRepoPath(file.GetPath()) || !pathWithin(file.GetPath(), value.GetReadablePaths()) ||
-			!digestPattern.MatchString(file.GetSha256()) {
-			return ImplementationRequest{}, errors.New("invalid repository context")
-		}
-		for _, prohibited := range value.GetProhibitedPaths() {
-			if pathWithin(file.GetPath(), []string{prohibited}) {
-				return ImplementationRequest{}, errors.New("repository context targets prohibited path")
-			}
-		}
-		sum := sha256.Sum256([]byte(file.GetContent()))
-		if hex.EncodeToString(sum[:]) != file.GetSha256() {
-			return ImplementationRequest{}, errors.New("repository context digest mismatch")
-		}
-		contextBound := false
-		for _, artifact := range envelope.InputArtifacts {
-			if artifact.SHA256 == file.GetSha256() {
-				contextBound = true
-				break
-			}
-		}
-		if !contextBound {
-			return ImplementationRequest{}, errors.New(
-				"repository context is not bound to an input artifact",
-			)
-		}
-		repositoryContext = append(repositoryContext, RepositoryContextFile{
-			Path: file.GetPath(), SHA256: file.GetSha256(), Content: file.GetContent(),
-		})
+	repositoryContext, err := mapRepositoryContext(value, envelope.InputArtifacts)
+	if err != nil {
+		return ImplementationRequest{}, err
 	}
 	return ImplementationRequest{
 		Envelope:                    envelope,
@@ -145,6 +110,86 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 		AvailableCheckIDs:      value.GetAvailableCheckIds(),
 		RepositoryContext:      repositoryContext,
 	}, nil
+}
+
+func validateImplementationRequestFields(value *reasoningv1.ImplementationRequest) error {
+	if !taskIDPattern.MatchString(value.GetApprovedTaskId()) ||
+		!digestPattern.MatchString(value.GetApprovedTaskDigest()) ||
+		value.GetApprovedSpecificationId() == "" ||
+		!digestPattern.MatchString(value.GetApprovedSpecificationDigest()) ||
+		!commitPattern.MatchString(value.GetBaseCommit()) ||
+		!validCriteria(value.GetAcceptanceCriterionIds()) ||
+		len(value.GetAvailableCheckIds()) == 0 {
+		return errors.New("invalid implementation request identity or limits")
+	}
+	return nil
+}
+
+func validateAvailableChecks(values []string) error {
+	for _, check := range values {
+		if !checkIDPattern.MatchString(check) {
+			return errors.New("invalid available check ID")
+		}
+	}
+	return nil
+}
+
+func mapRepositoryContext(
+	value *reasoningv1.ImplementationRequest, artifacts []Artifact,
+) ([]RepositoryContextFile, error) {
+	repositoryContext := make([]RepositoryContextFile, 0, len(value.GetRepositoryContext()))
+	for _, file := range value.GetRepositoryContext() {
+		mapped, err := mapRepositoryContextFile(file, value, artifacts)
+		if err != nil {
+			return nil, err
+		}
+		repositoryContext = append(repositoryContext, mapped)
+	}
+	return repositoryContext, nil
+}
+
+func mapRepositoryContextFile(
+	file *reasoningv1.RepositoryContextFile,
+	request *reasoningv1.ImplementationRequest,
+	artifacts []Artifact,
+) (RepositoryContextFile, error) {
+	if !validRepoPath(file.GetPath()) || !pathWithin(file.GetPath(), request.GetReadablePaths()) ||
+		!digestPattern.MatchString(file.GetSha256()) {
+		return RepositoryContextFile{}, errors.New("invalid repository context")
+	}
+	if pathIsProhibited(file.GetPath(), request.GetProhibitedPaths()) {
+		return RepositoryContextFile{}, errors.New("repository context targets prohibited path")
+	}
+	sum := sha256.Sum256([]byte(file.GetContent()))
+	if hex.EncodeToString(sum[:]) != file.GetSha256() {
+		return RepositoryContextFile{}, errors.New("repository context digest mismatch")
+	}
+	if !artifactContainsDigest(artifacts, file.GetSha256()) {
+		return RepositoryContextFile{}, errors.New(
+			"repository context is not bound to an input artifact",
+		)
+	}
+	return RepositoryContextFile{
+		Path: file.GetPath(), SHA256: file.GetSha256(), Content: file.GetContent(),
+	}, nil
+}
+
+func pathIsProhibited(filePath string, prohibitedPaths []string) bool {
+	for _, prohibited := range prohibitedPaths {
+		if pathWithin(filePath, []string{prohibited}) {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactContainsDigest(artifacts []Artifact, digest string) bool {
+	for _, artifact := range artifacts {
+		if artifact.SHA256 == digest {
+			return true
+		}
+	}
+	return false
 }
 
 func MapImplementationProposal(
@@ -164,44 +209,15 @@ func MapImplementationProposal(
 	if value.GetSummary() == "" || len(value.GetChanges()) == 0 {
 		return ImplementationProposal{}, errors.New("incomplete implementation proposal")
 	}
-	for _, check := range value.GetRequestedDeclaredCheckIds() {
-		if !slices.Contains(request.AvailableCheckIDs, check) {
-			return ImplementationProposal{}, errors.New("undeclared check requested")
-		}
+	if err := validateRequestedChecks(value.GetRequestedDeclaredCheckIds(), request); err != nil {
+		return ImplementationProposal{}, err
 	}
-	covered := make(map[string]bool, len(request.AcceptanceCriterionIDs))
-	changes := make([]FileChange, 0, len(value.GetChanges()))
-	for _, change := range value.GetChanges() {
-		if !validRepoPath(change.GetPath()) || !pathWithin(change.GetPath(), request.WritablePaths) ||
-			change.GetRationale() == "" || len(change.GetAcceptanceCriterionIds()) == 0 {
-			return ImplementationProposal{}, errors.New("invalid or out-of-scope file change")
-		}
-		for _, prohibited := range request.ProhibitedPaths {
-			if pathWithin(change.GetPath(), []string{prohibited}) {
-				return ImplementationProposal{}, errors.New("file change targets prohibited path")
-			}
-		}
-		operation, err := validateFileOperation(change)
-		if err != nil {
-			return ImplementationProposal{}, err
-		}
-		for _, criterion := range change.GetAcceptanceCriterionIds() {
-			if !slices.Contains(request.AcceptanceCriterionIDs, criterion) {
-				return ImplementationProposal{}, errors.New("unknown acceptance criterion coverage")
-			}
-			covered[criterion] = true
-		}
-		changes = append(changes, FileChange{
-			Path: change.GetPath(), Operation: operation,
-			ExpectedOriginalSHA256: change.GetExpectedOriginalSha256(),
-			ReplacementContent:     change.ReplacementContent, Rationale: change.GetRationale(),
-			AcceptanceCriterionIDs: change.GetAcceptanceCriterionIds(),
-		})
+	changes, covered, err := mapFileChanges(value.GetChanges(), request)
+	if err != nil {
+		return ImplementationProposal{}, err
 	}
-	for _, criterion := range request.AcceptanceCriterionIDs {
-		if !covered[criterion] {
-			return ImplementationProposal{}, errors.New("required acceptance coverage missing")
-		}
+	if err := validateImplementationCoverage(request.AcceptanceCriterionIDs, covered); err != nil {
+		return ImplementationProposal{}, err
 	}
 	scopeChange, err := mapScopeChangeRequest(value.GetScopeChangeRequest())
 	if err != nil {
@@ -213,6 +229,69 @@ func MapImplementationProposal(
 		Assumptions:               value.GetAssumptions(), UnresolvedQuestions: value.GetUnresolvedQuestions(),
 		ScopeChangeRequest: scopeChange,
 	}, nil
+}
+
+func validateRequestedChecks(values []string, request ImplementationRequest) error {
+	for _, check := range values {
+		if !slices.Contains(request.AvailableCheckIDs, check) {
+			return errors.New("undeclared check requested")
+		}
+	}
+	return nil
+}
+
+func mapFileChanges(
+	values []*reasoningv1.FileChange, request ImplementationRequest,
+) ([]FileChange, map[string]bool, error) {
+	covered := make(map[string]bool, len(request.AcceptanceCriterionIDs))
+	changes := make([]FileChange, 0, len(values))
+	for _, change := range values {
+		mapped, err := mapFileChange(change, request, covered)
+		if err != nil {
+			return nil, nil, err
+		}
+		changes = append(changes, mapped)
+	}
+	return changes, covered, nil
+}
+
+func mapFileChange(
+	change *reasoningv1.FileChange,
+	request ImplementationRequest,
+	covered map[string]bool,
+) (FileChange, error) {
+	if !validRepoPath(change.GetPath()) || !pathWithin(change.GetPath(), request.WritablePaths) ||
+		change.GetRationale() == "" || len(change.GetAcceptanceCriterionIds()) == 0 {
+		return FileChange{}, errors.New("invalid or out-of-scope file change")
+	}
+	if pathIsProhibited(change.GetPath(), request.ProhibitedPaths) {
+		return FileChange{}, errors.New("file change targets prohibited path")
+	}
+	operation, err := validateFileOperation(change)
+	if err != nil {
+		return FileChange{}, err
+	}
+	for _, criterion := range change.GetAcceptanceCriterionIds() {
+		if !slices.Contains(request.AcceptanceCriterionIDs, criterion) {
+			return FileChange{}, errors.New("unknown acceptance criterion coverage")
+		}
+		covered[criterion] = true
+	}
+	return FileChange{
+		Path: change.GetPath(), Operation: operation,
+		ExpectedOriginalSHA256: change.GetExpectedOriginalSha256(),
+		ReplacementContent:     change.ReplacementContent, Rationale: change.GetRationale(),
+		AcceptanceCriterionIDs: change.GetAcceptanceCriterionIds(),
+	}, nil
+}
+
+func validateImplementationCoverage(criteria []string, covered map[string]bool) error {
+	for _, criterion := range criteria {
+		if !covered[criterion] {
+			return errors.New("required acceptance coverage missing")
+		}
+	}
+	return nil
 }
 
 func mapScopeChangeRequest(value *reasoningv1.ScopeChangeRequest) (*ScopeChangeRequest, error) {
