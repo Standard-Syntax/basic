@@ -86,6 +86,7 @@ type RejectSpecification struct {
 	ID            string          `json:"run_id"`
 	Specification ArtifactRef     `json:"specification"`
 	Reason        string          `json:"reason"`
+	Terminal      bool            `json:"terminal"`
 }
 
 func (RejectSpecification) runCommand()                 {}
@@ -117,6 +118,7 @@ type RejectTaskGraph struct {
 	ID        string          `json:"run_id"`
 	TaskGraph ArtifactRef     `json:"task_graph"`
 	Reason    string          `json:"reason"`
+	Terminal  bool            `json:"terminal"`
 }
 
 func (RejectTaskGraph) runCommand()                 {}
@@ -251,6 +253,9 @@ func (r Run) rejectSpecification(command RejectSpecification) (runTransition, er
 	}
 	next := r
 	next.State = RunStateDraft
+	if command.Terminal {
+		next.State = RunStateRejected
+	}
 	return runTransition{
 		next: next, eventType: "SPECIFICATION_REJECTED",
 		payload: map[string]any{
@@ -308,6 +313,9 @@ func (r Run) rejectTaskGraph(command RejectTaskGraph) (runTransition, error) {
 	}
 	next := r
 	next.State = RunStateTaskPlanning
+	if command.Terminal {
+		next.State = RunStateRejected
+	}
 	payload := artifactPayload("task_graph", command.TaskGraph)
 	payload["reason"] = command.Reason
 	return runTransition{

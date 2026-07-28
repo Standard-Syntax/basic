@@ -1,7 +1,7 @@
 # Resource analysis
 
-Phase 0–1 runs only local builds, compilation, and tests. The service commands
-perform no work and consume no persistent resources.
+Phase 2 adds PostgreSQL metadata persistence. The committed runtime still starts
+no service and performs no external work.
 
 | Area | Initial expectation |
 |---|---|
@@ -9,10 +9,15 @@ perform no work and consume no persistent resources.
 | Memory | under 2 GiB for the aggregate check |
 | Disk | source, dependency caches, and generated bindings; no runtime data |
 | Network | dependency bootstrap only; no runtime network |
-| Database | none; later metadata growth must be measured per run/task/event |
-| Artifacts | committed fixtures only; later logs/responses stored out of rows |
+| Database | one snapshot plus one command and event row per accepted transition; dependency edges scale with the approved DAG |
+| Artifacts | URIs and SHA-256 digests only; bodies, logs, and responses remain external |
 | Model tokens | zero; no provider exists |
-| Concurrency | one local validation job; runtime tasks deferred |
+| Concurrency | serializable transactions and aggregate row locks; task execution remains deferred |
+
+The integration suite uses disposable PostgreSQL 18.1 on
+`127.0.0.1:55433`, backed by tmpfs and removed after every run. Production
+pool sizing, retention, vacuum, partitioning, backup, and event payload limits
+remain deployment concerns.
 
 Before runtime implementation, configuration must bound maximum proposal bytes,
 changed files, single-file size, total replacement content, context and output

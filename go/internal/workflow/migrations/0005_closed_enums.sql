@@ -1,0 +1,29 @@
+ALTER TABLE workflow_runs ADD CONSTRAINT workflow_runs_state_closed CHECK (
+    state IN (
+        'DRAFT','SPECIFICATION_REVIEW','TASK_PLANNING','TASK_PLAN_REVIEW',
+        'READY','EXECUTING','VERIFYING','REVIEWING','AWAITING_APPROVAL',
+        'MERGE_READY','MERGED','REJECTED','FAILED','CANCELLED'
+    )
+);
+
+ALTER TABLE workflow_tasks ADD CONSTRAINT workflow_tasks_state_closed CHECK (
+    state IN (
+        'PENDING','READY','LEASED','REASONING','PROPOSAL_REJECTED',
+        'EXECUTING','VERIFYING','REVIEWING','REWORK_REQUIRED',
+        'AWAITING_APPROVAL','ACCEPTED','FAILED','CANCELLED'
+    )
+);
+
+ALTER TABLE workflow_commands ADD CONSTRAINT workflow_commands_actor_kind_closed CHECK (
+    actor_kind IN (
+        'HUMAN','WORKFLOW_SERVICE','REASONING_SERVICE','EXECUTION_SERVICE',
+        'VERIFICATION_SERVICE','REVIEW_SERVICE','MERGE_SERVICE','PYTHON','MODEL'
+    )
+);
+
+ALTER TABLE workflow_events ADD CONSTRAINT workflow_events_actor_kind_closed CHECK (
+    actor_kind IN (
+        'HUMAN','WORKFLOW_SERVICE','REASONING_SERVICE','EXECUTION_SERVICE',
+        'VERIFICATION_SERVICE','REVIEW_SERVICE','MERGE_SERVICE','PYTHON','MODEL'
+    )
+);

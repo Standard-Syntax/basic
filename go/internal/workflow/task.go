@@ -30,7 +30,8 @@ func (l LeaseRef) Validate() error {
 }
 
 func (l LeaseRef) Equal(other LeaseRef) bool {
-	return l.ID == other.ID && l.OwnerID == other.OwnerID && l.ExpiresAt.Equal(other.ExpiresAt)
+	return l.ID == other.ID && l.OwnerID == other.OwnerID &&
+		l.ExpiresAt.UnixMicro() == other.ExpiresAt.UnixMicro()
 }
 
 type TaskDefinition struct {

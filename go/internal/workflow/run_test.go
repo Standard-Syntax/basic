@@ -107,6 +107,24 @@ func TestSpecificationRejectionReturnsToDraft(t *testing.T) {
 	}
 }
 
+func TestSpecificationRejectionCanTerminateRun(t *testing.T) {
+	run := createTestRun(t)
+	review, _, err := run.Apply(ProposeSpecification{
+		Meta: envelope(ActorWorkflowService, run.Revision),
+		ID:   run.ID, Specification: testSpec,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := review.Apply(RejectSpecification{
+		Meta: envelope(ActorHuman, review.Revision), ID: review.ID,
+		Specification: testSpec, Reason: "not authorized", Terminal: true,
+	})
+	if err != nil || next.State != RunStateRejected {
+		t.Fatalf("unexpected terminal rejection: %#v %v", next, err)
+	}
+}
+
 func TestInvalidSpecificationCommandsDoNotMutateOrEmit(t *testing.T) {
 	run := createTestRun(t)
 	review, _, err := run.Apply(ProposeSpecification{

@@ -15,11 +15,29 @@ import (
 )
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	inject func(FaultPoint) error
 }
+
+type FaultPoint string
+
+var errReplayAfterConflict = errors.New("replay command after reservation conflict")
+
+const (
+	FaultBeforeEvents   FaultPoint = "before_events"
+	FaultBeforeSnapshot FaultPoint = "before_snapshot"
+	FaultBeforeCommit   FaultPoint = "before_commit"
+)
 
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
+}
+
+func (s *Store) fault(point FaultPoint) error {
+	if s.inject != nil {
+		return s.inject(point)
+	}
+	return nil
 }
 
 type CommandResult struct {
@@ -45,8 +63,12 @@ func (s *Store) ExecuteRun(ctx context.Context, command RunCommand) (CommandResu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	result, err := executeRunTransaction(ctx, tx, command, digest)
+	result, err := s.executeRunTransaction(ctx, tx, command, digest)
 	if err != nil {
+		if errors.Is(err, errReplayAfterConflict) {
+			_ = tx.Rollback(ctx)
+			return s.replayAfterConflict(ctx, command.Envelope().CommandID, digest)
+		}
 		return CommandResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -69,7 +91,7 @@ func typedCommandDigest(command any, label string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func executeRunTransaction(
+func (s *Store) executeRunTransaction(
 	ctx context.Context, tx pgx.Tx, command RunCommand, digest string,
 ) (CommandResult, error) {
 	if result, found, err := loadCommandResult(ctx, tx, command.Envelope().CommandID, digest); err != nil {
@@ -99,10 +121,17 @@ func executeRunTransaction(
 		}
 		decision.events = append(decision.events, cancelEvents...)
 	}
-	if err := persistRunTransition(ctx, tx, command, digest, decision); err != nil {
+	if err := s.persistRunTransition(ctx, tx, command, digest, decision); err != nil {
 		return CommandResult{}, err
 	}
-	return recordRunCommandResult(ctx, tx, command, decision)
+	result, err := recordRunCommandResult(ctx, tx, command, decision)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if err := s.fault(FaultBeforeCommit); err != nil {
+		return CommandResult{}, err
+	}
+	return result, nil
 }
 
 func loadRunForCommand(ctx context.Context, tx pgx.Tx, command RunCommand) (Run, error) {
@@ -148,7 +177,7 @@ func decideRunCommand(current Run, command RunCommand) (runPersistenceDecision, 
 	}, err
 }
 
-func persistRunTransition(
+func (s *Store) persistRunTransition(
 	ctx context.Context,
 	tx pgx.Tx,
 	command RunCommand,
@@ -157,8 +186,11 @@ func persistRunTransition(
 ) error {
 	if err := reserveCommand(ctx, tx, command, digest); err != nil {
 		if isUniqueViolation(err) {
-			return ErrCommandConflict
+			return errReplayAfterConflict
 		}
+		return err
+	}
+	if err := s.fault(FaultBeforeEvents); err != nil {
 		return err
 	}
 	for _, event := range decision.events {
@@ -177,6 +209,9 @@ func persistRunTransition(
 			decision.next.ID, dependency.TaskID, dependency.DependsOnID); err != nil {
 			return fmt.Errorf("insert task dependency: %w", err)
 		}
+	}
+	if err := s.fault(FaultBeforeSnapshot); err != nil {
+		return err
 	}
 	if _, ok := command.(CreateRun); ok {
 		return insertRun(ctx, tx, decision.next)
@@ -218,8 +253,12 @@ func (s *Store) ExecuteTask(ctx context.Context, command TaskCommand) (CommandRe
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	result, err := executeTaskTransaction(ctx, tx, command, digest)
+	result, err := s.executeTaskTransaction(ctx, tx, command, digest)
 	if err != nil {
+		if errors.Is(err, errReplayAfterConflict) {
+			_ = tx.Rollback(ctx)
+			return s.replayAfterConflict(ctx, command.Envelope().CommandID, digest)
+		}
 		return CommandResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -232,7 +271,7 @@ func taskCommandDigest(command TaskCommand) (string, error) {
 	return typedCommandDigest(command, "task command")
 }
 
-func executeTaskTransaction(
+func (s *Store) executeTaskTransaction(
 	ctx context.Context, tx pgx.Tx, command TaskCommand, digest string,
 ) (CommandResult, error) {
 	if result, found, err := loadCommandResult(ctx, tx, command.Envelope().CommandID, digest); err != nil {
@@ -240,6 +279,9 @@ func executeTaskTransaction(
 	} else if found {
 		result.Replay = true
 		return result, nil
+	}
+	if err := validateTaskRunGate(ctx, tx, command); err != nil {
+		return CommandResult{}, err
 	}
 	current, err := loadTask(ctx, tx, command.RunID(), command.TaskID())
 	if err != nil {
@@ -249,14 +291,21 @@ func executeTaskTransaction(
 	if err != nil {
 		return CommandResult{}, err
 	}
-	events, err = persistTaskTransition(ctx, tx, command, digest, current, next, events)
+	events, err = s.persistTaskTransition(ctx, tx, command, digest, current, next, events)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	return recordTaskCommandResult(ctx, tx, command, next, events)
+	result, err := recordTaskCommandResult(ctx, tx, command, next, events)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if err := s.fault(FaultBeforeCommit); err != nil {
+		return CommandResult{}, err
+	}
+	return result, nil
 }
 
-func persistTaskTransition(
+func (s *Store) persistTaskTransition(
 	ctx context.Context,
 	tx pgx.Tx,
 	command TaskCommand,
@@ -267,14 +316,20 @@ func persistTaskTransition(
 ) ([]Event, error) {
 	if err := reserveTaskCommand(ctx, tx, command, digest); err != nil {
 		if isUniqueViolation(err) {
-			return nil, ErrCommandConflict
+			return nil, errReplayAfterConflict
 		}
+		return nil, err
+	}
+	if err := s.fault(FaultBeforeEvents); err != nil {
 		return nil, err
 	}
 	for _, event := range events {
 		if err := insertEvent(ctx, tx, event, command.Envelope().CommandID); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.fault(FaultBeforeSnapshot); err != nil {
+		return nil, err
 	}
 	if err := updateTask(ctx, tx, next, current.Revision); err != nil {
 		return nil, err
@@ -311,6 +366,48 @@ func recordTaskCommandResult(
 		return CommandResult{}, fmt.Errorf("record task command result: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Store) replayAfterConflict(
+	ctx context.Context, commandID, digest string,
+) (CommandResult, error) {
+	var storedDigest string
+	var encoded []byte
+	err := s.pool.QueryRow(ctx, `SELECT request_digest,result FROM workflow_commands
+		WHERE command_id=$1`, commandID).Scan(&storedDigest, &encoded)
+	if err != nil {
+		return CommandResult{}, fmt.Errorf("load conflicting command: %w", err)
+	}
+	if storedDigest != digest || len(encoded) == 0 {
+		return CommandResult{}, ErrCommandConflict
+	}
+	var result CommandResult
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return CommandResult{}, fmt.Errorf("decode conflicting command: %w", err)
+	}
+	result.Replay = true
+	return result, nil
+}
+
+func validateTaskRunGate(ctx context.Context, tx pgx.Tx, command TaskCommand) error {
+	var state RunState
+	if err := tx.QueryRow(ctx,
+		`SELECT state FROM workflow_runs WHERE run_id=$1 FOR UPDATE`,
+		command.RunID()).Scan(&state); errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("lock owning run: %w", err)
+	}
+	if _, cancellation := command.(CancelTask); cancellation {
+		if state != RunStateCancelled {
+			return ErrInvalidTransition
+		}
+		return nil
+	}
+	if state != RunStateExecuting {
+		return ErrInvalidTransition
+	}
+	return nil
 }
 
 func reserveTaskCommand(ctx context.Context, tx pgx.Tx, command TaskCommand, digest string) error {
@@ -489,6 +586,7 @@ func makeDependentsReady(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
 	var events []Event
 	for _, candidate := range candidates {
 		var unmet int
@@ -740,6 +838,7 @@ func cancelRunTasks(
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
 	events := make([]Event, 0, len(tasks))
 	for _, task := range tasks {
 		if _, err := tx.Exec(ctx, `UPDATE workflow_tasks SET state='CANCELLED',
