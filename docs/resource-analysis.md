@@ -1,17 +1,19 @@
 # Resource analysis
 
-Phase 2 adds PostgreSQL metadata persistence. The committed runtime still starts
-no service and performs no external work.
+Phase 2 adds PostgreSQL metadata persistence. Phase 3 adds an offline Python
+authoring SDK, one packaged JSON Schema, four small definitions and prompts, and
+canonical manifest fixtures. The committed runtime still starts no service and
+performs no external work.
 
 | Area | Initial expectation |
 |---|---|
-| CPU | one Go/Python build process per developer or CI job |
-| Memory | under 2 GiB for the aggregate check |
-| Disk | source, dependency caches, and generated bindings; no runtime data |
-| Network | dependency bootstrap only; no runtime network |
+| CPU | one Go/Python build or local manifest compilation process per developer or CI job |
+| Memory | under 2 GiB for the aggregate check; one manifest and schema in memory per compile |
+| Disk | source, dependency caches, generated bindings, wheel, and small manifest fixtures; no runtime artifact bodies |
+| Network | dependency or wheel installation only; manifest compilation has no runtime network path |
 | Database | one snapshot plus one command and event row per accepted transition; dependency edges scale with the approved DAG |
 | Artifacts | URIs and SHA-256 digests only; bodies, logs, and responses remain external |
-| Model tokens | zero; no provider exists |
+| Model tokens | zero; the SDK defines policies but no provider or runtime agent exists |
 | Concurrency | serializable transactions and aggregate row locks; task execution remains deferred |
 
 The integration suite uses disposable PostgreSQL 18.1 on

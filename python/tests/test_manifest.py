@@ -71,6 +71,28 @@ def test_schema_override_cannot_bypass_packaged_validation() -> None:
 
 
 @pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"name": "Invalid Name"}, "does not match"),
+        ({"version": "v1"}, "does not match"),
+        (
+            {"metadata": ConfigurationMetadata("x" * 501, frozenset())},
+            "is too long",
+        ),
+        (
+            {"metadata": ConfigurationMetadata("", frozenset({"Invalid Label"}))},
+            "does not match",
+        ),
+    ],
+)
+def test_invalid_identity_and_metadata_are_rejected(
+    changes: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ManifestError, match=message):
+        definition(**changes).compile()
+
+
+@pytest.mark.parametrize(
     ("stage", "output_schema"),
     [
         ("specification", "task_graph_proposal.v1"),
@@ -167,3 +189,10 @@ def test_invalid_utf8_prompt_is_rejected(tmp_path: Path) -> None:
     prompt.write_bytes(b"\xff")
     with pytest.raises(ManifestError, match="valid UTF-8"):
         definition(prompt=PromptTemplate.from_file(prompt)).compile()
+
+
+def test_prompt_change_causes_manifest_digest_drift() -> None:
+    original = definition().compile()
+    changed = definition(prompt=PromptTemplate.from_text("Changed prompt.\n")).compile()
+    assert changed.digest != original.digest
+    assert changed.canonical_bytes != original.canonical_bytes
