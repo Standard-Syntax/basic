@@ -50,26 +50,30 @@ func TestReadRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestGoldenManifestAndDigest(t *testing.T) {
-	data, err := os.ReadFile(fixturePath(t, "implementation.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	expected, err := os.ReadFile(fixturePath(t, "implementation.sha256"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest, canonical, digest, err := Read(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if manifest.Stage != "implementation" {
-		t.Fatalf("stage = %q", manifest.Stage)
-	}
-	if string(canonical) != strings.TrimSpace(string(data)) {
-		t.Fatal("fixture is not canonical RFC 8785 JSON")
-	}
-	if digest != strings.TrimSpace(string(expected)) {
-		t.Fatalf("digest = %s; want %s", digest, expected)
+	for _, stage := range validStages {
+		t.Run(stage, func(t *testing.T) {
+			data, err := os.ReadFile(fixturePath(t, stage+".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected, err := os.ReadFile(fixturePath(t, stage+".sha256"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest, canonical, digest, err := Read(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if manifest.Stage != stage {
+				t.Fatalf("stage = %q", manifest.Stage)
+			}
+			if string(canonical) != strings.TrimSpace(string(data)) {
+				t.Fatal("fixture is not canonical RFC 8785 JSON")
+			}
+			if digest != strings.TrimSpace(string(expected)) {
+				t.Fatalf("digest = %s; want %s", digest, expected)
+			}
+		})
 	}
 }
 

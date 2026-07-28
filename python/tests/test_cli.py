@@ -9,7 +9,8 @@ from harness_agents.cli import main
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_cli_compiles_golden_manifest(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stage", ["specification", "planning", "implementation", "review"])
+def test_cli_compiles_golden_manifest(tmp_path: Path, stage: str) -> None:
     output = tmp_path / "manifest.json"
     digest = tmp_path / "manifest.sha256"
     result = subprocess.run(
@@ -18,7 +19,7 @@ def test_cli_compiles_golden_manifest(tmp_path: Path) -> None:
             "-m",
             "harness_agents.cli",
             "compile",
-            str(ROOT / "python/agents/implementation.json"),
+            str(ROOT / f"python/agents/{stage}.json"),
             "--output",
             str(output),
             "--digest-output",
@@ -31,9 +32,9 @@ def test_cli_compiles_golden_manifest(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert json.loads(output.read_bytes())
     assert len(digest.read_text().strip()) == 64
+    assert output.read_bytes() == (ROOT / f"tests/contracts/v1/manifest/{stage}.json").read_bytes()
     assert (
-        output.read_bytes()
-        == (ROOT / "tests/contracts/v1/manifest/implementation.json").read_bytes()
+        digest.read_bytes() == (ROOT / f"tests/contracts/v1/manifest/{stage}.sha256").read_bytes()
     )
 
 

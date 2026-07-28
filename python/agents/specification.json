@@ -1,0 +1,32 @@
+{
+  "name": "bounded-specification",
+  "version": "1.0.0",
+  "stage": "specification",
+  "prompt_file": "../prompts/specification.md",
+  "model": {
+    "capability_class": "general_reasoning",
+    "temperature": 0.2,
+    "maximum_output_tokens": 12000
+  },
+  "context": {
+    "include_specification": false,
+    "include_task": false,
+    "repository_selection": "kernel_selected",
+    "maximum_context_tokens": 120000
+  },
+  "tools": {
+    "allowed_requests": [
+      "read_repository_file",
+      "search_repository",
+      "report_blocker"
+    ],
+    "arbitrary_shell": false,
+    "arbitrary_network": false,
+    "direct_file_write": false
+  },
+  "output": {"schema": "specification_proposal.v1"},
+  "metadata": {
+    "description": "Bounded specification proposal agent",
+    "labels": ["golden", "specification"]
+  }
+}
