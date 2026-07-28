@@ -49,6 +49,9 @@ func TestPythonSpecificationFixturesMapInGo(t *testing.T) {
 	if got := mappedProposal.AcceptanceCriteria[0].ID; got != "AC-001" {
 		t.Fatalf("criterion ID = %q", got)
 	}
+	if len(mappedProposal.Risks) != 1 || len(mappedProposal.Questions) != 1 {
+		t.Fatal("risk or question data was discarded")
+	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(&proposal)
 	if err != nil {
 		t.Fatal(err)

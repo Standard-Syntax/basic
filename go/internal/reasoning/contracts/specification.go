@@ -34,6 +34,20 @@ type SpecificationProposal struct {
 	NonGoals           []string
 	AcceptanceCriteria []AcceptanceCriterion
 	Assumptions        []string
+	Risks              []SpecificationRisk
+	Questions          []SpecificationQuestion
+}
+
+type SpecificationRisk struct {
+	ID          string
+	Description string
+	Mitigation  string
+}
+
+type SpecificationQuestion struct {
+	ID       string
+	Question string
+	Blocking bool
 }
 
 type SpecificationReasoner interface {
@@ -95,6 +109,25 @@ func MapSpecificationProposal(
 			VerificationMethod: criterion.GetVerificationMethod(),
 		})
 	}
+	risks := make([]SpecificationRisk, 0, len(value.GetRisks()))
+	for _, risk := range value.GetRisks() {
+		if risk.GetRiskId() == "" || risk.GetDescription() == "" || risk.GetMitigation() == "" {
+			return SpecificationProposal{}, errors.New("invalid specification risk")
+		}
+		risks = append(risks, SpecificationRisk{
+			ID: risk.GetRiskId(), Description: risk.GetDescription(), Mitigation: risk.GetMitigation(),
+		})
+	}
+	questions := make([]SpecificationQuestion, 0, len(value.GetQuestions()))
+	for _, question := range value.GetQuestions() {
+		if question.GetQuestionId() == "" || question.GetQuestion() == "" {
+			return SpecificationProposal{}, errors.New("invalid specification question")
+		}
+		questions = append(questions, SpecificationQuestion{
+			ID: question.GetQuestionId(), Question: question.GetQuestion(),
+			Blocking: question.GetBlocking(),
+		})
+	}
 	return SpecificationProposal{
 		Title:              value.GetTitle(),
 		Goal:               value.GetGoal(),
@@ -103,5 +136,7 @@ func MapSpecificationProposal(
 		NonGoals:           value.GetNonGoals(),
 		AcceptanceCriteria: criteria,
 		Assumptions:        value.GetAssumptions(),
+		Risks:              risks,
+		Questions:          questions,
 	}, nil
 }
