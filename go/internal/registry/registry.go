@@ -27,6 +27,7 @@ var (
 var (
 	validName    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	validVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+	validDigest  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 //go:embed migrations/*.sql
@@ -139,6 +140,29 @@ func (r *Registry) Get(ctx context.Context, name, version string) (Record, error
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("get registration: %w", err)
+	}
+	return validateRecord(record, storedName, storedVersion)
+}
+
+func (r *Registry) GetByDigest(ctx context.Context, digest string) (Record, error) {
+	if !validDigest.MatchString(digest) {
+		return Record{}, ErrInvalidArgument
+	}
+	var record Record
+	var storedName, storedVersion string
+	err := r.pool.QueryRow(ctx, `SELECT
+			agent_name,agent_version,manifest_digest,canonical_manifest,registered_at
+		FROM agent_registrations WHERE manifest_digest=$1`,
+		digest,
+	).Scan(
+		&storedName, &storedVersion, &record.Digest,
+		&record.CanonicalJSON, &record.RegisteredAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, fmt.Errorf("get registration by digest: %w", err)
 	}
 	return validateRecord(record, storedName, storedVersion)
 }
