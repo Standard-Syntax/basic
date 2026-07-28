@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package harness.reasoning.v1;
+
+option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
+
+// ContractVersion establishes a generated-code baseline in Phase 0.
+message ContractVersion {
+  string schema_version = 1;
+}
