@@ -15,6 +15,19 @@ The five stable v1 rejection codes are `SCHEMA_INVALID`, `REQUEST_MISMATCH`,
 `AUTHORITY_VIOLATION`, `SCOPE_VIOLATION`, and
 `REQUIRED_COVERAGE_MISSING`.
 
+The Phase 5 Go gateway applies that ordering to implementation requests and
+proposals. `Service.ProposeImplementation` returns exactly one validated
+`ImplementationProposal` or one `ProposalRejection`. Schema, policy, scope,
+coverage, and expiry failures are policy outcomes; cancellation, registry,
+adapter, artifact, and PostgreSQL failures remain Go errors. Scope-change
+requests remain advisory proposal data and never alter kernel-selected scope.
+
+The deterministic fake adapter binds proposal request, run, task, attempt,
+manifest, input-artifact, approved-task, and approved-specification identities
+from the request. It consumes exactly one provider-request budget unit and
+executes no command, repository mutation, network call, or workflow transition.
+Request and proposal transports retain their published v1 Protobuf shape.
+
 ## Compatibility
 
 The package and schema major version are `v1`. Published field numbers and enum
