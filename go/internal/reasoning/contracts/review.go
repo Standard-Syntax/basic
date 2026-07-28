@@ -13,17 +13,19 @@ import (
 var evidenceIDPattern = regexp.MustCompile(`^EVIDENCE-[0-9]{3}$`)
 
 type ReviewRequest struct {
-	Envelope                     Envelope
-	ApprovedSpecificationDigest  string
-	ApprovedTaskDigest           string
-	BaseCommit                   string
-	CandidateCommit              string
-	ImplementationProposalDigest string
-	ActualDiff                   []ActualDiffFile
-	ScopeReport                  ScopeReport
-	IndependentEvidence          []IndependentEvidence
-	AcceptanceCoverage           []AcceptanceEvidence
-	Policy                       ReviewPolicy
+	Envelope                       Envelope
+	ApprovedSpecificationDigest    string
+	ApprovedTaskDigest             string
+	BaseCommit                     string
+	CandidateCommit                string
+	ImplementationProposalDigest   string
+	ActualDiff                     []ActualDiffFile
+	ScopeReport                    ScopeReport
+	IndependentEvidence            []IndependentEvidence
+	AcceptanceCoverage             []AcceptanceEvidence
+	Policy                         ReviewPolicy
+	ApprovedAcceptanceCriterionIDs []string
+	AuthorizedWritablePaths        []string
 }
 
 type ActualDiffFile struct {
@@ -118,8 +120,17 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 	}
 	if len(value.GetActualDiff()) == 0 || value.GetScopeReport() == nil ||
 		len(value.GetIndependentEvidence()) == 0 || len(value.GetAcceptanceCoverage()) == 0 ||
-		value.GetReviewPolicy() == nil {
+		value.GetReviewPolicy() == nil || len(value.GetApprovedAcceptanceCriterionIds()) == 0 ||
+		len(value.GetAuthorizedWritablePaths()) == 0 {
 		return ReviewRequest{}, errors.New("incomplete independent review input")
+	}
+	if !validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
+		return ReviewRequest{}, errors.New("invalid approved acceptance criteria")
+	}
+	for _, writablePath := range value.GetAuthorizedWritablePaths() {
+		if !validRepoPath(writablePath) {
+			return ReviewRequest{}, errors.New("invalid authorized writable path")
+		}
 	}
 	if len(value.GetScopeReport().GetUnexpectedChangedPaths()) != 0 {
 		return ReviewRequest{}, errors.New("scope report contains unexpected changes")
@@ -130,6 +141,7 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 	for _, changed := range value.GetActualDiff() {
 		operation, ok := mapReviewFileOperation(changed.GetOperation())
 		if !validRepoPath(changed.GetPath()) || !ok ||
+			!pathWithin(changed.GetPath(), value.GetAuthorizedWritablePaths()) ||
 			!digestPattern.MatchString(changed.GetBeforeSha256()) ||
 			!digestPattern.MatchString(changed.GetAfterSha256()) {
 			return ReviewRequest{}, errors.New("invalid actual diff")
@@ -190,11 +202,18 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 	}
 
 	coverageValues := make([]AcceptanceEvidence, 0, len(value.GetAcceptanceCoverage()))
+	coveredCriteria := make(map[string]struct{}, len(value.GetAcceptanceCoverage()))
 	for _, coverage := range value.GetAcceptanceCoverage() {
 		if !criterionID.MatchString(coverage.GetAcceptanceCriterionId()) ||
-			len(coverage.GetEvidenceIds()) == 0 {
+			!slices.Contains(
+				value.GetApprovedAcceptanceCriterionIds(), coverage.GetAcceptanceCriterionId(),
+			) || len(coverage.GetEvidenceIds()) == 0 {
 			return ReviewRequest{}, errors.New("invalid acceptance evidence coverage")
 		}
+		if _, exists := coveredCriteria[coverage.GetAcceptanceCriterionId()]; exists {
+			return ReviewRequest{}, errors.New("duplicate acceptance evidence coverage")
+		}
+		coveredCriteria[coverage.GetAcceptanceCriterionId()] = struct{}{}
 		for _, evidenceID := range coverage.GetEvidenceIds() {
 			if _, exists := passingEvidence[evidenceID]; !exists {
 				return ReviewRequest{}, errors.New("acceptance coverage requires passing evidence")
@@ -205,13 +224,23 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 			EvidenceIDs:           coverage.GetEvidenceIds(),
 		})
 	}
+	if len(coveredCriteria) != len(value.GetApprovedAcceptanceCriterionIds()) {
+		return ReviewRequest{}, errors.New("required acceptance evidence coverage missing")
+	}
 
 	blockingSeverities := make([]string, 0, len(value.GetReviewPolicy().GetBlockingSeverities()))
+	hasCritical := false
 	for _, severity := range value.GetReviewPolicy().GetBlockingSeverities() {
 		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED {
 			return ReviewRequest{}, errors.New("invalid blocking severity")
 		}
 		blockingSeverities = append(blockingSeverities, severity.String())
+		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_CRITICAL {
+			hasCritical = true
+		}
+	}
+	if len(blockingSeverities) == 0 || !hasCritical {
+		return ReviewRequest{}, errors.New("review policy must block critical findings")
 	}
 	return ReviewRequest{
 		Envelope:                     envelope,
@@ -231,6 +260,8 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 			BlockingSeverities:       blockingSeverities,
 			ReportUnrequestedChanges: value.GetReviewPolicy().GetReportUnrequestedChanges(),
 		},
+		ApprovedAcceptanceCriterionIDs: value.GetApprovedAcceptanceCriterionIds(),
+		AuthorizedWritablePaths:        value.GetAuthorizedWritablePaths(),
 	}, nil
 }
 

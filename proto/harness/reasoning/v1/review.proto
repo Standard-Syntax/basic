@@ -57,6 +57,8 @@ message ReviewRequest {
   repeated IndependentEvidence independent_evidence = 19;
   repeated AcceptanceEvidence acceptance_coverage = 20;
   ReviewPolicy review_policy = 21;
+  repeated string approved_acceptance_criterion_ids = 22;
+  repeated string authorized_writable_paths = 23;
 }
 
 enum ReviewRecommendation {

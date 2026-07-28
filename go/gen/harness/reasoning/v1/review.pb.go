@@ -591,16 +591,18 @@ func (x *ReviewPolicy) GetReportUnrequestedChanges() bool {
 }
 
 type ReviewRequest struct {
-	state               protoimpl.MessageState    `protogen:"open.v1"`
-	Envelope            *ReasoningRequestEnvelope `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
-	Candidate           *ReviewCandidateIdentity  `protobuf:"bytes,16,opt,name=candidate,proto3" json:"candidate,omitempty"`
-	ActualDiff          []*ActualDiffFile         `protobuf:"bytes,17,rep,name=actual_diff,json=actualDiff,proto3" json:"actual_diff,omitempty"`
-	ScopeReport         *ScopeReport              `protobuf:"bytes,18,opt,name=scope_report,json=scopeReport,proto3" json:"scope_report,omitempty"`
-	IndependentEvidence []*IndependentEvidence    `protobuf:"bytes,19,rep,name=independent_evidence,json=independentEvidence,proto3" json:"independent_evidence,omitempty"`
-	AcceptanceCoverage  []*AcceptanceEvidence     `protobuf:"bytes,20,rep,name=acceptance_coverage,json=acceptanceCoverage,proto3" json:"acceptance_coverage,omitempty"`
-	ReviewPolicy        *ReviewPolicy             `protobuf:"bytes,21,opt,name=review_policy,json=reviewPolicy,proto3" json:"review_policy,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                          protoimpl.MessageState    `protogen:"open.v1"`
+	Envelope                       *ReasoningRequestEnvelope `protobuf:"bytes,1,opt,name=envelope,proto3" json:"envelope,omitempty"`
+	Candidate                      *ReviewCandidateIdentity  `protobuf:"bytes,16,opt,name=candidate,proto3" json:"candidate,omitempty"`
+	ActualDiff                     []*ActualDiffFile         `protobuf:"bytes,17,rep,name=actual_diff,json=actualDiff,proto3" json:"actual_diff,omitempty"`
+	ScopeReport                    *ScopeReport              `protobuf:"bytes,18,opt,name=scope_report,json=scopeReport,proto3" json:"scope_report,omitempty"`
+	IndependentEvidence            []*IndependentEvidence    `protobuf:"bytes,19,rep,name=independent_evidence,json=independentEvidence,proto3" json:"independent_evidence,omitempty"`
+	AcceptanceCoverage             []*AcceptanceEvidence     `protobuf:"bytes,20,rep,name=acceptance_coverage,json=acceptanceCoverage,proto3" json:"acceptance_coverage,omitempty"`
+	ReviewPolicy                   *ReviewPolicy             `protobuf:"bytes,21,opt,name=review_policy,json=reviewPolicy,proto3" json:"review_policy,omitempty"`
+	ApprovedAcceptanceCriterionIds []string                  `protobuf:"bytes,22,rep,name=approved_acceptance_criterion_ids,json=approvedAcceptanceCriterionIds,proto3" json:"approved_acceptance_criterion_ids,omitempty"`
+	AuthorizedWritablePaths        []string                  `protobuf:"bytes,23,rep,name=authorized_writable_paths,json=authorizedWritablePaths,proto3" json:"authorized_writable_paths,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
 }
 
 func (x *ReviewRequest) Reset() {
@@ -678,6 +680,20 @@ func (x *ReviewRequest) GetAcceptanceCoverage() []*AcceptanceEvidence {
 func (x *ReviewRequest) GetReviewPolicy() *ReviewPolicy {
 	if x != nil {
 		return x.ReviewPolicy
+	}
+	return nil
+}
+
+func (x *ReviewRequest) GetApprovedAcceptanceCriterionIds() []string {
+	if x != nil {
+		return x.ApprovedAcceptanceCriterionIds
+	}
+	return nil
+}
+
+func (x *ReviewRequest) GetAuthorizedWritablePaths() []string {
+	if x != nil {
+		return x.AuthorizedWritablePaths
 	}
 	return nil
 }
@@ -1006,7 +1022,7 @@ const file_harness_reasoning_v1_review_proto_rawDesc = "" +
 	"\fevidence_ids\x18\x02 \x03(\tR\vevidenceIds\"\xa4\x01\n" +
 	"\fReviewPolicy\x12V\n" +
 	"\x13blocking_severities\x18\x01 \x03(\x0e2%.harness.reasoning.v1.FindingSeverityR\x12blockingSeverities\x12<\n" +
-	"\x1areport_unrequested_changes\x18\x02 \x01(\bR\x18reportUnrequestedChanges\"\xb7\x04\n" +
+	"\x1areport_unrequested_changes\x18\x02 \x01(\bR\x18reportUnrequestedChanges\"\xbe\x05\n" +
 	"\rReviewRequest\x12J\n" +
 	"\benvelope\x18\x01 \x01(\v2..harness.reasoning.v1.ReasoningRequestEnvelopeR\benvelope\x12K\n" +
 	"\tcandidate\x18\x10 \x01(\v2-.harness.reasoning.v1.ReviewCandidateIdentityR\tcandidate\x12E\n" +
@@ -1015,7 +1031,9 @@ const file_harness_reasoning_v1_review_proto_rawDesc = "" +
 	"\fscope_report\x18\x12 \x01(\v2!.harness.reasoning.v1.ScopeReportR\vscopeReport\x12\\\n" +
 	"\x14independent_evidence\x18\x13 \x03(\v2).harness.reasoning.v1.IndependentEvidenceR\x13independentEvidence\x12Y\n" +
 	"\x13acceptance_coverage\x18\x14 \x03(\v2(.harness.reasoning.v1.AcceptanceEvidenceR\x12acceptanceCoverage\x12G\n" +
-	"\rreview_policy\x18\x15 \x01(\v2\".harness.reasoning.v1.ReviewPolicyR\freviewPolicy\"\xff\x01\n" +
+	"\rreview_policy\x18\x15 \x01(\v2\".harness.reasoning.v1.ReviewPolicyR\freviewPolicy\x12I\n" +
+	"!approved_acceptance_criterion_ids\x18\x16 \x03(\tR\x1eapprovedAcceptanceCriterionIds\x12:\n" +
+	"\x19authorized_writable_paths\x18\x17 \x03(\tR\x17authorizedWritablePaths\"\xff\x01\n" +
 	"\rReviewFinding\x12\x1d\n" +
 	"\n" +
 	"finding_id\x18\x01 \x01(\tR\tfindingId\x12A\n" +

@@ -80,6 +80,18 @@ func TestReviewRejectsScopeReportThatDoesNotMatchActualDiff(t *testing.T) {
 	}
 }
 
+func TestReviewRejectsDiffOutsideApprovedTaskScope(t *testing.T) {
+	var request reasoningv1.ReviewRequest
+	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.ActualDiff[0].Path = "deploy/production.yaml"
+	request.ScopeReport.AuthorizedChangedPaths[0] = "deploy/production.yaml"
+	if _, err := MapReviewRequest(&request); err == nil {
+		t.Fatal("diff outside approved writable paths accepted")
+	}
+}
+
 func TestReviewCoverageRequiresPassingEvidence(t *testing.T) {
 	var request reasoningv1.ReviewRequest
 	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
@@ -88,6 +100,24 @@ func TestReviewCoverageRequiresPassingEvidence(t *testing.T) {
 	request.IndependentEvidence[0].ExitCode = 1
 	if _, err := MapReviewRequest(&request); err == nil {
 		t.Fatal("failing evidence satisfied acceptance coverage")
+	}
+}
+
+func TestReviewCoverageAndPolicyBindToApprovedInputs(t *testing.T) {
+	var request reasoningv1.ReviewRequest
+	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.AcceptanceCoverage[0].AcceptanceCriterionId = "AC-999"
+	if _, err := MapReviewRequest(&request); err == nil {
+		t.Fatal("unknown acceptance criterion coverage accepted")
+	}
+	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.ReviewPolicy.BlockingSeverities = nil
+	if _, err := MapReviewRequest(&request); err == nil {
+		t.Fatal("empty blocking policy accepted")
 	}
 }
 

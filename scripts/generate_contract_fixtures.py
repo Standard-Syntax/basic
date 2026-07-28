@@ -298,6 +298,8 @@ def review_request() -> review_pb2.ReviewRequest:
             ],
             report_unrequested_changes=True,
         ),
+        approved_acceptance_criterion_ids=["AC-001"],
+        authorized_writable_paths=["go/internal/reasoning"],
     )
 
 
