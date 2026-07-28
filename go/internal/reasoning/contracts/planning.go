@@ -177,19 +177,6 @@ func MapTaskGraphProposal(
 	}, nil
 }
 
-func validateProposalIdentity(
-	value *reasoningv1.ProposalIdentity, request Envelope, expected Stage,
-) error {
-	stage, err := mapStage(value.GetStage())
-	if err != nil || stage != expected || value.GetSchemaVersion() != request.SchemaVersion ||
-		value.GetRequestId() != request.RequestID || value.GetRunId() != request.RunID ||
-		value.GetAttempt() != request.Attempt ||
-		value.GetAgentManifestDigest() != request.AgentManifestDigest {
-		return errors.New("proposal request identity mismatch")
-	}
-	return nil
-}
-
 func validCriteria(values []string) bool {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
