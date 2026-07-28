@@ -175,37 +175,72 @@ func (m Manifest) Validate() error {
 	if m.SchemaVersion != "1" {
 		return errors.New("schema_version must be 1")
 	}
-	if !agentName.MatchString(m.Agent.Name) || !version.MatchString(m.Agent.Version) {
-		return errors.New("invalid agent name or version")
+	if err := validateAgent(m.Agent); err != nil {
+		return err
 	}
 	if !slices.Contains(validStages, m.Stage) {
 		return errors.New("unsupported stage")
 	}
-	if !lowerDigest.MatchString(m.Prompt.SHA256) ||
-		m.Prompt.ArtifactURI != "artifact://sha256/"+m.Prompt.SHA256 {
-		return errors.New("invalid prompt artifact URI or digest")
+	if err := validatePrompt(m.Prompt); err != nil {
+		return err
 	}
-	if !slices.Contains(validCapabilities, m.Model.CapabilityClass) ||
-		math.IsNaN(m.Model.Temperature) || math.IsInf(m.Model.Temperature, 0) ||
-		m.Model.Temperature < 0 || m.Model.Temperature > 2 ||
-		m.Model.MaximumOutputTokens < 1 || m.Model.MaximumOutputTokens > 200_000 {
-		return errors.New("invalid model policy")
+	if err := validateModel(m.Model); err != nil {
+		return err
 	}
-	if m.Context.RepositorySelection != "kernel_selected" ||
-		m.Context.MaximumContextTokens < 1 || m.Context.MaximumContextTokens > 1_000_000 {
-		return errors.New("invalid context policy")
+	if err := validateContext(m.Context); err != nil {
+		return err
 	}
-	if m.Tools.ArbitraryShell || m.Tools.ArbitraryNetwork || m.Tools.DirectFileWrite {
-		return errors.New("unsafe tool permission")
-	}
-	if !sortedUniqueSubset(m.Tools.AllowedRequests, validTools) {
-		return errors.New("invalid tool requests")
+	if err := validateTools(m.Tools); err != nil {
+		return err
 	}
 	if !slices.Contains(validOutputs, m.Output.Schema) {
 		return errors.New("unsupported output schema")
 	}
 	if len(m.Metadata.Description) > 500 || !sortedUniqueLabels(m.Metadata.Labels) {
 		return errors.New("invalid metadata")
+	}
+	return nil
+}
+
+func validateAgent(agent Agent) error {
+	if !agentName.MatchString(agent.Name) || !version.MatchString(agent.Version) {
+		return errors.New("invalid agent name or version")
+	}
+	return nil
+}
+
+func validatePrompt(prompt Prompt) error {
+	if !lowerDigest.MatchString(prompt.SHA256) ||
+		prompt.ArtifactURI != "artifact://sha256/"+prompt.SHA256 {
+		return errors.New("invalid prompt artifact URI or digest")
+	}
+	return nil
+}
+
+func validateModel(model Model) error {
+	if !slices.Contains(validCapabilities, model.CapabilityClass) ||
+		math.IsNaN(model.Temperature) || math.IsInf(model.Temperature, 0) ||
+		model.Temperature < 0 || model.Temperature > 2 ||
+		model.MaximumOutputTokens < 1 || model.MaximumOutputTokens > 200_000 {
+		return errors.New("invalid model policy")
+	}
+	return nil
+}
+
+func validateContext(context Context) error {
+	if context.RepositorySelection != "kernel_selected" ||
+		context.MaximumContextTokens < 1 || context.MaximumContextTokens > 1_000_000 {
+		return errors.New("invalid context policy")
+	}
+	return nil
+}
+
+func validateTools(tools Tools) error {
+	if tools.ArbitraryShell || tools.ArbitraryNetwork || tools.DirectFileWrite {
+		return errors.New("unsafe tool permission")
+	}
+	if !sortedUniqueSubset(tools.AllowedRequests, validTools) {
+		return errors.New("invalid tool requests")
 	}
 	return nil
 }
