@@ -1,0 +1,48 @@
+rules:
+  - id: python-subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Avoid shell=True. Pass an argument list directly to subprocess so
+      untrusted values cannot be interpreted as shell syntax.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.check_call(..., shell=True, ...)
+          - pattern: subprocess.check_output(..., shell=True, ...)
+          - pattern: subprocess.Popen(..., shell=True, ...)
+
+  - id: python-dynamic-code-execution
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Dynamic code execution is unsafe for data influenced outside this trust
+      boundary. Replace it with explicit parsing or a constrained dispatch table.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code"
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: go-shell-command-execution
+    languages: [go]
+    severity: ERROR
+    message: >-
+      Invoking a shell interpreter can turn command data into executable syntax.
+      Call the target executable directly with a structured argument list.
+    metadata:
+      category: security
+      confidence: HIGH
+      cwe: "CWE-78: Improper Neutralization of Special Elements used in an OS Command"
+    pattern-either:
+      - pattern: exec.Command("sh", "-c", ...)
+      - pattern: exec.Command("bash", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "sh", "-c", ...)
+      - pattern: exec.CommandContext($CTX, "bash", "-c", ...)

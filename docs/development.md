@@ -14,8 +14,10 @@ uv sync --frozen
 make check
 ```
 
-`make check` runs generation reproducibility, formatting and lint checks, Go
-and Python tests, all Go command builds, and a Python import smoke test.
+`make check` runs generation reproducibility, formatting, lint, Python source
+type checks, Go and Python tests, all Go command builds, and a Python import
+smoke test. Generated Protobuf Python modules are excluded from the source type
+check because their runtime-defined attributes do not ship static type stubs.
 
 Focused commands:
 
@@ -23,6 +25,7 @@ Focused commands:
 make generate        # regenerate committed Go and Python Protobuf bindings
 make generate-check  # regenerate and compare with committed bindings
 make lint
+make type-check
 make test
 make build
 ```

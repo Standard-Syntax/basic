@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check format-check lint test check clean
+.PHONY: build tools generate generate-check format-check lint type-check test check clean
 
 build:
 	cd go && go build ./...
@@ -28,11 +28,15 @@ lint: format-check
 	cd go && go vet $(GO_PACKAGES)
 	uv run --frozen ruff check python scripts
 
+type-check:
+	uv run --frozen ty check python/src/harness_agents \
+		--exclude 'python/src/harness_agents/_generated/**'
+
 test:
 	cd go && go test $(GO_PACKAGES)
 	uv run --frozen pytest
 
-check: generate-check lint test build
+check: generate-check lint type-check test build
 
 clean:
 	rm -rf .cache .pytest_cache .ruff_cache .tools .venv
