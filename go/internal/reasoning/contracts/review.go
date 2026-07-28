@@ -110,137 +110,37 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 		return ReviewRequest{}, err
 	}
 	candidate := value.GetCandidate()
-	if !digestPattern.MatchString(candidate.GetApprovedSpecificationDigest()) ||
-		!digestPattern.MatchString(candidate.GetApprovedTaskDigest()) ||
-		!commitPattern.MatchString(candidate.GetBaseCommit()) ||
-		!commitPattern.MatchString(candidate.GetCandidateCommit()) ||
-		!digestPattern.MatchString(candidate.GetImplementationProposalDigest()) ||
-		candidate.GetBaseCommit() == candidate.GetCandidateCommit() {
-		return ReviewRequest{}, errors.New("invalid review candidate identity")
+	if err := validateReviewCandidate(candidate); err != nil {
+		return ReviewRequest{}, err
 	}
-	if len(value.GetActualDiff()) == 0 || value.GetScopeReport() == nil ||
-		len(value.GetIndependentEvidence()) == 0 || len(value.GetAcceptanceCoverage()) == 0 ||
-		value.GetReviewPolicy() == nil || len(value.GetApprovedAcceptanceCriterionIds()) == 0 ||
-		len(value.GetAuthorizedWritablePaths()) == 0 {
-		return ReviewRequest{}, errors.New("incomplete independent review input")
+	if err := validateReviewInput(value); err != nil {
+		return ReviewRequest{}, err
 	}
-	if !validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
-		return ReviewRequest{}, errors.New("invalid approved acceptance criteria")
+	actualDiff, actualPaths, err := mapActualDiff(value)
+	if err != nil {
+		return ReviewRequest{}, err
 	}
-	for _, writablePath := range value.GetAuthorizedWritablePaths() {
-		if !validRepoPath(writablePath) {
-			return ReviewRequest{}, errors.New("invalid authorized writable path")
-		}
+	authorizedPaths, err := validateScopeReport(value.GetScopeReport(), actualPaths)
+	if err != nil {
+		return ReviewRequest{}, err
 	}
-	if len(value.GetScopeReport().GetUnexpectedChangedPaths()) != 0 {
-		return ReviewRequest{}, errors.New("scope report contains unexpected changes")
+	evidenceValues, passingEvidence, err := mapIndependentEvidence(
+		value.GetIndependentEvidence(), candidate.GetCandidateCommit(),
+	)
+	if err != nil {
+		return ReviewRequest{}, err
 	}
-
-	actualDiff := make([]ActualDiffFile, 0, len(value.GetActualDiff()))
-	actualPaths := make(map[string]struct{}, len(value.GetActualDiff()))
-	for _, changed := range value.GetActualDiff() {
-		operation, ok := mapReviewFileOperation(changed.GetOperation())
-		if !validRepoPath(changed.GetPath()) || !ok ||
-			!pathWithin(changed.GetPath(), value.GetAuthorizedWritablePaths()) ||
-			!digestPattern.MatchString(changed.GetBeforeSha256()) ||
-			!digestPattern.MatchString(changed.GetAfterSha256()) {
-			return ReviewRequest{}, errors.New("invalid actual diff")
-		}
-		if _, exists := actualPaths[changed.GetPath()]; exists {
-			return ReviewRequest{}, errors.New("duplicate actual diff path")
-		}
-		actualPaths[changed.GetPath()] = struct{}{}
-		actualDiff = append(actualDiff, ActualDiffFile{
-			Path: changed.GetPath(), Operation: operation,
-			BeforeSHA256: changed.GetBeforeSha256(), AfterSHA256: changed.GetAfterSha256(),
-		})
+	coverageValues, err := mapAcceptanceCoverage(
+		value.GetAcceptanceCoverage(),
+		value.GetApprovedAcceptanceCriterionIds(),
+		passingEvidence,
+	)
+	if err != nil {
+		return ReviewRequest{}, err
 	}
-	authorizedPaths := value.GetScopeReport().GetAuthorizedChangedPaths()
-	if len(authorizedPaths) != len(actualPaths) {
-		return ReviewRequest{}, errors.New("scope report does not match actual diff")
-	}
-	seenAuthorized := make(map[string]struct{}, len(authorizedPaths))
-	for _, authorizedPath := range authorizedPaths {
-		if _, exists := actualPaths[authorizedPath]; !exists {
-			return ReviewRequest{}, errors.New("scope report does not match actual diff")
-		}
-		if _, exists := seenAuthorized[authorizedPath]; exists {
-			return ReviewRequest{}, errors.New("scope report contains duplicate path")
-		}
-		seenAuthorized[authorizedPath] = struct{}{}
-	}
-
-	knownEvidence := make(map[string]struct{}, len(value.GetIndependentEvidence()))
-	passingEvidence := make(map[string]struct{}, len(value.GetIndependentEvidence()))
-	evidenceValues := make([]IndependentEvidence, 0, len(value.GetIndependentEvidence()))
-	for _, evidence := range value.GetIndependentEvidence() {
-		if !evidenceIDPattern.MatchString(evidence.GetEvidenceId()) ||
-			!checkIDPattern.MatchString(evidence.GetCheckId()) ||
-			evidence.GetCandidateCommit() != candidate.GetCandidateCommit() ||
-			!digestPattern.MatchString(evidence.GetOutputSha256()) ||
-			evidence.GetArtifactUri() != "artifact://sha256/"+evidence.GetOutputSha256() ||
-			evidence.GetStartedAt() == nil || evidence.GetCompletedAt() == nil {
-			return ReviewRequest{}, errors.New("invalid independent evidence")
-		}
-		if evidence.GetStartedAt().CheckValid() != nil || evidence.GetCompletedAt().CheckValid() != nil ||
-			!evidence.GetCompletedAt().AsTime().After(evidence.GetStartedAt().AsTime()) {
-			return ReviewRequest{}, errors.New("invalid independent evidence timestamps")
-		}
-		if _, exists := knownEvidence[evidence.GetEvidenceId()]; exists {
-			return ReviewRequest{}, errors.New("duplicate independent evidence")
-		}
-		knownEvidence[evidence.GetEvidenceId()] = struct{}{}
-		if evidence.GetExitCode() == 0 {
-			passingEvidence[evidence.GetEvidenceId()] = struct{}{}
-		}
-		evidenceValues = append(evidenceValues, IndependentEvidence{
-			ID: evidence.GetEvidenceId(), CheckID: evidence.GetCheckId(),
-			CandidateCommit: evidence.GetCandidateCommit(), ExitCode: evidence.GetExitCode(),
-			OutputSHA256: evidence.GetOutputSha256(), ArtifactURI: evidence.GetArtifactUri(),
-			StartedAt: evidence.GetStartedAt().AsTime(), CompletedAt: evidence.GetCompletedAt().AsTime(),
-		})
-	}
-
-	coverageValues := make([]AcceptanceEvidence, 0, len(value.GetAcceptanceCoverage()))
-	coveredCriteria := make(map[string]struct{}, len(value.GetAcceptanceCoverage()))
-	for _, coverage := range value.GetAcceptanceCoverage() {
-		if !criterionID.MatchString(coverage.GetAcceptanceCriterionId()) ||
-			!slices.Contains(
-				value.GetApprovedAcceptanceCriterionIds(), coverage.GetAcceptanceCriterionId(),
-			) || len(coverage.GetEvidenceIds()) == 0 {
-			return ReviewRequest{}, errors.New("invalid acceptance evidence coverage")
-		}
-		if _, exists := coveredCriteria[coverage.GetAcceptanceCriterionId()]; exists {
-			return ReviewRequest{}, errors.New("duplicate acceptance evidence coverage")
-		}
-		coveredCriteria[coverage.GetAcceptanceCriterionId()] = struct{}{}
-		for _, evidenceID := range coverage.GetEvidenceIds() {
-			if _, exists := passingEvidence[evidenceID]; !exists {
-				return ReviewRequest{}, errors.New("acceptance coverage requires passing evidence")
-			}
-		}
-		coverageValues = append(coverageValues, AcceptanceEvidence{
-			AcceptanceCriterionID: coverage.GetAcceptanceCriterionId(),
-			EvidenceIDs:           coverage.GetEvidenceIds(),
-		})
-	}
-	if len(coveredCriteria) != len(value.GetApprovedAcceptanceCriterionIds()) {
-		return ReviewRequest{}, errors.New("required acceptance evidence coverage missing")
-	}
-
-	blockingSeverities := make([]string, 0, len(value.GetReviewPolicy().GetBlockingSeverities()))
-	hasCritical := false
-	for _, severity := range value.GetReviewPolicy().GetBlockingSeverities() {
-		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED {
-			return ReviewRequest{}, errors.New("invalid blocking severity")
-		}
-		blockingSeverities = append(blockingSeverities, severity.String())
-		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_CRITICAL {
-			hasCritical = true
-		}
-	}
-	if len(blockingSeverities) == 0 || !hasCritical {
-		return ReviewRequest{}, errors.New("review policy must block critical findings")
+	blockingSeverities, err := mapReviewPolicy(value.GetReviewPolicy())
+	if err != nil {
+		return ReviewRequest{}, err
 	}
 	return ReviewRequest{
 		Envelope:                     envelope,
@@ -265,6 +165,171 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 	}, nil
 }
 
+func validateReviewCandidate(candidate *reasoningv1.ReviewCandidateIdentity) error {
+	if !digestPattern.MatchString(candidate.GetApprovedSpecificationDigest()) ||
+		!digestPattern.MatchString(candidate.GetApprovedTaskDigest()) ||
+		!commitPattern.MatchString(candidate.GetBaseCommit()) ||
+		!commitPattern.MatchString(candidate.GetCandidateCommit()) ||
+		!digestPattern.MatchString(candidate.GetImplementationProposalDigest()) ||
+		candidate.GetBaseCommit() == candidate.GetCandidateCommit() {
+		return errors.New("invalid review candidate identity")
+	}
+	return nil
+}
+
+func validateReviewInput(value *reasoningv1.ReviewRequest) error {
+	if len(value.GetActualDiff()) == 0 || value.GetScopeReport() == nil ||
+		len(value.GetIndependentEvidence()) == 0 || len(value.GetAcceptanceCoverage()) == 0 ||
+		value.GetReviewPolicy() == nil || len(value.GetApprovedAcceptanceCriterionIds()) == 0 ||
+		len(value.GetAuthorizedWritablePaths()) == 0 {
+		return errors.New("incomplete independent review input")
+	}
+	if !validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
+		return errors.New("invalid approved acceptance criteria")
+	}
+	for _, writablePath := range value.GetAuthorizedWritablePaths() {
+		if !validRepoPath(writablePath) {
+			return errors.New("invalid authorized writable path")
+		}
+	}
+	if len(value.GetScopeReport().GetUnexpectedChangedPaths()) != 0 {
+		return errors.New("scope report contains unexpected changes")
+	}
+	return nil
+}
+
+func mapActualDiff(
+	value *reasoningv1.ReviewRequest,
+) ([]ActualDiffFile, map[string]struct{}, error) {
+	actualDiff := make([]ActualDiffFile, 0, len(value.GetActualDiff()))
+	actualPaths := make(map[string]struct{}, len(value.GetActualDiff()))
+	for _, changed := range value.GetActualDiff() {
+		operation, ok := mapReviewFileOperation(changed.GetOperation())
+		if !validRepoPath(changed.GetPath()) || !ok ||
+			!pathWithin(changed.GetPath(), value.GetAuthorizedWritablePaths()) ||
+			!digestPattern.MatchString(changed.GetBeforeSha256()) ||
+			!digestPattern.MatchString(changed.GetAfterSha256()) {
+			return nil, nil, errors.New("invalid actual diff")
+		}
+		if _, exists := actualPaths[changed.GetPath()]; exists {
+			return nil, nil, errors.New("duplicate actual diff path")
+		}
+		actualPaths[changed.GetPath()] = struct{}{}
+		actualDiff = append(actualDiff, ActualDiffFile{
+			Path: changed.GetPath(), Operation: operation,
+			BeforeSHA256: changed.GetBeforeSha256(), AfterSHA256: changed.GetAfterSha256(),
+		})
+	}
+	return actualDiff, actualPaths, nil
+}
+
+func validateScopeReport(
+	value *reasoningv1.ScopeReport, actualPaths map[string]struct{},
+) ([]string, error) {
+	authorizedPaths := value.GetAuthorizedChangedPaths()
+	if len(authorizedPaths) != len(actualPaths) {
+		return nil, errors.New("scope report does not match actual diff")
+	}
+	seenAuthorized := make(map[string]struct{}, len(authorizedPaths))
+	for _, authorizedPath := range authorizedPaths {
+		if _, exists := actualPaths[authorizedPath]; !exists {
+			return nil, errors.New("scope report does not match actual diff")
+		}
+		if _, exists := seenAuthorized[authorizedPath]; exists {
+			return nil, errors.New("scope report contains duplicate path")
+		}
+		seenAuthorized[authorizedPath] = struct{}{}
+	}
+	return authorizedPaths, nil
+}
+
+func mapIndependentEvidence(
+	values []*reasoningv1.IndependentEvidence, candidateCommit string,
+) ([]IndependentEvidence, map[string]struct{}, error) {
+	knownEvidence := make(map[string]struct{}, len(values))
+	passingEvidence := make(map[string]struct{}, len(values))
+	evidenceValues := make([]IndependentEvidence, 0, len(values))
+	for _, evidence := range values {
+		if !evidenceIDPattern.MatchString(evidence.GetEvidenceId()) ||
+			!checkIDPattern.MatchString(evidence.GetCheckId()) ||
+			evidence.GetCandidateCommit() != candidateCommit ||
+			!digestPattern.MatchString(evidence.GetOutputSha256()) ||
+			evidence.GetArtifactUri() != "artifact://sha256/"+evidence.GetOutputSha256() ||
+			evidence.GetStartedAt() == nil || evidence.GetCompletedAt() == nil {
+			return nil, nil, errors.New("invalid independent evidence")
+		}
+		if evidence.GetStartedAt().CheckValid() != nil || evidence.GetCompletedAt().CheckValid() != nil ||
+			!evidence.GetCompletedAt().AsTime().After(evidence.GetStartedAt().AsTime()) {
+			return nil, nil, errors.New("invalid independent evidence timestamps")
+		}
+		if _, exists := knownEvidence[evidence.GetEvidenceId()]; exists {
+			return nil, nil, errors.New("duplicate independent evidence")
+		}
+		knownEvidence[evidence.GetEvidenceId()] = struct{}{}
+		if evidence.GetExitCode() == 0 {
+			passingEvidence[evidence.GetEvidenceId()] = struct{}{}
+		}
+		evidenceValues = append(evidenceValues, IndependentEvidence{
+			ID: evidence.GetEvidenceId(), CheckID: evidence.GetCheckId(),
+			CandidateCommit: evidence.GetCandidateCommit(), ExitCode: evidence.GetExitCode(),
+			OutputSHA256: evidence.GetOutputSha256(), ArtifactURI: evidence.GetArtifactUri(),
+			StartedAt: evidence.GetStartedAt().AsTime(), CompletedAt: evidence.GetCompletedAt().AsTime(),
+		})
+	}
+	return evidenceValues, passingEvidence, nil
+}
+
+func mapAcceptanceCoverage(
+	values []*reasoningv1.AcceptanceEvidence,
+	approvedCriteria []string,
+	passingEvidence map[string]struct{},
+) ([]AcceptanceEvidence, error) {
+	coverageValues := make([]AcceptanceEvidence, 0, len(values))
+	coveredCriteria := make(map[string]struct{}, len(values))
+	for _, coverage := range values {
+		if !criterionID.MatchString(coverage.GetAcceptanceCriterionId()) ||
+			!slices.Contains(approvedCriteria, coverage.GetAcceptanceCriterionId()) ||
+			len(coverage.GetEvidenceIds()) == 0 {
+			return nil, errors.New("invalid acceptance evidence coverage")
+		}
+		if _, exists := coveredCriteria[coverage.GetAcceptanceCriterionId()]; exists {
+			return nil, errors.New("duplicate acceptance evidence coverage")
+		}
+		coveredCriteria[coverage.GetAcceptanceCriterionId()] = struct{}{}
+		for _, evidenceID := range coverage.GetEvidenceIds() {
+			if _, exists := passingEvidence[evidenceID]; !exists {
+				return nil, errors.New("acceptance coverage requires passing evidence")
+			}
+		}
+		coverageValues = append(coverageValues, AcceptanceEvidence{
+			AcceptanceCriterionID: coverage.GetAcceptanceCriterionId(),
+			EvidenceIDs:           coverage.GetEvidenceIds(),
+		})
+	}
+	if len(coveredCriteria) != len(approvedCriteria) {
+		return nil, errors.New("required acceptance evidence coverage missing")
+	}
+	return coverageValues, nil
+}
+
+func mapReviewPolicy(value *reasoningv1.ReviewPolicy) ([]string, error) {
+	blockingSeverities := make([]string, 0, len(value.GetBlockingSeverities()))
+	hasCritical := false
+	for _, severity := range value.GetBlockingSeverities() {
+		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED {
+			return nil, errors.New("invalid blocking severity")
+		}
+		blockingSeverities = append(blockingSeverities, severity.String())
+		if severity == reasoningv1.FindingSeverity_FINDING_SEVERITY_CRITICAL {
+			hasCritical = true
+		}
+	}
+	if len(blockingSeverities) == 0 || !hasCritical {
+		return nil, errors.New("review policy must block critical findings")
+	}
+	return blockingSeverities, nil
+}
+
 func mapReviewFileOperation(value reasoningv1.FileOperation) (FileOperation, bool) {
 	switch value {
 	case reasoningv1.FileOperation_FILE_OPERATION_CREATE:
@@ -287,40 +352,81 @@ func MapReviewProposal(
 	if err := validateProposalIdentity(value.GetIdentity(), request.Envelope, StageReview); err != nil {
 		return ReviewProposal{}, err
 	}
-	var recommendation ReviewRecommendation
-	switch value.GetRecommendation() {
-	case reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED:
-		recommendation = ReviewReworkRequired
-	case reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT:
-		recommendation = ReviewAdvisoryAccept
-	default:
-		return ReviewProposal{}, errors.New("invalid review recommendation")
+	recommendation, err := mapReviewRecommendation(value.GetRecommendation())
+	if err != nil {
+		return ReviewProposal{}, err
 	}
+	knownEvidence := collectReviewEvidenceIDs(request.IndependentEvidence)
+	findings, findingIDs, hasBlockingFinding, err := mapReviewFindings(
+		value.GetFindings(), knownEvidence, request.Policy,
+	)
+	if err != nil {
+		return ReviewProposal{}, err
+	}
+	if hasBlockingFinding && recommendation != ReviewReworkRequired {
+		return ReviewProposal{}, errors.New("blocking finding requires rework recommendation")
+	}
+	actions, err := mapRequiredActions(value.GetRequiredActions(), findingIDs)
+	if err != nil {
+		return ReviewProposal{}, err
+	}
+	risks, err := mapResidualRisks(value.GetResidualRisks())
+	if err != nil {
+		return ReviewProposal{}, err
+	}
+	return ReviewProposal{
+		Recommendation: recommendation, Findings: findings, RequiredActions: actions,
+		UnrequestedChanges: value.GetUnrequestedChanges(), ResidualRisks: risks,
+		Assumptions: value.GetAssumptions(),
+	}, nil
+}
 
-	knownEvidence := make(map[string]struct{}, len(request.IndependentEvidence))
-	for _, evidence := range request.IndependentEvidence {
+func mapReviewRecommendation(
+	value reasoningv1.ReviewRecommendation,
+) (ReviewRecommendation, error) {
+	switch value {
+	case reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED:
+		return ReviewReworkRequired, nil
+	case reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT:
+		return ReviewAdvisoryAccept, nil
+	default:
+		return "", errors.New("invalid review recommendation")
+	}
+}
+
+func collectReviewEvidenceIDs(values []IndependentEvidence) map[string]struct{} {
+	knownEvidence := make(map[string]struct{}, len(values))
+	for _, evidence := range values {
 		knownEvidence[evidence.ID] = struct{}{}
 	}
-	findingIDs := make(map[string]struct{}, len(value.GetFindings()))
+	return knownEvidence
+}
+
+func mapReviewFindings(
+	values []*reasoningv1.ReviewFinding,
+	knownEvidence map[string]struct{},
+	policy ReviewPolicy,
+) ([]ReviewFinding, map[string]struct{}, bool, error) {
+	findingIDs := make(map[string]struct{}, len(values))
 	hasBlockingFinding := false
-	findings := make([]ReviewFinding, 0, len(value.GetFindings()))
-	for _, finding := range value.GetFindings() {
+	findings := make([]ReviewFinding, 0, len(values))
+	for _, finding := range values {
 		if finding.GetFindingId() == "" ||
 			finding.GetSeverity() == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED ||
 			finding.GetCategory() == reasoningv1.FindingCategory_FINDING_CATEGORY_UNSPECIFIED ||
 			finding.GetSummary() == "" || len(finding.GetEvidenceReferences()) == 0 {
-			return ReviewProposal{}, errors.New("invalid review finding")
+			return nil, nil, false, errors.New("invalid review finding")
 		}
 		if _, exists := findingIDs[finding.GetFindingId()]; exists {
-			return ReviewProposal{}, errors.New("duplicate review finding")
+			return nil, nil, false, errors.New("duplicate review finding")
 		}
 		for _, reference := range finding.GetEvidenceReferences() {
 			if _, exists := knownEvidence[reference]; !exists {
-				return ReviewProposal{}, errors.New("finding references unknown evidence")
+				return nil, nil, false, errors.New("finding references unknown evidence")
 			}
 		}
 		severity := finding.GetSeverity().String()
-		if slices.Contains(request.Policy.BlockingSeverities, severity) {
+		if slices.Contains(policy.BlockingSeverities, severity) {
 			hasBlockingFinding = true
 		}
 		findingIDs[finding.GetFindingId()] = struct{}{}
@@ -330,37 +436,39 @@ func MapReviewProposal(
 			EvidenceReferences: finding.GetEvidenceReferences(),
 		})
 	}
-	if hasBlockingFinding && recommendation != ReviewReworkRequired {
-		return ReviewProposal{}, errors.New("blocking finding requires rework recommendation")
-	}
+	return findings, findingIDs, hasBlockingFinding, nil
+}
 
-	actions := make([]RequiredAction, 0, len(value.GetRequiredActions()))
-	for _, action := range value.GetRequiredActions() {
+func mapRequiredActions(
+	values []*reasoningv1.RequiredAction, findingIDs map[string]struct{},
+) ([]RequiredAction, error) {
+	actions := make([]RequiredAction, 0, len(values))
+	for _, action := range values {
 		if action.GetActionId() == "" || action.GetFindingId() == "" || action.GetDescription() == "" {
-			return ReviewProposal{}, errors.New("invalid required action")
+			return nil, errors.New("invalid required action")
 		}
 		if _, exists := findingIDs[action.GetFindingId()]; !exists {
-			return ReviewProposal{}, errors.New("required action references unknown finding")
+			return nil, errors.New("required action references unknown finding")
 		}
 		actions = append(actions, RequiredAction{
 			ID: action.GetActionId(), FindingID: action.GetFindingId(),
 			Description: action.GetDescription(),
 		})
 	}
-	risks := make([]ResidualRisk, 0, len(value.GetResidualRisks()))
-	for _, risk := range value.GetResidualRisks() {
+	return actions, nil
+}
+
+func mapResidualRisks(values []*reasoningv1.ResidualRisk) ([]ResidualRisk, error) {
+	risks := make([]ResidualRisk, 0, len(values))
+	for _, risk := range values {
 		if risk.GetRiskId() == "" || risk.GetDescription() == "" ||
 			risk.GetSeverity() == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED {
-			return ReviewProposal{}, errors.New("invalid residual risk")
+			return nil, errors.New("invalid residual risk")
 		}
 		risks = append(risks, ResidualRisk{
 			ID: risk.GetRiskId(), Description: risk.GetDescription(),
 			Severity: risk.GetSeverity().String(),
 		})
 	}
-	return ReviewProposal{
-		Recommendation: recommendation, Findings: findings, RequiredActions: actions,
-		UnrequestedChanges: value.GetUnrequestedChanges(), ResidualRisks: risks,
-		Assumptions: value.GetAssumptions(),
-	}, nil
+	return risks, nil
 }

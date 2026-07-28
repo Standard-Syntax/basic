@@ -23,6 +23,9 @@ def main() -> int:
         raise SystemExit("no .proto files found")
     if not GO_PLUGIN.is_file():
         raise SystemExit(f"missing pinned Go plugin: {GO_PLUGIN}")
+    go_executable = shutil.which("go")
+    if go_executable is None:
+        raise SystemExit("go executable not found")
 
     GO_OUT.mkdir(parents=True, exist_ok=True)
     PYTHON_OUT.mkdir(parents=True, exist_ok=True)
@@ -63,7 +66,7 @@ def main() -> int:
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     subprocess.run(
-        ["go", "run", "./internal/testfixtures"],
+        [go_executable, "run", "./internal/testfixtures"],
         check=True,
         cwd=ROOT / "go",
     )
