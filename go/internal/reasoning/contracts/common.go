@@ -80,7 +80,8 @@ func MapEnvelope(value *reasoningv1.ReasoningRequestEnvelope, expected Stage) (E
 	}
 	artifacts := make([]Artifact, 0, len(value.GetInputArtifacts()))
 	for _, artifact := range value.GetInputArtifacts() {
-		if artifact.GetArtifactUri() == "" || !digestPattern.MatchString(artifact.GetSha256()) {
+		if !digestPattern.MatchString(artifact.GetSha256()) ||
+			artifact.GetArtifactUri() != "artifact://sha256/"+artifact.GetSha256() {
 			return Envelope{}, errors.New("invalid input artifact")
 		}
 		artifacts = append(artifacts, Artifact{URI: artifact.GetArtifactUri(), SHA256: artifact.GetSha256()})

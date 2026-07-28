@@ -119,3 +119,14 @@ func TestMalformedSpecificationEnvelopeIsRejected(t *testing.T) {
 		t.Fatal("invalid expiry accepted")
 	}
 }
+
+func TestSpecificationEnvelopeRejectsUnboundArtifactURI(t *testing.T) {
+	var request reasoningv1.SpecificationRequest
+	if err := proto.Unmarshal(contractFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.Envelope.InputArtifacts[0].ArtifactUri = "file:///etc/passwd"
+	if _, err := MapSpecificationRequest(&request); err == nil {
+		t.Fatal("unbound artifact URI accepted")
+	}
+}
