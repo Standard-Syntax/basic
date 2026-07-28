@@ -21,7 +21,17 @@ const (
 	implementationStage  = "implementation"
 	implementationOutput = "implementation_proposal.v1"
 	rollbackTimeout      = 5 * time.Second
+	defaultMaximumBytes  = 1 << 20
 )
+
+type ByteLimits struct {
+	Request  int
+	Proposal int
+}
+
+func DefaultByteLimits() ByteLimits {
+	return ByteLimits{Request: defaultMaximumBytes, Proposal: defaultMaximumBytes}
+}
 
 type Clock interface {
 	Now() time.Time
@@ -83,6 +93,7 @@ type Service struct {
 	artifacts   ArtifactStore
 	invocations InvocationRepository
 	clock       Clock
+	limits      ByteLimits
 }
 
 func NewService(
@@ -91,6 +102,7 @@ func NewService(
 	artifacts ArtifactStore,
 	invocations InvocationRepository,
 	clock Clock,
+	configuredLimits ...ByteLimits,
 ) (*Service, error) {
 	if manifests == nil || adapter == nil || artifacts == nil ||
 		invocations == nil || clock == nil {
@@ -98,9 +110,19 @@ func NewService(
 			"manifest resolver, adapter, artifact store, invocation repository, and clock are required",
 		)
 	}
+	limits := DefaultByteLimits()
+	if len(configuredLimits) > 1 {
+		return nil, errors.New("at most one byte-limit configuration is allowed")
+	}
+	if len(configuredLimits) == 1 {
+		limits = configuredLimits[0]
+	}
+	if limits.Request < 1 || limits.Proposal < 1 {
+		return nil, errors.New("positive request and proposal byte limits are required")
+	}
 	return &Service{
 		manifests: manifests, adapter: adapter, artifacts: artifacts,
-		invocations: invocations, clock: clock,
+		invocations: invocations, clock: clock, limits: limits,
 	}, nil
 }
 
@@ -114,6 +136,13 @@ func (s *Service) ProposeImplementation(
 	requestBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("serialize implementation request: %w", err)
+	}
+	if len(requestBytes) > s.limits.Request {
+		failure := &contracts.ValidationFailure{
+			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field: "request", Message: "serialized request exceeds byte limit",
+		}
+		return Outcome{Rejection: proposalRejection(request, failure, started)}, nil
 	}
 	if outcome, err := preflightRequest(request, started); outcome != nil || err != nil {
 		return valueOrEmptyOutcome(outcome), err
@@ -157,6 +186,9 @@ func (s *Service) ProposeImplementation(
 		return Outcome{}, err
 	}
 	if err := ctx.Err(); err != nil {
+		return Outcome{}, err
+	}
+	if err := validateProviderBudget(result, mappedRequest); err != nil {
 		return Outcome{}, err
 	}
 	return s.finalizeProposal(ctx, handle, request, mappedRequest, result)
@@ -232,6 +264,18 @@ func (s *Service) invokeImplementation(
 	return result, nil
 }
 
+func validateProviderBudget(
+	result AdapterResult, request contracts.ImplementationRequest,
+) error {
+	if result.Usage.ProviderRequests != 1 ||
+		result.Usage.ProviderRequests > request.Envelope.MaximumRequests {
+		return errors.New(
+			"fake implementation adapter violated provider request budget",
+		)
+	}
+	return nil
+}
+
 func (s *Service) finalizeProposal(
 	ctx context.Context,
 	handle InvocationHandle,
@@ -243,6 +287,24 @@ func (s *Service) finalizeProposal(
 	proposalBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Proposal)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("serialize implementation proposal: %w", err)
+	}
+	if len(proposalBytes) > s.limits.Proposal {
+		failure := &contracts.ValidationFailure{
+			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field: "proposal", Message: "serialized proposal exceeds byte limit",
+		}
+		rejection := proposalRejection(request, failure, completed)
+		record, completeErr := handle.Complete(ctx, InvocationCompletion{
+			Provider: result.Provider, Model: result.Model,
+			CompletedAt: completed, Usage: result.Usage,
+			Status: StatusRejected, Rejection: rejection,
+		})
+		if completeErr != nil {
+			return Outcome{}, fmt.Errorf(
+				"record oversized implementation proposal: %w", completeErr,
+			)
+		}
+		return outcomeFromRecord(record, nil, false), nil
 	}
 	proposalArtifact, err := s.putArtifact(ctx, proposalBytes)
 	if err != nil {

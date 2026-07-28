@@ -23,6 +23,9 @@ func NewFakeImplementationAdapter(
 	if template == nil || model == "" {
 		return nil, errors.New("proposal template and fake model are required")
 	}
+	if usage.ProviderRequests != 1 {
+		return nil, errors.New("fake adapter requires exactly one provider request")
+	}
 	return &FakeImplementationAdapter{
 		template: proto.Clone(template).(*reasoningv1.ImplementationProposal),
 		model:    model, usage: usage,

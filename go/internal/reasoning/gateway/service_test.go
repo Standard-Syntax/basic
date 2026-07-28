@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,25 +69,27 @@ func (c fixedClock) Now() time.Time {
 type fakeResolver struct {
 	resolved ResolvedManifest
 	err      error
-	calls    int
+	calls    atomic.Int32
 }
 
 func (r *fakeResolver) ResolveManifest(
 	_ context.Context, _ string,
 ) (ResolvedManifest, error) {
-	r.calls++
+	r.calls.Add(1)
 	return r.resolved, r.err
 }
 
 type countingAdapter struct {
 	inner ImplementationAdapter
 	err   error
-	calls int
+	calls atomic.Int32
 }
 
 type memoryArtifactStore struct {
-	mu     sync.Mutex
-	values map[string][]byte
+	mu      sync.Mutex
+	values  map[string][]byte
+	puts    int
+	failPut int
 }
 
 func newMemoryArtifactStore() *memoryArtifactStore {
@@ -96,10 +99,14 @@ func newMemoryArtifactStore() *memoryArtifactStore {
 func (s *memoryArtifactStore) Put(
 	_ context.Context, body []byte,
 ) (ArtifactReference, error) {
-	sum := sha256.Sum256(body)
-	digest := hex.EncodeToString(sum[:])
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.puts++
+	if s.puts == s.failPut {
+		return ArtifactReference{}, errors.New("injected artifact put failure")
+	}
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
 	s.values[digest] = append([]byte(nil), body...)
 	return ArtifactReference{
 		URI: "artifact://sha256/" + digest, SHA256: digest,
@@ -184,7 +191,7 @@ func (h *memoryInvocationHandle) Rollback(_ context.Context) error {
 func (a *countingAdapter) ProposeImplementation(
 	ctx context.Context, value manifest.Manifest, request *reasoningv1.ImplementationRequest,
 ) (AdapterResult, error) {
-	a.calls++
+	a.calls.Add(1)
 	if a.err != nil {
 		return AdapterResult{}, a.err
 	}
@@ -272,10 +279,10 @@ func requireFakeInvocationMetadata(
 	t.Helper()
 	if outcome.Invocation.Provider != FakeProvider ||
 		outcome.Invocation.Usage.ProviderRequests != 1 ||
-		resolver.calls != 1 || adapter.calls != 1 {
+		resolver.calls.Load() != 1 || adapter.calls.Load() != 1 {
 		t.Fatalf(
 			"metadata or calls differ: invocation=%+v resolver=%d adapter=%d",
-			outcome.Invocation, resolver.calls, adapter.calls,
+			outcome.Invocation, resolver.calls.Load(), adapter.calls.Load(),
 		)
 	}
 	if outcome.RequestArtifact == (ArtifactReference{}) ||
@@ -345,7 +352,7 @@ func TestPolicyFailuresReturnStructuredRejections(t *testing.T) {
 			reasoningv1.RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		if resolver.calls != 0 || adapter.calls != 0 {
+		if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
 			t.Fatal("invalid request reached infrastructure or adapter")
 		}
 	})
@@ -361,8 +368,11 @@ func TestPolicyFailuresReturnStructuredRejections(t *testing.T) {
 			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
 			t.Fatalf("outcome = %+v", outcome)
 		}
-		if len(outcome.Rejection.GetDetails()) != 1 || adapter.calls != 1 {
-			t.Fatalf("rejection details=%v adapter calls=%d", outcome.Rejection, adapter.calls)
+		if len(outcome.Rejection.GetDetails()) != 1 || adapter.calls.Load() != 1 {
+			t.Fatalf(
+				"rejection details=%v adapter calls=%d",
+				outcome.Rejection, adapter.calls.Load(),
+			)
 		}
 	})
 }
@@ -395,7 +405,7 @@ func TestInfrastructureCancellationAndAdapterFailuresRemainErrors(t *testing.T) 
 		); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancellation error = %v", err)
 		}
-		if resolver.calls != 0 || adapter.calls != 0 {
+		if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
 			t.Fatal("cancelled request reached dependencies")
 		}
 	})
@@ -409,7 +419,203 @@ func TestManifestMustResolveToExactImplementationPairing(t *testing.T) {
 	); err == nil {
 		t.Fatal("wrong manifest stage accepted")
 	}
-	if adapter.calls != 0 {
+	if adapter.calls.Load() != 0 {
 		t.Fatal("wrong manifest pairing reached adapter")
+	}
+}
+
+func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		limits := DefaultByteLimits()
+		if limits.Request != 1<<20 || limits.Proposal != 1<<20 {
+			t.Fatalf("default limits = %+v", limits)
+		}
+	})
+	t.Run("request", func(t *testing.T) {
+		service, resolver, adapter := gatewayService(t, gatewayProposal(t))
+		service.limits.Request = 1
+		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome.Rejection.GetCode() !=
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
+			t.Fatalf("outcome = %+v", outcome)
+		}
+		if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
+			t.Fatal("oversized request reached dependencies")
+		}
+	})
+	t.Run("proposal", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		service.limits.Proposal = 1
+		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome.Rejection.GetCode() !=
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+			outcome.ProposalArtifact != (ArtifactReference{}) ||
+			adapter.calls.Load() != 1 {
+			t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
+		}
+	})
+	t.Run("fake request count", func(t *testing.T) {
+		if _, err := NewFakeImplementationAdapter(
+			gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
+		); err == nil {
+			t.Fatal("multi-request fake adapter configuration accepted")
+		}
+	})
+}
+
+func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
+	t.Run("request put", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		store := service.artifacts.(*memoryArtifactStore)
+		store.failPut = 1
+		if _, err := service.ProposeImplementation(
+			t.Context(), gatewayRequest(t),
+		); err == nil {
+			t.Fatal("request artifact failure became a policy outcome")
+		}
+		if adapter.calls.Load() != 0 {
+			t.Fatal("request artifact failure reached adapter")
+		}
+	})
+	t.Run("proposal put rolls back", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		store := service.artifacts.(*memoryArtifactStore)
+		store.failPut = 2
+		request := gatewayRequest(t)
+		if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+			t.Fatal("proposal artifact failure became a policy outcome")
+		}
+		store.failPut = 0
+		outcome, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if outcome.Replay || adapter.calls.Load() != 2 {
+			t.Fatalf("rollback replay=%t adapter calls=%d", outcome.Replay, adapter.calls.Load())
+		}
+	})
+	for _, test := range []struct {
+		name   string
+		mutate func(*memoryArtifactStore, ArtifactReference)
+	}{
+		{
+			name: "missing",
+			mutate: func(store *memoryArtifactStore, reference ArtifactReference) {
+				delete(store.values, reference.SHA256)
+			},
+		},
+		{
+			name: "corrupt",
+			mutate: func(store *memoryArtifactStore, reference ArtifactReference) {
+				store.values[reference.SHA256] = []byte("corrupt")
+			},
+		},
+	} {
+		t.Run("replay "+test.name, func(t *testing.T) {
+			service, _, adapter := gatewayService(t, gatewayProposal(t))
+			request := gatewayRequest(t)
+			first, err := service.ProposeImplementation(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := service.artifacts.(*memoryArtifactStore)
+			store.mu.Lock()
+			test.mutate(store, first.ProposalArtifact)
+			store.mu.Unlock()
+			if _, err := service.ProposeImplementation(
+				t.Context(), request,
+			); err == nil {
+				t.Fatal("invalid replay artifact accepted")
+			}
+			if adapter.calls.Load() != 1 {
+				t.Fatal("invalid replay invoked adapter")
+			}
+		})
+	}
+}
+
+func TestGatewayConcurrentReplayAndConflict(t *testing.T) {
+	t.Run("identical", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		const calls = 12
+		outcomes := make(chan Outcome, calls)
+		errs := make(chan error, calls)
+		request := gatewayRequest(t)
+		for range calls {
+			go func() {
+				outcome, err := service.ProposeImplementation(
+					context.Background(),
+					proto.Clone(request).(*reasoningv1.ImplementationRequest),
+				)
+				outcomes <- outcome
+				errs <- err
+			}()
+		}
+		replays := 0
+		for range calls {
+			if err := <-errs; err != nil {
+				t.Fatal(err)
+			}
+			if (<-outcomes).Replay {
+				replays++
+			}
+		}
+		if adapter.calls.Load() != 1 || replays != calls-1 {
+			t.Fatalf("adapter calls=%d replays=%d", adapter.calls.Load(), replays)
+		}
+	})
+	t.Run("conflicting", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		first := gatewayRequest(t)
+		second := proto.Clone(first).(*reasoningv1.ImplementationRequest)
+		second.BaseCommit = "f" + second.GetBaseCommit()[1:]
+		errs := make(chan error, 2)
+		for _, request := range []*reasoningv1.ImplementationRequest{first, second} {
+			go func() {
+				_, err := service.ProposeImplementation(context.Background(), request)
+				errs <- err
+			}()
+		}
+		var successes, conflicts int
+		for range 2 {
+			err := <-errs
+			switch {
+			case err == nil:
+				successes++
+			case errors.Is(err, ErrInvocationConflict):
+				conflicts++
+			default:
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		if successes != 1 || conflicts != 1 || adapter.calls.Load() != 1 {
+			t.Fatalf(
+				"successes=%d conflicts=%d adapter calls=%d",
+				successes, conflicts, adapter.calls.Load(),
+			)
+		}
+	})
+}
+
+func TestExpiredRequestIsRejectedBeforeAdapter(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	request := gatewayRequest(t)
+	service.clock = fixedClock{
+		now: request.GetEnvelope().GetExpiresAt().AsTime().Add(time.Nanosecond),
+	}
+	outcome, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Rejection.GetCode() !=
+		reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH ||
+		adapter.calls.Load() != 0 {
+		t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
 	}
 }

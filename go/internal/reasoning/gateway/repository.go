@@ -25,8 +25,16 @@ func Migrate(ctx context.Context, connectionString string) error {
 }
 
 type PostgresInvocationRepository struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	inject func(RepositoryFaultPoint) error
 }
+
+type RepositoryFaultPoint string
+
+const (
+	FaultBeforeInvocationInsert RepositoryFaultPoint = "before_invocation_insert"
+	FaultBeforeInvocationCommit RepositoryFaultPoint = "before_invocation_commit"
+)
 
 func NewPostgresInvocationRepository(
 	pool *pgxpool.Pool,
@@ -127,6 +135,9 @@ func (h *postgresInvocationHandle) Complete(
 		proposalURI = &completion.ProposalArtifact.URI
 		proposalDigest = &completion.ProposalArtifact.SHA256
 	}
+	if err := h.fault(FaultBeforeInvocationInsert); err != nil {
+		return InvocationRecord{}, err
+	}
 	tx, err := h.repository.pool.Begin(ctx)
 	if err != nil {
 		return InvocationRecord{}, fmt.Errorf("begin reasoning completion: %w", err)
@@ -150,6 +161,9 @@ func (h *postgresInvocationHandle) Complete(
 	if result.RowsAffected() != 1 {
 		return InvocationRecord{}, ErrInvocationState
 	}
+	if err := h.fault(FaultBeforeInvocationCommit); err != nil {
+		return InvocationRecord{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return InvocationRecord{}, fmt.Errorf("commit reasoning invocation: %w", err)
 	}
@@ -157,6 +171,13 @@ func (h *postgresInvocationHandle) Complete(
 	return InvocationRecord{
 		InvocationStart: h.start, InvocationCompletion: completion,
 	}, nil
+}
+
+func (h *postgresInvocationHandle) fault(point RepositoryFaultPoint) error {
+	if h.repository != nil && h.repository.inject != nil {
+		return h.repository.inject(point)
+	}
+	return nil
 }
 
 func (h *postgresInvocationHandle) Rollback(ctx context.Context) error {
