@@ -2,10 +2,12 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
@@ -20,6 +22,11 @@ var (
 	ErrVersionConflict = errors.New("agent version conflict")
 	ErrNotFound        = errors.New("agent registration not found")
 	ErrCorruptData     = errors.New("corrupt persisted agent registration")
+)
+
+var (
+	validName    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	validVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 )
 
 //go:embed migrations/*.sql
@@ -111,4 +118,41 @@ func (r *Registry) Register(ctx context.Context, rawManifest []byte) (RegisterRe
 		},
 		Created: true,
 	}, nil
+}
+
+func (r *Registry) Get(ctx context.Context, name, version string) (Record, error) {
+	if !validName.MatchString(name) || !validVersion.MatchString(version) {
+		return Record{}, ErrInvalidArgument
+	}
+	var record Record
+	var storedName, storedVersion string
+	err := r.pool.QueryRow(ctx, `SELECT
+			agent_name,agent_version,manifest_digest,canonical_manifest,registered_at
+		FROM agent_registrations WHERE agent_name=$1 AND agent_version=$2`,
+		name, version,
+	).Scan(
+		&storedName, &storedVersion, &record.Digest,
+		&record.CanonicalJSON, &record.RegisteredAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, ErrNotFound
+	}
+	if err != nil {
+		return Record{}, fmt.Errorf("get registration: %w", err)
+	}
+	return validateRecord(record, storedName, storedVersion)
+}
+
+func validateRecord(record Record, storedName, storedVersion string) (Record, error) {
+	value, canonical, digest, err := manifest.Read(record.CanonicalJSON)
+	if err != nil ||
+		!bytes.Equal(canonical, record.CanonicalJSON) ||
+		digest != record.Digest ||
+		value.Agent.Name != storedName ||
+		value.Agent.Version != storedVersion {
+		return Record{}, ErrCorruptData
+	}
+	record.Manifest = value
+	record.CanonicalJSON = append([]byte(nil), record.CanonicalJSON...)
+	return record, nil
 }
