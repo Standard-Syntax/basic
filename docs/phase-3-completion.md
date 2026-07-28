@@ -52,7 +52,7 @@ git diff --check
 ```
 
 The final aggregate run completed all Go tests and builds and reported
-`42 passed` for Python.
+`47 passed` for Python after review remediation.
 
 The wheel smoke builds the wheel, installs it into a fresh environment, changes
 outside the repository, and invokes `harness-agents compile` using the bundled
