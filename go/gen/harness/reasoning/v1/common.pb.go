@@ -9,6 +9,7 @@ package reasoningv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -21,28 +22,191 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ContractVersion establishes a generated-code baseline in Phase 0.
-type ContractVersion struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+type ReasoningStage int32
+
+const (
+	ReasoningStage_REASONING_STAGE_UNSPECIFIED    ReasoningStage = 0
+	ReasoningStage_REASONING_STAGE_SPECIFICATION  ReasoningStage = 1
+	ReasoningStage_REASONING_STAGE_PLANNING       ReasoningStage = 2
+	ReasoningStage_REASONING_STAGE_IMPLEMENTATION ReasoningStage = 3
+	ReasoningStage_REASONING_STAGE_REVIEW         ReasoningStage = 4
+)
+
+// Enum value maps for ReasoningStage.
+var (
+	ReasoningStage_name = map[int32]string{
+		0: "REASONING_STAGE_UNSPECIFIED",
+		1: "REASONING_STAGE_SPECIFICATION",
+		2: "REASONING_STAGE_PLANNING",
+		3: "REASONING_STAGE_IMPLEMENTATION",
+		4: "REASONING_STAGE_REVIEW",
+	}
+	ReasoningStage_value = map[string]int32{
+		"REASONING_STAGE_UNSPECIFIED":    0,
+		"REASONING_STAGE_SPECIFICATION":  1,
+		"REASONING_STAGE_PLANNING":       2,
+		"REASONING_STAGE_IMPLEMENTATION": 3,
+		"REASONING_STAGE_REVIEW":         4,
+	}
+)
+
+func (x ReasoningStage) Enum() *ReasoningStage {
+	p := new(ReasoningStage)
+	*p = x
+	return p
 }
 
-func (x *ContractVersion) Reset() {
-	*x = ContractVersion{}
+func (x ReasoningStage) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ReasoningStage) Descriptor() protoreflect.EnumDescriptor {
+	return file_harness_reasoning_v1_common_proto_enumTypes[0].Descriptor()
+}
+
+func (ReasoningStage) Type() protoreflect.EnumType {
+	return &file_harness_reasoning_v1_common_proto_enumTypes[0]
+}
+
+func (x ReasoningStage) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ReasoningStage.Descriptor instead.
+func (ReasoningStage) EnumDescriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{0}
+}
+
+type AuthorityMode int32
+
+const (
+	AuthorityMode_AUTHORITY_MODE_UNSPECIFIED   AuthorityMode = 0
+	AuthorityMode_AUTHORITY_MODE_PROPOSAL_ONLY AuthorityMode = 1
+)
+
+// Enum value maps for AuthorityMode.
+var (
+	AuthorityMode_name = map[int32]string{
+		0: "AUTHORITY_MODE_UNSPECIFIED",
+		1: "AUTHORITY_MODE_PROPOSAL_ONLY",
+	}
+	AuthorityMode_value = map[string]int32{
+		"AUTHORITY_MODE_UNSPECIFIED":   0,
+		"AUTHORITY_MODE_PROPOSAL_ONLY": 1,
+	}
+)
+
+func (x AuthorityMode) Enum() *AuthorityMode {
+	p := new(AuthorityMode)
+	*p = x
+	return p
+}
+
+func (x AuthorityMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AuthorityMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_harness_reasoning_v1_common_proto_enumTypes[1].Descriptor()
+}
+
+func (AuthorityMode) Type() protoreflect.EnumType {
+	return &file_harness_reasoning_v1_common_proto_enumTypes[1]
+}
+
+func (x AuthorityMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AuthorityMode.Descriptor instead.
+func (AuthorityMode) EnumDescriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{1}
+}
+
+type RejectionCode int32
+
+const (
+	RejectionCode_REJECTION_CODE_UNSPECIFIED               RejectionCode = 0
+	RejectionCode_REJECTION_CODE_SCHEMA_INVALID            RejectionCode = 1
+	RejectionCode_REJECTION_CODE_REQUEST_MISMATCH          RejectionCode = 2
+	RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION       RejectionCode = 3
+	RejectionCode_REJECTION_CODE_SCOPE_VIOLATION           RejectionCode = 4
+	RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING RejectionCode = 5
+)
+
+// Enum value maps for RejectionCode.
+var (
+	RejectionCode_name = map[int32]string{
+		0: "REJECTION_CODE_UNSPECIFIED",
+		1: "REJECTION_CODE_SCHEMA_INVALID",
+		2: "REJECTION_CODE_REQUEST_MISMATCH",
+		3: "REJECTION_CODE_AUTHORITY_VIOLATION",
+		4: "REJECTION_CODE_SCOPE_VIOLATION",
+		5: "REJECTION_CODE_REQUIRED_COVERAGE_MISSING",
+	}
+	RejectionCode_value = map[string]int32{
+		"REJECTION_CODE_UNSPECIFIED":               0,
+		"REJECTION_CODE_SCHEMA_INVALID":            1,
+		"REJECTION_CODE_REQUEST_MISMATCH":          2,
+		"REJECTION_CODE_AUTHORITY_VIOLATION":       3,
+		"REJECTION_CODE_SCOPE_VIOLATION":           4,
+		"REJECTION_CODE_REQUIRED_COVERAGE_MISSING": 5,
+	}
+)
+
+func (x RejectionCode) Enum() *RejectionCode {
+	p := new(RejectionCode)
+	*p = x
+	return p
+}
+
+func (x RejectionCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RejectionCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_harness_reasoning_v1_common_proto_enumTypes[2].Descriptor()
+}
+
+func (RejectionCode) Type() protoreflect.EnumType {
+	return &file_harness_reasoning_v1_common_proto_enumTypes[2]
+}
+
+func (x RejectionCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RejectionCode.Descriptor instead.
+func (RejectionCode) EnumDescriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
+type AuthorityConstraints struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Mode                 AuthorityMode          `protobuf:"varint,1,opt,name=mode,proto3,enum=harness.reasoning.v1.AuthorityMode" json:"mode,omitempty"`
+	MayMutateKernelState bool                   `protobuf:"varint,2,opt,name=may_mutate_kernel_state,json=mayMutateKernelState,proto3" json:"may_mutate_kernel_state,omitempty"`
+	MayExecuteCommands   bool                   `protobuf:"varint,3,opt,name=may_execute_commands,json=mayExecuteCommands,proto3" json:"may_execute_commands,omitempty"`
+	MayModifyFiles       bool                   `protobuf:"varint,4,opt,name=may_modify_files,json=mayModifyFiles,proto3" json:"may_modify_files,omitempty"`
+	MayExpandScope       bool                   `protobuf:"varint,5,opt,name=may_expand_scope,json=mayExpandScope,proto3" json:"may_expand_scope,omitempty"`
+	MayApproveWork       bool                   `protobuf:"varint,6,opt,name=may_approve_work,json=mayApproveWork,proto3" json:"may_approve_work,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *AuthorityConstraints) Reset() {
+	*x = AuthorityConstraints{}
 	mi := &file_harness_reasoning_v1_common_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ContractVersion) String() string {
+func (x *AuthorityConstraints) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ContractVersion) ProtoMessage() {}
+func (*AuthorityConstraints) ProtoMessage() {}
 
-func (x *ContractVersion) ProtoReflect() protoreflect.Message {
+func (x *AuthorityConstraints) ProtoReflect() protoreflect.Message {
 	mi := &file_harness_reasoning_v1_common_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -54,25 +218,639 @@ func (x *ContractVersion) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ContractVersion.ProtoReflect.Descriptor instead.
-func (*ContractVersion) Descriptor() ([]byte, []int) {
+// Deprecated: Use AuthorityConstraints.ProtoReflect.Descriptor instead.
+func (*AuthorityConstraints) Descriptor() ([]byte, []int) {
 	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *ContractVersion) GetSchemaVersion() string {
+func (x *AuthorityConstraints) GetMode() AuthorityMode {
+	if x != nil {
+		return x.Mode
+	}
+	return AuthorityMode_AUTHORITY_MODE_UNSPECIFIED
+}
+
+func (x *AuthorityConstraints) GetMayMutateKernelState() bool {
+	if x != nil {
+		return x.MayMutateKernelState
+	}
+	return false
+}
+
+func (x *AuthorityConstraints) GetMayExecuteCommands() bool {
+	if x != nil {
+		return x.MayExecuteCommands
+	}
+	return false
+}
+
+func (x *AuthorityConstraints) GetMayModifyFiles() bool {
+	if x != nil {
+		return x.MayModifyFiles
+	}
+	return false
+}
+
+func (x *AuthorityConstraints) GetMayExpandScope() bool {
+	if x != nil {
+		return x.MayExpandScope
+	}
+	return false
+}
+
+func (x *AuthorityConstraints) GetMayApproveWork() bool {
+	if x != nil {
+		return x.MayApproveWork
+	}
+	return false
+}
+
+type ReasoningBudget struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	MaximumInputTokens      uint64                 `protobuf:"varint,1,opt,name=maximum_input_tokens,json=maximumInputTokens,proto3" json:"maximum_input_tokens,omitempty"`
+	MaximumOutputTokens     uint64                 `protobuf:"varint,2,opt,name=maximum_output_tokens,json=maximumOutputTokens,proto3" json:"maximum_output_tokens,omitempty"`
+	MaximumProviderRequests uint32                 `protobuf:"varint,3,opt,name=maximum_provider_requests,json=maximumProviderRequests,proto3" json:"maximum_provider_requests,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *ReasoningBudget) Reset() {
+	*x = ReasoningBudget{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReasoningBudget) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReasoningBudget) ProtoMessage() {}
+
+func (x *ReasoningBudget) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReasoningBudget.ProtoReflect.Descriptor instead.
+func (*ReasoningBudget) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ReasoningBudget) GetMaximumInputTokens() uint64 {
+	if x != nil {
+		return x.MaximumInputTokens
+	}
+	return 0
+}
+
+func (x *ReasoningBudget) GetMaximumOutputTokens() uint64 {
+	if x != nil {
+		return x.MaximumOutputTokens
+	}
+	return 0
+}
+
+func (x *ReasoningBudget) GetMaximumProviderRequests() uint32 {
+	if x != nil {
+		return x.MaximumProviderRequests
+	}
+	return 0
+}
+
+type ArtifactDigest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ArtifactUri   string                 `protobuf:"bytes,1,opt,name=artifact_uri,json=artifactUri,proto3" json:"artifact_uri,omitempty"`
+	Sha256        string                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArtifactDigest) Reset() {
+	*x = ArtifactDigest{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArtifactDigest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArtifactDigest) ProtoMessage() {}
+
+func (x *ArtifactDigest) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArtifactDigest.ProtoReflect.Descriptor instead.
+func (*ArtifactDigest) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ArtifactDigest) GetArtifactUri() string {
+	if x != nil {
+		return x.ArtifactUri
+	}
+	return ""
+}
+
+func (x *ArtifactDigest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+type ReasoningRequestEnvelope struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion       string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	RequestId           string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RunId               string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TaskId              *string                `protobuf:"bytes,4,opt,name=task_id,json=taskId,proto3,oneof" json:"task_id,omitempty"`
+	Stage               ReasoningStage         `protobuf:"varint,5,opt,name=stage,proto3,enum=harness.reasoning.v1.ReasoningStage" json:"stage,omitempty"`
+	Attempt             uint32                 `protobuf:"varint,6,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiresAt           *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Authority           *AuthorityConstraints  `protobuf:"bytes,9,opt,name=authority,proto3" json:"authority,omitempty"`
+	Budget              *ReasoningBudget       `protobuf:"bytes,10,opt,name=budget,proto3" json:"budget,omitempty"`
+	InputArtifacts      []*ArtifactDigest      `protobuf:"bytes,11,rep,name=input_artifacts,json=inputArtifacts,proto3" json:"input_artifacts,omitempty"`
+	AgentManifestDigest string                 `protobuf:"bytes,12,opt,name=agent_manifest_digest,json=agentManifestDigest,proto3" json:"agent_manifest_digest,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ReasoningRequestEnvelope) Reset() {
+	*x = ReasoningRequestEnvelope{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReasoningRequestEnvelope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReasoningRequestEnvelope) ProtoMessage() {}
+
+func (x *ReasoningRequestEnvelope) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReasoningRequestEnvelope.ProtoReflect.Descriptor instead.
+func (*ReasoningRequestEnvelope) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ReasoningRequestEnvelope) GetSchemaVersion() string {
 	if x != nil {
 		return x.SchemaVersion
 	}
 	return ""
 }
 
+func (x *ReasoningRequestEnvelope) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ReasoningRequestEnvelope) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ReasoningRequestEnvelope) GetTaskId() string {
+	if x != nil && x.TaskId != nil {
+		return *x.TaskId
+	}
+	return ""
+}
+
+func (x *ReasoningRequestEnvelope) GetStage() ReasoningStage {
+	if x != nil {
+		return x.Stage
+	}
+	return ReasoningStage_REASONING_STAGE_UNSPECIFIED
+}
+
+func (x *ReasoningRequestEnvelope) GetAttempt() uint32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *ReasoningRequestEnvelope) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ReasoningRequestEnvelope) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *ReasoningRequestEnvelope) GetAuthority() *AuthorityConstraints {
+	if x != nil {
+		return x.Authority
+	}
+	return nil
+}
+
+func (x *ReasoningRequestEnvelope) GetBudget() *ReasoningBudget {
+	if x != nil {
+		return x.Budget
+	}
+	return nil
+}
+
+func (x *ReasoningRequestEnvelope) GetInputArtifacts() []*ArtifactDigest {
+	if x != nil {
+		return x.InputArtifacts
+	}
+	return nil
+}
+
+func (x *ReasoningRequestEnvelope) GetAgentManifestDigest() string {
+	if x != nil {
+		return x.AgentManifestDigest
+	}
+	return ""
+}
+
+type ProposalIdentity struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion        string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	RequestId            string                 `protobuf:"bytes,2,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RunId                string                 `protobuf:"bytes,3,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TaskId               *string                `protobuf:"bytes,4,opt,name=task_id,json=taskId,proto3,oneof" json:"task_id,omitempty"`
+	Stage                ReasoningStage         `protobuf:"varint,5,opt,name=stage,proto3,enum=harness.reasoning.v1.ReasoningStage" json:"stage,omitempty"`
+	Attempt              uint32                 `protobuf:"varint,6,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	AgentManifestDigest  string                 `protobuf:"bytes,7,opt,name=agent_manifest_digest,json=agentManifestDigest,proto3" json:"agent_manifest_digest,omitempty"`
+	InputArtifactDigests []string               `protobuf:"bytes,8,rep,name=input_artifact_digests,json=inputArtifactDigests,proto3" json:"input_artifact_digests,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ProposalIdentity) Reset() {
+	*x = ProposalIdentity{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProposalIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProposalIdentity) ProtoMessage() {}
+
+func (x *ProposalIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProposalIdentity.ProtoReflect.Descriptor instead.
+func (*ProposalIdentity) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ProposalIdentity) GetSchemaVersion() string {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return ""
+}
+
+func (x *ProposalIdentity) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ProposalIdentity) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ProposalIdentity) GetTaskId() string {
+	if x != nil && x.TaskId != nil {
+		return *x.TaskId
+	}
+	return ""
+}
+
+func (x *ProposalIdentity) GetStage() ReasoningStage {
+	if x != nil {
+		return x.Stage
+	}
+	return ReasoningStage_REASONING_STAGE_UNSPECIFIED
+}
+
+func (x *ProposalIdentity) GetAttempt() uint32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *ProposalIdentity) GetAgentManifestDigest() string {
+	if x != nil {
+		return x.AgentManifestDigest
+	}
+	return ""
+}
+
+func (x *ProposalIdentity) GetInputArtifactDigests() []string {
+	if x != nil {
+		return x.InputArtifactDigests
+	}
+	return nil
+}
+
+type RejectionDetail struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Field         string                 `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RejectionDetail) Reset() {
+	*x = RejectionDetail{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RejectionDetail) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RejectionDetail) ProtoMessage() {}
+
+func (x *RejectionDetail) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RejectionDetail.ProtoReflect.Descriptor instead.
+func (*RejectionDetail) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *RejectionDetail) GetField() string {
+	if x != nil {
+		return x.Field
+	}
+	return ""
+}
+
+func (x *RejectionDetail) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type ProposalRejection struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Code          RejectionCode          `protobuf:"varint,1,opt,name=code,proto3,enum=harness.reasoning.v1.RejectionCode" json:"code,omitempty"`
+	Summary       string                 `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
+	Details       []*RejectionDetail     `protobuf:"bytes,3,rep,name=details,proto3" json:"details,omitempty"`
+	Retryable     bool                   `protobuf:"varint,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
+	RequestId     string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	RunId         string                 `protobuf:"bytes,6,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	TaskId        *string                `protobuf:"bytes,7,opt,name=task_id,json=taskId,proto3,oneof" json:"task_id,omitempty"`
+	Attempt       uint32                 `protobuf:"varint,8,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProposalRejection) Reset() {
+	*x = ProposalRejection{}
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProposalRejection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProposalRejection) ProtoMessage() {}
+
+func (x *ProposalRejection) ProtoReflect() protoreflect.Message {
+	mi := &file_harness_reasoning_v1_common_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProposalRejection.ProtoReflect.Descriptor instead.
+func (*ProposalRejection) Descriptor() ([]byte, []int) {
+	return file_harness_reasoning_v1_common_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ProposalRejection) GetCode() RejectionCode {
+	if x != nil {
+		return x.Code
+	}
+	return RejectionCode_REJECTION_CODE_UNSPECIFIED
+}
+
+func (x *ProposalRejection) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *ProposalRejection) GetDetails() []*RejectionDetail {
+	if x != nil {
+		return x.Details
+	}
+	return nil
+}
+
+func (x *ProposalRejection) GetRetryable() bool {
+	if x != nil {
+		return x.Retryable
+	}
+	return false
+}
+
+func (x *ProposalRejection) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ProposalRejection) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *ProposalRejection) GetTaskId() string {
+	if x != nil && x.TaskId != nil {
+		return *x.TaskId
+	}
+	return ""
+}
+
+func (x *ProposalRejection) GetAttempt() uint32 {
+	if x != nil {
+		return x.Attempt
+	}
+	return 0
+}
+
+func (x *ProposalRejection) GetTimestamp() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Timestamp
+	}
+	return nil
+}
+
 var File_harness_reasoning_v1_common_proto protoreflect.FileDescriptor
 
 const file_harness_reasoning_v1_common_proto_rawDesc = "" +
 	"\n" +
-	"!harness/reasoning/v1/common.proto\x12\x14harness.reasoning.v1\"8\n" +
-	"\x0fContractVersion\x12%\n" +
-	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersionBJZHgithub.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1b\x06proto3"
+	"!harness/reasoning/v1/common.proto\x12\x14harness.reasoning.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb6\x02\n" +
+	"\x14AuthorityConstraints\x127\n" +
+	"\x04mode\x18\x01 \x01(\x0e2#.harness.reasoning.v1.AuthorityModeR\x04mode\x125\n" +
+	"\x17may_mutate_kernel_state\x18\x02 \x01(\bR\x14mayMutateKernelState\x120\n" +
+	"\x14may_execute_commands\x18\x03 \x01(\bR\x12mayExecuteCommands\x12(\n" +
+	"\x10may_modify_files\x18\x04 \x01(\bR\x0emayModifyFiles\x12(\n" +
+	"\x10may_expand_scope\x18\x05 \x01(\bR\x0emayExpandScope\x12(\n" +
+	"\x10may_approve_work\x18\x06 \x01(\bR\x0emayApproveWork\"\xb3\x01\n" +
+	"\x0fReasoningBudget\x120\n" +
+	"\x14maximum_input_tokens\x18\x01 \x01(\x04R\x12maximumInputTokens\x122\n" +
+	"\x15maximum_output_tokens\x18\x02 \x01(\x04R\x13maximumOutputTokens\x12:\n" +
+	"\x19maximum_provider_requests\x18\x03 \x01(\rR\x17maximumProviderRequests\"K\n" +
+	"\x0eArtifactDigest\x12!\n" +
+	"\fartifact_uri\x18\x01 \x01(\tR\vartifactUri\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\xf9\x04\n" +
+	"\x18ReasoningRequestEnvelope\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06run_id\x18\x03 \x01(\tR\x05runId\x12\x1c\n" +
+	"\atask_id\x18\x04 \x01(\tH\x00R\x06taskId\x88\x01\x01\x12:\n" +
+	"\x05stage\x18\x05 \x01(\x0e2$.harness.reasoning.v1.ReasoningStageR\x05stage\x12\x18\n" +
+	"\aattempt\x18\x06 \x01(\rR\aattempt\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12H\n" +
+	"\tauthority\x18\t \x01(\v2*.harness.reasoning.v1.AuthorityConstraintsR\tauthority\x12=\n" +
+	"\x06budget\x18\n" +
+	" \x01(\v2%.harness.reasoning.v1.ReasoningBudgetR\x06budget\x12M\n" +
+	"\x0finput_artifacts\x18\v \x03(\v2$.harness.reasoning.v1.ArtifactDigestR\x0einputArtifacts\x122\n" +
+	"\x15agent_manifest_digest\x18\f \x01(\tR\x13agentManifestDigestB\n" +
+	"\n" +
+	"\b_task_id\"\xd9\x02\n" +
+	"\x10ProposalIdentity\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x02 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06run_id\x18\x03 \x01(\tR\x05runId\x12\x1c\n" +
+	"\atask_id\x18\x04 \x01(\tH\x00R\x06taskId\x88\x01\x01\x12:\n" +
+	"\x05stage\x18\x05 \x01(\x0e2$.harness.reasoning.v1.ReasoningStageR\x05stage\x12\x18\n" +
+	"\aattempt\x18\x06 \x01(\rR\aattempt\x122\n" +
+	"\x15agent_manifest_digest\x18\a \x01(\tR\x13agentManifestDigest\x124\n" +
+	"\x16input_artifact_digests\x18\b \x03(\tR\x14inputArtifactDigestsB\n" +
+	"\n" +
+	"\b_task_id\"A\n" +
+	"\x0fRejectionDetail\x12\x14\n" +
+	"\x05field\x18\x01 \x01(\tR\x05field\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xf9\x02\n" +
+	"\x11ProposalRejection\x127\n" +
+	"\x04code\x18\x01 \x01(\x0e2#.harness.reasoning.v1.RejectionCodeR\x04code\x12\x18\n" +
+	"\asummary\x18\x02 \x01(\tR\asummary\x12?\n" +
+	"\adetails\x18\x03 \x03(\v2%.harness.reasoning.v1.RejectionDetailR\adetails\x12\x1c\n" +
+	"\tretryable\x18\x04 \x01(\bR\tretryable\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x12\x15\n" +
+	"\x06run_id\x18\x06 \x01(\tR\x05runId\x12\x1c\n" +
+	"\atask_id\x18\a \x01(\tH\x00R\x06taskId\x88\x01\x01\x12\x18\n" +
+	"\aattempt\x18\b \x01(\rR\aattempt\x128\n" +
+	"\ttimestamp\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\ttimestampB\n" +
+	"\n" +
+	"\b_task_id*\xb2\x01\n" +
+	"\x0eReasoningStage\x12\x1f\n" +
+	"\x1bREASONING_STAGE_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dREASONING_STAGE_SPECIFICATION\x10\x01\x12\x1c\n" +
+	"\x18REASONING_STAGE_PLANNING\x10\x02\x12\"\n" +
+	"\x1eREASONING_STAGE_IMPLEMENTATION\x10\x03\x12\x1a\n" +
+	"\x16REASONING_STAGE_REVIEW\x10\x04*Q\n" +
+	"\rAuthorityMode\x12\x1e\n" +
+	"\x1aAUTHORITY_MODE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cAUTHORITY_MODE_PROPOSAL_ONLY\x10\x01*\xf1\x01\n" +
+	"\rRejectionCode\x12\x1e\n" +
+	"\x1aREJECTION_CODE_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dREJECTION_CODE_SCHEMA_INVALID\x10\x01\x12#\n" +
+	"\x1fREJECTION_CODE_REQUEST_MISMATCH\x10\x02\x12&\n" +
+	"\"REJECTION_CODE_AUTHORITY_VIOLATION\x10\x03\x12\"\n" +
+	"\x1eREJECTION_CODE_SCOPE_VIOLATION\x10\x04\x12,\n" +
+	"(REJECTION_CODE_REQUIRED_COVERAGE_MISSING\x10\x05BJZHgithub.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1b\x06proto3"
 
 var (
 	file_harness_reasoning_v1_common_proto_rawDescOnce sync.Once
@@ -86,16 +864,38 @@ func file_harness_reasoning_v1_common_proto_rawDescGZIP() []byte {
 	return file_harness_reasoning_v1_common_proto_rawDescData
 }
 
-var file_harness_reasoning_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_harness_reasoning_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_harness_reasoning_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_harness_reasoning_v1_common_proto_goTypes = []any{
-	(*ContractVersion)(nil), // 0: harness.reasoning.v1.ContractVersion
+	(ReasoningStage)(0),              // 0: harness.reasoning.v1.ReasoningStage
+	(AuthorityMode)(0),               // 1: harness.reasoning.v1.AuthorityMode
+	(RejectionCode)(0),               // 2: harness.reasoning.v1.RejectionCode
+	(*AuthorityConstraints)(nil),     // 3: harness.reasoning.v1.AuthorityConstraints
+	(*ReasoningBudget)(nil),          // 4: harness.reasoning.v1.ReasoningBudget
+	(*ArtifactDigest)(nil),           // 5: harness.reasoning.v1.ArtifactDigest
+	(*ReasoningRequestEnvelope)(nil), // 6: harness.reasoning.v1.ReasoningRequestEnvelope
+	(*ProposalIdentity)(nil),         // 7: harness.reasoning.v1.ProposalIdentity
+	(*RejectionDetail)(nil),          // 8: harness.reasoning.v1.RejectionDetail
+	(*ProposalRejection)(nil),        // 9: harness.reasoning.v1.ProposalRejection
+	(*timestamppb.Timestamp)(nil),    // 10: google.protobuf.Timestamp
 }
 var file_harness_reasoning_v1_common_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1,  // 0: harness.reasoning.v1.AuthorityConstraints.mode:type_name -> harness.reasoning.v1.AuthorityMode
+	0,  // 1: harness.reasoning.v1.ReasoningRequestEnvelope.stage:type_name -> harness.reasoning.v1.ReasoningStage
+	10, // 2: harness.reasoning.v1.ReasoningRequestEnvelope.created_at:type_name -> google.protobuf.Timestamp
+	10, // 3: harness.reasoning.v1.ReasoningRequestEnvelope.expires_at:type_name -> google.protobuf.Timestamp
+	3,  // 4: harness.reasoning.v1.ReasoningRequestEnvelope.authority:type_name -> harness.reasoning.v1.AuthorityConstraints
+	4,  // 5: harness.reasoning.v1.ReasoningRequestEnvelope.budget:type_name -> harness.reasoning.v1.ReasoningBudget
+	5,  // 6: harness.reasoning.v1.ReasoningRequestEnvelope.input_artifacts:type_name -> harness.reasoning.v1.ArtifactDigest
+	0,  // 7: harness.reasoning.v1.ProposalIdentity.stage:type_name -> harness.reasoning.v1.ReasoningStage
+	2,  // 8: harness.reasoning.v1.ProposalRejection.code:type_name -> harness.reasoning.v1.RejectionCode
+	8,  // 9: harness.reasoning.v1.ProposalRejection.details:type_name -> harness.reasoning.v1.RejectionDetail
+	10, // 10: harness.reasoning.v1.ProposalRejection.timestamp:type_name -> google.protobuf.Timestamp
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_harness_reasoning_v1_common_proto_init() }
@@ -103,18 +903,22 @@ func file_harness_reasoning_v1_common_proto_init() {
 	if File_harness_reasoning_v1_common_proto != nil {
 		return
 	}
+	file_harness_reasoning_v1_common_proto_msgTypes[3].OneofWrappers = []any{}
+	file_harness_reasoning_v1_common_proto_msgTypes[4].OneofWrappers = []any{}
+	file_harness_reasoning_v1_common_proto_msgTypes[6].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_harness_reasoning_v1_common_proto_rawDesc), len(file_harness_reasoning_v1_common_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   1,
+			NumEnums:      3,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_harness_reasoning_v1_common_proto_goTypes,
 		DependencyIndexes: file_harness_reasoning_v1_common_proto_depIdxs,
+		EnumInfos:         file_harness_reasoning_v1_common_proto_enumTypes,
 		MessageInfos:      file_harness_reasoning_v1_common_proto_msgTypes,
 	}.Build()
 	File_harness_reasoning_v1_common_proto = out.File

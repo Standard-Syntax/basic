@@ -1,0 +1,127 @@
+// Package contracts maps untrusted Protobuf transports into validated domain values.
+package contracts
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"time"
+
+	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
+)
+
+var digestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+type Stage string
+
+const (
+	StageSpecification  Stage = "specification"
+	StagePlanning       Stage = "planning"
+	StageImplementation Stage = "implementation"
+	StageReview         Stage = "review"
+)
+
+type Envelope struct {
+	SchemaVersion       string
+	RequestID           string
+	RunID               string
+	TaskID              *string
+	Stage               Stage
+	Attempt             uint32
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	MaximumInputTokens  uint64
+	MaximumOutputTokens uint64
+	MaximumRequests     uint32
+	InputArtifacts      []Artifact
+	AgentManifestDigest string
+}
+
+type Artifact struct {
+	URI    string
+	SHA256 string
+}
+
+func MapEnvelope(value *reasoningv1.ReasoningRequestEnvelope, expected Stage) (Envelope, error) {
+	if value == nil {
+		return Envelope{}, errors.New("envelope is required")
+	}
+	stage, err := mapStage(value.GetStage())
+	if err != nil || stage != expected {
+		return Envelope{}, errors.New("unexpected reasoning stage")
+	}
+	if err := validateAuthority(value.GetAuthority()); err != nil {
+		return Envelope{}, err
+	}
+	if value.GetSchemaVersion() != "1" || value.GetRequestId() == "" || value.GetRunId() == "" {
+		return Envelope{}, errors.New("invalid envelope identity")
+	}
+	if value.GetAttempt() == 0 || value.GetCreatedAt() == nil || value.GetExpiresAt() == nil {
+		return Envelope{}, errors.New("invalid attempt or timestamps")
+	}
+	if err := value.GetCreatedAt().CheckValid(); err != nil {
+		return Envelope{}, fmt.Errorf("created_at: %w", err)
+	}
+	if err := value.GetExpiresAt().CheckValid(); err != nil {
+		return Envelope{}, fmt.Errorf("expires_at: %w", err)
+	}
+	created := value.GetCreatedAt().AsTime()
+	expires := value.GetExpiresAt().AsTime()
+	if !expires.After(created) {
+		return Envelope{}, errors.New("expires_at must follow created_at")
+	}
+	if value.GetBudget() == nil || value.GetBudget().GetMaximumInputTokens() == 0 ||
+		value.GetBudget().GetMaximumOutputTokens() == 0 ||
+		value.GetBudget().GetMaximumProviderRequests() == 0 {
+		return Envelope{}, errors.New("positive reasoning budget is required")
+	}
+	if !digestPattern.MatchString(value.GetAgentManifestDigest()) {
+		return Envelope{}, errors.New("invalid agent manifest digest")
+	}
+	artifacts := make([]Artifact, 0, len(value.GetInputArtifacts()))
+	for _, artifact := range value.GetInputArtifacts() {
+		if artifact.GetArtifactUri() == "" || !digestPattern.MatchString(artifact.GetSha256()) {
+			return Envelope{}, errors.New("invalid input artifact")
+		}
+		artifacts = append(artifacts, Artifact{URI: artifact.GetArtifactUri(), SHA256: artifact.GetSha256()})
+	}
+	return Envelope{
+		SchemaVersion:       value.GetSchemaVersion(),
+		RequestID:           value.GetRequestId(),
+		RunID:               value.GetRunId(),
+		TaskID:              value.TaskId,
+		Stage:               stage,
+		Attempt:             value.GetAttempt(),
+		CreatedAt:           created,
+		ExpiresAt:           expires,
+		MaximumInputTokens:  value.GetBudget().GetMaximumInputTokens(),
+		MaximumOutputTokens: value.GetBudget().GetMaximumOutputTokens(),
+		MaximumRequests:     value.GetBudget().GetMaximumProviderRequests(),
+		InputArtifacts:      artifacts,
+		AgentManifestDigest: value.GetAgentManifestDigest(),
+	}, nil
+}
+
+func validateAuthority(value *reasoningv1.AuthorityConstraints) error {
+	if value == nil || value.GetMode() != reasoningv1.AuthorityMode_AUTHORITY_MODE_PROPOSAL_ONLY ||
+		value.GetMayMutateKernelState() || value.GetMayExecuteCommands() ||
+		value.GetMayModifyFiles() || value.GetMayExpandScope() || value.GetMayApproveWork() {
+		return errors.New("authority violation: proposal_only with all capabilities false is required")
+	}
+	return nil
+}
+
+func mapStage(value reasoningv1.ReasoningStage) (Stage, error) {
+	switch value {
+	case reasoningv1.ReasoningStage_REASONING_STAGE_SPECIFICATION:
+		return StageSpecification, nil
+	case reasoningv1.ReasoningStage_REASONING_STAGE_PLANNING:
+		return StagePlanning, nil
+	case reasoningv1.ReasoningStage_REASONING_STAGE_IMPLEMENTATION:
+		return StageImplementation, nil
+	case reasoningv1.ReasoningStage_REASONING_STAGE_REVIEW:
+		return StageReview, nil
+	default:
+		return "", errors.New("unknown reasoning stage")
+	}
+}

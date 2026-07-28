@@ -22,9 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n!harness/reasoning/v1/common.proto\x12\x14harness.reasoning.v1\")\n\x0f\x43ontractVersion\x12\x16\n\x0eschema_version\x18\x01 \x01(\tBJZHgithub.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n!harness/reasoning/v1/common.proto\x12\x14harness.reasoning.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd6\x01\n\x14\x41uthorityConstraints\x12\x31\n\x04mode\x18\x01 \x01(\x0e\x32#.harness.reasoning.v1.AuthorityMode\x12\x1f\n\x17may_mutate_kernel_state\x18\x02 \x01(\x08\x12\x1c\n\x14may_execute_commands\x18\x03 \x01(\x08\x12\x18\n\x10may_modify_files\x18\x04 \x01(\x08\x12\x18\n\x10may_expand_scope\x18\x05 \x01(\x08\x12\x18\n\x10may_approve_work\x18\x06 \x01(\x08\"q\n\x0fReasoningBudget\x12\x1c\n\x14maximum_input_tokens\x18\x01 \x01(\x04\x12\x1d\n\x15maximum_output_tokens\x18\x02 \x01(\x04\x12!\n\x19maximum_provider_requests\x18\x03 \x01(\r\"6\n\x0e\x41rtifactDigest\x12\x14\n\x0c\x61rtifact_uri\x18\x01 \x01(\t\x12\x0e\n\x06sha256\x18\x02 \x01(\t\"\xf2\x03\n\x18ReasoningRequestEnvelope\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x14\n\x07task_id\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x33\n\x05stage\x18\x05 \x01(\x0e\x32$.harness.reasoning.v1.ReasoningStage\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\r\x12.\n\ncreated_at\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12.\n\nexpires_at\x18\x08 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12=\n\tauthority\x18\t \x01(\x0b\x32*.harness.reasoning.v1.AuthorityConstraints\x12\x35\n\x06\x62udget\x18\n \x01(\x0b\x32%.harness.reasoning.v1.ReasoningBudget\x12=\n\x0finput_artifacts\x18\x0b \x03(\x0b\x32$.harness.reasoning.v1.ArtifactDigest\x12\x1d\n\x15\x61gent_manifest_digest\x18\x0c \x01(\tB\n\n\x08_task_id\"\xf5\x01\n\x10ProposalIdentity\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\x12\n\nrequest_id\x18\x02 \x01(\t\x12\x0e\n\x06run_id\x18\x03 \x01(\t\x12\x14\n\x07task_id\x18\x04 \x01(\tH\x00\x88\x01\x01\x12\x33\n\x05stage\x18\x05 \x01(\x0e\x32$.harness.reasoning.v1.ReasoningStage\x12\x0f\n\x07\x61ttempt\x18\x06 \x01(\r\x12\x1d\n\x15\x61gent_manifest_digest\x18\x07 \x01(\t\x12\x1e\n\x16input_artifact_digests\x18\x08 \x03(\tB\n\n\x08_task_id\"1\n\x0fRejectionDetail\x12\r\n\x05\x66ield\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\"\xa8\x02\n\x11ProposalRejection\x12\x31\n\x04\x63ode\x18\x01 \x01(\x0e\x32#.harness.reasoning.v1.RejectionCode\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12\x36\n\x07\x64\x65tails\x18\x03 \x03(\x0b\x32%.harness.reasoning.v1.RejectionDetail\x12\x11\n\tretryable\x18\x04 \x01(\x08\x12\x12\n\nrequest_id\x18\x05 \x01(\t\x12\x0e\n\x06run_id\x18\x06 \x01(\t\x12\x14\n\x07task_id\x18\x07 \x01(\tH\x00\x88\x01\x01\x12\x0f\n\x07\x61ttempt\x18\x08 \x01(\r\x12-\n\ttimestamp\x18\t \x01(\x0b\x32\x1a.google.protobuf.TimestampB\n\n\x08_task_id*\xb2\x01\n\x0eReasoningStage\x12\x1f\n\x1bREASONING_STAGE_UNSPECIFIED\x10\x00\x12!\n\x1dREASONING_STAGE_SPECIFICATION\x10\x01\x12\x1c\n\x18REASONING_STAGE_PLANNING\x10\x02\x12\"\n\x1eREASONING_STAGE_IMPLEMENTATION\x10\x03\x12\x1a\n\x16REASONING_STAGE_REVIEW\x10\x04*Q\n\rAuthorityMode\x12\x1e\n\x1a\x41UTHORITY_MODE_UNSPECIFIED\x10\x00\x12 \n\x1c\x41UTHORITY_MODE_PROPOSAL_ONLY\x10\x01*\xf1\x01\n\rRejectionCode\x12\x1e\n\x1aREJECTION_CODE_UNSPECIFIED\x10\x00\x12!\n\x1dREJECTION_CODE_SCHEMA_INVALID\x10\x01\x12#\n\x1fREJECTION_CODE_REQUEST_MISMATCH\x10\x02\x12&\n\"REJECTION_CODE_AUTHORITY_VIOLATION\x10\x03\x12\"\n\x1eREJECTION_CODE_SCOPE_VIOLATION\x10\x04\x12,\n(REJECTION_CODE_REQUIRED_COVERAGE_MISSING\x10\x05\x42JZHgithub.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,6 +33,24 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'harness.reasoning.v1.common
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'ZHgithub.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1'
-  _globals['_CONTRACTVERSION']._serialized_start=59
-  _globals['_CONTRACTVERSION']._serialized_end=100
+  _globals['_REASONINGSTAGE']._serialized_start=1580
+  _globals['_REASONINGSTAGE']._serialized_end=1758
+  _globals['_AUTHORITYMODE']._serialized_start=1760
+  _globals['_AUTHORITYMODE']._serialized_end=1841
+  _globals['_REJECTIONCODE']._serialized_start=1844
+  _globals['_REJECTIONCODE']._serialized_end=2085
+  _globals['_AUTHORITYCONSTRAINTS']._serialized_start=93
+  _globals['_AUTHORITYCONSTRAINTS']._serialized_end=307
+  _globals['_REASONINGBUDGET']._serialized_start=309
+  _globals['_REASONINGBUDGET']._serialized_end=422
+  _globals['_ARTIFACTDIGEST']._serialized_start=424
+  _globals['_ARTIFACTDIGEST']._serialized_end=478
+  _globals['_REASONINGREQUESTENVELOPE']._serialized_start=481
+  _globals['_REASONINGREQUESTENVELOPE']._serialized_end=979
+  _globals['_PROPOSALIDENTITY']._serialized_start=982
+  _globals['_PROPOSALIDENTITY']._serialized_end=1227
+  _globals['_REJECTIONDETAIL']._serialized_start=1229
+  _globals['_REJECTIONDETAIL']._serialized_end=1278
+  _globals['_PROPOSALREJECTION']._serialized_start=1281
+  _globals['_PROPOSALREJECTION']._serialized_end=1577
 # @@protoc_insertion_point(module_scope)

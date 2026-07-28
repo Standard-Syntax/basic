@@ -2,9 +2,91 @@ syntax = "proto3";
 
 package harness.reasoning.v1;
 
+import "google/protobuf/timestamp.proto";
+
 option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
 
-// ContractVersion establishes a generated-code baseline in Phase 0.
-message ContractVersion {
+enum ReasoningStage {
+  REASONING_STAGE_UNSPECIFIED = 0;
+  REASONING_STAGE_SPECIFICATION = 1;
+  REASONING_STAGE_PLANNING = 2;
+  REASONING_STAGE_IMPLEMENTATION = 3;
+  REASONING_STAGE_REVIEW = 4;
+}
+
+enum AuthorityMode {
+  AUTHORITY_MODE_UNSPECIFIED = 0;
+  AUTHORITY_MODE_PROPOSAL_ONLY = 1;
+}
+
+message AuthorityConstraints {
+  AuthorityMode mode = 1;
+  bool may_mutate_kernel_state = 2;
+  bool may_execute_commands = 3;
+  bool may_modify_files = 4;
+  bool may_expand_scope = 5;
+  bool may_approve_work = 6;
+}
+
+message ReasoningBudget {
+  uint64 maximum_input_tokens = 1;
+  uint64 maximum_output_tokens = 2;
+  uint32 maximum_provider_requests = 3;
+}
+
+message ArtifactDigest {
+  string artifact_uri = 1;
+  string sha256 = 2;
+}
+
+message ReasoningRequestEnvelope {
   string schema_version = 1;
+  string request_id = 2;
+  string run_id = 3;
+  optional string task_id = 4;
+  ReasoningStage stage = 5;
+  uint32 attempt = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  AuthorityConstraints authority = 9;
+  ReasoningBudget budget = 10;
+  repeated ArtifactDigest input_artifacts = 11;
+  string agent_manifest_digest = 12;
+}
+
+message ProposalIdentity {
+  string schema_version = 1;
+  string request_id = 2;
+  string run_id = 3;
+  optional string task_id = 4;
+  ReasoningStage stage = 5;
+  uint32 attempt = 6;
+  string agent_manifest_digest = 7;
+  repeated string input_artifact_digests = 8;
+}
+
+enum RejectionCode {
+  REJECTION_CODE_UNSPECIFIED = 0;
+  REJECTION_CODE_SCHEMA_INVALID = 1;
+  REJECTION_CODE_REQUEST_MISMATCH = 2;
+  REJECTION_CODE_AUTHORITY_VIOLATION = 3;
+  REJECTION_CODE_SCOPE_VIOLATION = 4;
+  REJECTION_CODE_REQUIRED_COVERAGE_MISSING = 5;
+}
+
+message RejectionDetail {
+  string field = 1;
+  string message = 2;
+}
+
+message ProposalRejection {
+  RejectionCode code = 1;
+  string summary = 2;
+  repeated RejectionDetail details = 3;
+  bool retryable = 4;
+  string request_id = 5;
+  string run_id = 6;
+  optional string task_id = 7;
+  uint32 attempt = 8;
+  google.protobuf.Timestamp timestamp = 9;
 }

@@ -1,10 +1,12 @@
 """Generate committed Go and Python Protobuf transport bindings."""
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import grpc_tools
 from grpc_tools import protoc
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +15,7 @@ PROTO_FILES = sorted(PROTO_ROOT.rglob("*.proto"))
 GO_OUT = ROOT / "go" / "gen"
 PYTHON_OUT = ROOT / "python" / "src" / "harness_agents" / "_generated"
 GO_PLUGIN = ROOT / ".tools" / "bin" / "protoc-gen-go"
+WELL_KNOWN_TYPES = Path(grpc_tools.__file__).resolve().parent / "_proto"
 
 
 def main() -> int:
@@ -31,6 +34,7 @@ def main() -> int:
         [
             "grpc_tools.protoc",
             f"-I{PROTO_ROOT}",
+            f"-I{WELL_KNOWN_TYPES}",
             f"--plugin=protoc-gen-go={GO_PLUGIN}",
             f"--go_out={GO_OUT}",
             "--go_opt=paths=source_relative",
@@ -41,9 +45,22 @@ def main() -> int:
     if result != 0:
         return result
 
+    for generated in PYTHON_OUT.rglob("*_pb2.py"):
+        content = generated.read_text(encoding="utf-8")
+        content = content.replace(
+            "from harness.reasoning.v1 import ",
+            "from harness_agents._generated.harness.reasoning.v1 import ",
+        )
+        generated.write_text(content, encoding="utf-8", newline="\n")
+
     subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "write_generated_inits.py")],
         check=True,
+    )
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "generate_contract_fixtures.py")],
+        check=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
     return 0
 
