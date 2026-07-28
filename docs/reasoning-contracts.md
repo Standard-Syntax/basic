@@ -14,3 +14,12 @@ artifact/manifest binding, authority, scope, coverage, stage policy.
 The five stable v1 rejection codes are `SCHEMA_INVALID`, `REQUEST_MISMATCH`,
 `AUTHORITY_VIOLATION`, `SCOPE_VIOLATION`, and
 `REQUIRED_COVERAGE_MISSING`.
+
+## Compatibility
+
+The package and schema major version are `v1`. Published field numbers and enum
+values are never reused. Compatible evolution adds fields or enum values; the
+kernel fails closed on unknown authority, stage, operation, recommendation, or
+policy enums. Gateways preserve unknown Protobuf fields while relaying messages.
+Changing an existing field's meaning or default requires a new major version.
+Every evolution must add a backward-read fixture before merge.

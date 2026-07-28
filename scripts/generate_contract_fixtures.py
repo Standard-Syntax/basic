@@ -8,6 +8,7 @@ from harness_agents._generated.harness.reasoning.v1 import (
     common_pb2,
     implementation_pb2,
     planning_pb2,
+    review_pb2,
     specification_pb2,
 )
 
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tests" / "contracts" / "v1" / "specification"
 PLANNING_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "planning"
 IMPLEMENTATION_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "implementation"
+REVIEW_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "review"
 
 
 def timestamp(seconds: int) -> Timestamp:
@@ -245,6 +247,95 @@ def implementation_proposal() -> implementation_pb2.ImplementationProposal:
     )
 
 
+def review_request() -> review_pb2.ReviewRequest:
+    value = request().envelope
+    value.request_id = "request-review-001"
+    value.task_id = "TASK-001"
+    value.stage = common_pb2.REASONING_STAGE_REVIEW
+    return review_pb2.ReviewRequest(
+        envelope=value,
+        candidate=review_pb2.ReviewCandidateIdentity(
+            approved_specification_digest="c" * 64,
+            approved_task_digest="d" * 64,
+            base_commit="e" * 40,
+            candidate_commit="f" * 40,
+            implementation_proposal_digest="9" * 64,
+        ),
+        actual_diff=[
+            review_pb2.ActualDiffFile(
+                path="go/internal/reasoning/review.go",
+                operation=implementation_pb2.FILE_OPERATION_CREATE,
+                before_sha256=("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+                after_sha256="8" * 64,
+            )
+        ],
+        scope_report=review_pb2.ScopeReport(
+            authorized_changed_paths=["go/internal/reasoning/review.go"],
+            unexpected_changed_paths=[],
+        ),
+        independent_evidence=[
+            review_pb2.IndependentEvidence(
+                evidence_id="EVIDENCE-001",
+                check_id="CHECK-GO-TEST",
+                candidate_commit="f" * 40,
+                exit_code=0,
+                output_sha256="7" * 64,
+                artifact_uri=f"artifact://sha256/{'7' * 64}",
+                started_at=timestamp(1_785_139_300),
+                completed_at=timestamp(1_785_139_360),
+            )
+        ],
+        acceptance_coverage=[
+            review_pb2.AcceptanceEvidence(
+                acceptance_criterion_id="AC-001",
+                evidence_ids=["EVIDENCE-001"],
+            )
+        ],
+        review_policy=review_pb2.ReviewPolicy(
+            blocking_severities=[
+                review_pb2.FINDING_SEVERITY_HIGH,
+                review_pb2.FINDING_SEVERITY_CRITICAL,
+            ],
+            report_unrequested_changes=True,
+        ),
+    )
+
+
+def review_proposal() -> review_pb2.ReviewProposal:
+    return review_pb2.ReviewProposal(
+        identity=common_pb2.ProposalIdentity(
+            schema_version="1",
+            request_id="request-review-001",
+            run_id="run-001",
+            task_id="TASK-001",
+            stage=common_pb2.REASONING_STAGE_REVIEW,
+            attempt=1,
+            agent_manifest_digest="b" * 64,
+            input_artifact_digests=["a" * 64],
+        ),
+        recommendation=review_pb2.REVIEW_RECOMMENDATION_ADVISORY_ACCEPT,
+        findings=[
+            review_pb2.ReviewFinding(
+                finding_id="FINDING-001",
+                severity=review_pb2.FINDING_SEVERITY_INFO,
+                category=review_pb2.FINDING_CATEGORY_TESTING,
+                summary="Independent evidence is present.",
+                evidence_references=["EVIDENCE-001"],
+            )
+        ],
+        required_actions=[],
+        unrequested_changes=[],
+        residual_risks=[
+            review_pb2.ResidualRisk(
+                risk_id="RISK-001",
+                description="Human approval remains required.",
+                severity=review_pb2.FINDING_SEVERITY_LOW,
+            )
+        ],
+        assumptions=["recommendation is advisory"],
+    )
+
+
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "request.bin").write_bytes(request().SerializeToString(deterministic=True))
@@ -262,6 +353,13 @@ def main() -> None:
     )
     (IMPLEMENTATION_OUTPUT / "proposal.bin").write_bytes(
         implementation_proposal().SerializeToString(deterministic=True)
+    )
+    REVIEW_OUTPUT.mkdir(parents=True, exist_ok=True)
+    (REVIEW_OUTPUT / "request.bin").write_bytes(
+        review_request().SerializeToString(deterministic=True)
+    )
+    (REVIEW_OUTPUT / "proposal.bin").write_bytes(
+        review_proposal().SerializeToString(deterministic=True)
     )
 
 

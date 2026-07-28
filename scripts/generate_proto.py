@@ -62,6 +62,11 @@ def main() -> int:
         check=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
     )
+    subprocess.run(
+        ["go", "run", "./internal/testfixtures"],
+        check=True,
+        cwd=ROOT / "go",
+    )
     return 0
 
 
