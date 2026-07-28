@@ -48,6 +48,9 @@ func validImplementation(
 
 func TestImplementationOperationsMapAndRoundTrip(t *testing.T) {
 	request, proposal := validImplementation(t)
+	if len(request.RepositoryContext) != 1 {
+		t.Fatal("repository context was discarded")
+	}
 	mapped, err := MapImplementationProposal(proposal, request)
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +67,26 @@ func TestImplementationOperationsMapAndRoundTrip(t *testing.T) {
 	}
 	if string(encoded) != string(implementationFixture(t, "proposal.bin")) {
 		t.Fatal("Go deterministic serialization differs from Python fixture")
+	}
+}
+
+func TestScopeChangeRequestIsPreservedButNotApplied(t *testing.T) {
+	request, proposal := validImplementation(t)
+	proposal.ScopeChangeRequest = &reasoningv1.ScopeChangeRequest{
+		Summary:                         "Need a wider read scope.",
+		RequestedReadablePaths:          []string{"docs"},
+		RequestedAcceptanceCriterionIds: []string{"AC-004"},
+		RequestedCheckIds:               []string{"CHECK-DOCS"},
+	}
+	mapped, err := MapImplementationProposal(proposal, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapped.ScopeChangeRequest == nil || mapped.ScopeChangeRequest.Summary == "" {
+		t.Fatal("scope change request was discarded")
+	}
+	if len(request.ReadablePaths) != 1 || request.ReadablePaths[0] != "go" {
+		t.Fatal("scope change request mutated kernel-selected scope")
 	}
 }
 

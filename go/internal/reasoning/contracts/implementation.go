@@ -27,6 +27,13 @@ type ImplementationRequest struct {
 	ProhibitedPaths             []string
 	AcceptanceCriterionIDs      []string
 	AvailableCheckIDs           []string
+	RepositoryContext           []RepositoryContextFile
+}
+
+type RepositoryContextFile struct {
+	Path    string
+	SHA256  string
+	Content string
 }
 
 type FileOperation string
@@ -52,7 +59,15 @@ type ImplementationProposal struct {
 	RequestedDeclaredCheckIDs []string
 	Assumptions               []string
 	UnresolvedQuestions       []string
-	HasScopeChangeRequest     bool
+	ScopeChangeRequest        *ScopeChangeRequest
+}
+
+type ScopeChangeRequest struct {
+	Summary                         string
+	RequestedReadablePaths          []string
+	RequestedWritablePaths          []string
+	RequestedAcceptanceCriterionIDs []string
+	RequestedCheckIDs               []string
 }
 
 type ImplementationReasoner interface {
@@ -86,6 +101,7 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 			return ImplementationRequest{}, errors.New("invalid available check ID")
 		}
 	}
+	repositoryContext := make([]RepositoryContextFile, 0, len(value.GetRepositoryContext()))
 	for _, file := range value.GetRepositoryContext() {
 		if !validRepoPath(file.GetPath()) || !pathWithin(file.GetPath(), value.GetReadablePaths()) ||
 			!digestPattern.MatchString(file.GetSha256()) {
@@ -100,6 +116,9 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 		if hex.EncodeToString(sum[:]) != file.GetSha256() {
 			return ImplementationRequest{}, errors.New("repository context digest mismatch")
 		}
+		repositoryContext = append(repositoryContext, RepositoryContextFile{
+			Path: file.GetPath(), SHA256: file.GetSha256(), Content: file.GetContent(),
+		})
 	}
 	return ImplementationRequest{
 		Envelope:                    envelope,
@@ -112,6 +131,7 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 		ProhibitedPaths:        value.GetProhibitedPaths(),
 		AcceptanceCriterionIDs: value.GetAcceptanceCriterionIds(),
 		AvailableCheckIDs:      value.GetAvailableCheckIds(),
+		RepositoryContext:      repositoryContext,
 	}, nil
 }
 
@@ -171,11 +191,49 @@ func MapImplementationProposal(
 			return ImplementationProposal{}, errors.New("required acceptance coverage missing")
 		}
 	}
+	scopeChange, err := mapScopeChangeRequest(value.GetScopeChangeRequest())
+	if err != nil {
+		return ImplementationProposal{}, err
+	}
 	return ImplementationProposal{
 		Summary: value.GetSummary(), Changes: changes,
 		RequestedDeclaredCheckIDs: value.GetRequestedDeclaredCheckIds(),
 		Assumptions:               value.GetAssumptions(), UnresolvedQuestions: value.GetUnresolvedQuestions(),
-		HasScopeChangeRequest: value.ScopeChangeRequest != nil,
+		ScopeChangeRequest: scopeChange,
+	}, nil
+}
+
+func mapScopeChangeRequest(value *reasoningv1.ScopeChangeRequest) (*ScopeChangeRequest, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if value.GetSummary() == "" {
+		return nil, errors.New("scope change summary is required")
+	}
+	for _, paths := range [][]string{
+		value.GetRequestedReadablePaths(), value.GetRequestedWritablePaths(),
+	} {
+		for _, requestedPath := range paths {
+			if !validRepoPath(requestedPath) {
+				return nil, errors.New("invalid scope change path")
+			}
+		}
+	}
+	if len(value.GetRequestedAcceptanceCriterionIds()) > 0 &&
+		!validCriteria(value.GetRequestedAcceptanceCriterionIds()) {
+		return nil, errors.New("invalid scope change acceptance criterion")
+	}
+	for _, check := range value.GetRequestedCheckIds() {
+		if !checkIDPattern.MatchString(check) {
+			return nil, errors.New("invalid scope change check")
+		}
+	}
+	return &ScopeChangeRequest{
+		Summary:                         value.GetSummary(),
+		RequestedReadablePaths:          value.GetRequestedReadablePaths(),
+		RequestedWritablePaths:          value.GetRequestedWritablePaths(),
+		RequestedAcceptanceCriterionIDs: value.GetRequestedAcceptanceCriterionIds(),
+		RequestedCheckIDs:               value.GetRequestedCheckIds(),
 	}, nil
 }
 
