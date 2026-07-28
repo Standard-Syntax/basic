@@ -44,7 +44,7 @@ def definition(**changes: object) -> AgentDefinition:
 
 
 def test_compilation_is_byte_identical_for_equivalent_input_order() -> None:
-    first = definition().compile(SCHEMA)
+    first = definition().compile()
     reordered = definition(
         tools=ToolRequestPolicy(
             frozenset(
@@ -60,6 +60,26 @@ def test_compilation_is_byte_identical_for_equivalent_input_order() -> None:
     assert first.canonical_bytes == reordered.canonical_bytes
     assert first.digest == reordered.digest
     assert first.value["prompt"]["artifact_uri"].endswith(first.value["prompt"]["sha256"])
+
+
+def test_schema_override_cannot_bypass_packaged_validation() -> None:
+    permissive_schema = {"type": "object"}
+    with pytest.raises(ManifestError, match="does not match"):
+        definition(name="Invalid Name").compile(permissive_schema)
+
+
+@pytest.mark.parametrize(
+    ("stage", "output_schema"),
+    [
+        ("specification", "task_graph_proposal.v1"),
+        ("planning", "implementation_proposal.v1"),
+        ("implementation", "review_proposal.v1"),
+        ("review", "specification_proposal.v1"),
+    ],
+)
+def test_stage_requires_corresponding_output_schema(stage: str, output_schema: str) -> None:
+    with pytest.raises(ManifestError, match="requires output schema"):
+        definition(stage=stage, output=OutputContract(output_schema)).compile()
 
 
 @pytest.mark.parametrize(
@@ -115,3 +135,10 @@ def test_prompt_hashes_exact_utf8_bytes(tmp_path: Path) -> None:
     import hashlib
 
     assert compiled.value["prompt"]["sha256"] == hashlib.sha256(prompt.read_bytes()).hexdigest()
+
+
+def test_invalid_utf8_prompt_is_rejected(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompt.md"
+    prompt.write_bytes(b"\xff")
+    with pytest.raises(ManifestError, match="valid UTF-8"):
+        definition(prompt=PromptTemplate.from_file(prompt)).compile()

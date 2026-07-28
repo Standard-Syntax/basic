@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass, field
+from importlib import resources
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -31,6 +33,12 @@ OUTPUT_SCHEMAS = frozenset(
         "review_proposal.v1",
     }
 )
+STAGE_OUTPUT_SCHEMAS = {
+    "specification": "specification_proposal.v1",
+    "planning": "task_graph_proposal.v1",
+    "implementation": "implementation_proposal.v1",
+    "review": "review_proposal.v1",
+}
 
 
 class ManifestError(ValueError):
@@ -51,6 +59,12 @@ class PromptTemplate:
 
     def digest(self) -> str:
         return hashlib.sha256(self.content).hexdigest()
+
+    def validate(self) -> None:
+        try:
+            self.content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ManifestError("prompt content must be valid UTF-8") from error
 
 
 @dataclass(frozen=True)
@@ -141,10 +155,14 @@ class AgentDefinition:
     def compile(self, schema: dict[str, Any] | None = None) -> CompiledManifest:
         if self.stage not in STAGES:
             raise ManifestError(f"unsupported stage: {self.stage}")
+        self.prompt.validate()
         self.model.validate()
         self.context.validate()
         self.tools.validate()
         self.output.validate()
+        expected_output = STAGE_OUTPUT_SCHEMAS[self.stage]
+        if self.output.schema != expected_output:
+            raise ManifestError(f"stage {self.stage!r} requires output schema {expected_output!r}")
         prompt_digest = self.prompt.digest()
         value: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -177,9 +195,13 @@ class AgentDefinition:
                 "labels": sorted(self.metadata.labels),
             },
         }
+        schemas = [self._packaged_schema()]
         if schema is not None:
+            schemas.append(schema)
+        for validation_schema in schemas:
             errors = sorted(
-                Draft202012Validator(schema).iter_errors(value), key=lambda e: e.json_path
+                Draft202012Validator(validation_schema).iter_errors(value),
+                key=lambda e: e.json_path,
             )
             if errors:
                 first = errors[0]
@@ -193,3 +215,19 @@ class AgentDefinition:
             digest=hashlib.sha256(canonical_bytes).hexdigest(),
             value=value,
         )
+
+    @classmethod
+    def _packaged_schema(cls) -> dict[str, Any]:
+        if cls._schema is None:
+            schema_resource = resources.files("harness_agents").joinpath(
+                "schemas", "agent-manifest-v1.schema.json"
+            )
+            try:
+                loaded = json.loads(schema_resource.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, UnicodeError) as error:
+                raise ManifestError(f"cannot load packaged manifest schema: {error}") from error
+            if not isinstance(loaded, dict):
+                raise ManifestError("packaged manifest schema must be a JSON object")
+            Draft202012Validator.check_schema(loaded)
+            cls._schema = loaded
+        return cls._schema

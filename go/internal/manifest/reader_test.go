@@ -106,3 +106,18 @@ func TestValidateRejectsUnsafeAndInvalidURI(t *testing.T) {
 		t.Fatal("unrestricted prompt URL accepted")
 	}
 }
+
+func TestValidateRejectsStageOutputMismatch(t *testing.T) {
+	data, err := os.ReadFile(fixturePath(t, "implementation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, _, _, err := Read(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Output.Schema = "review_proposal.v1"
+	if err := value.Validate(); err == nil {
+		t.Fatal("stage/output mismatch accepted")
+	}
+}
