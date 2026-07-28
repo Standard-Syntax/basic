@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +84,103 @@ type countingAdapter struct {
 	calls int
 }
 
+type memoryArtifactStore struct {
+	mu     sync.Mutex
+	values map[string][]byte
+}
+
+func newMemoryArtifactStore() *memoryArtifactStore {
+	return &memoryArtifactStore{values: make(map[string][]byte)}
+}
+
+func (s *memoryArtifactStore) Put(
+	_ context.Context, body []byte,
+) (ArtifactReference, error) {
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.values[digest] = append([]byte(nil), body...)
+	return ArtifactReference{
+		URI: "artifact://sha256/" + digest, SHA256: digest,
+	}, nil
+}
+
+func (s *memoryArtifactStore) Get(
+	_ context.Context, reference ArtifactReference,
+) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	body, ok := s.values[reference.SHA256]
+	if !ok {
+		return nil, errors.New("artifact not found")
+	}
+	if err := verifyArtifact(reference, body); err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), body...), nil
+}
+
+type memoryInvocationRepository struct {
+	mu      sync.Mutex
+	records map[string]InvocationRecord
+}
+
+func newMemoryInvocationRepository() *memoryInvocationRepository {
+	return &memoryInvocationRepository{records: make(map[string]InvocationRecord)}
+}
+
+func (r *memoryInvocationRepository) Begin(
+	_ context.Context, start InvocationStart,
+) (InvocationHandle, error) {
+	r.mu.Lock()
+	if record, ok := r.records[start.RequestID]; ok {
+		r.mu.Unlock()
+		if record.RequestArtifact.SHA256 != start.RequestArtifact.SHA256 {
+			return nil, ErrInvocationConflict
+		}
+		return &memoryInvocationHandle{replay: &record}, nil
+	}
+	return &memoryInvocationHandle{repository: r, start: start, locked: true}, nil
+}
+
+type memoryInvocationHandle struct {
+	repository *memoryInvocationRepository
+	start      InvocationStart
+	replay     *InvocationRecord
+	locked     bool
+}
+
+func (h *memoryInvocationHandle) Replay() (InvocationRecord, bool) {
+	if h.replay == nil {
+		return InvocationRecord{}, false
+	}
+	return *h.replay, true
+}
+
+func (h *memoryInvocationHandle) Complete(
+	_ context.Context, completion InvocationCompletion,
+) (InvocationRecord, error) {
+	if !h.locked || h.repository == nil {
+		return InvocationRecord{}, ErrInvocationState
+	}
+	record := InvocationRecord{
+		InvocationStart: h.start, InvocationCompletion: completion,
+	}
+	h.repository.records[h.start.RequestID] = record
+	h.locked = false
+	h.repository.mu.Unlock()
+	return record, nil
+}
+
+func (h *memoryInvocationHandle) Rollback(_ context.Context) error {
+	if h.locked {
+		h.locked = false
+		h.repository.mu.Unlock()
+	}
+	return nil
+}
+
 func (a *countingAdapter) ProposeImplementation(
 	ctx context.Context, value manifest.Manifest, request *reasoningv1.ImplementationRequest,
 ) (AdapterResult, error) {
@@ -109,7 +209,7 @@ func gatewayService(
 	}
 	adapter := &countingAdapter{inner: fake}
 	service, err := NewService(
-		resolver, adapter,
+		resolver, adapter, newMemoryArtifactStore(), newMemoryInvocationRepository(),
 		fixedClock{now: request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)},
 	)
 	if err != nil {
@@ -142,6 +242,9 @@ func requireProposalOutcomes(t *testing.T, first, second Outcome) {
 		second.Proposal == nil || second.Rejection != nil {
 		t.Fatalf("outcomes are not proposal-only: first=%+v second=%+v", first, second)
 	}
+	if first.Replay || !second.Replay {
+		t.Fatalf("replay flags: first=%t second=%t", first.Replay, second.Replay)
+	}
 }
 
 func requireDeterministicProposal(
@@ -169,11 +272,15 @@ func requireFakeInvocationMetadata(
 	t.Helper()
 	if outcome.Invocation.Provider != FakeProvider ||
 		outcome.Invocation.Usage.ProviderRequests != 1 ||
-		resolver.calls != 2 || adapter.calls != 2 {
+		resolver.calls != 1 || adapter.calls != 1 {
 		t.Fatalf(
 			"metadata or calls differ: invocation=%+v resolver=%d adapter=%d",
 			outcome.Invocation, resolver.calls, adapter.calls,
 		)
+	}
+	if outcome.RequestArtifact == (ArtifactReference{}) ||
+		outcome.ProposalArtifact == (ArtifactReference{}) {
+		t.Fatal("content-addressed artifact references were not returned")
 	}
 }
 

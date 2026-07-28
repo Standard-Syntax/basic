@@ -3,6 +3,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -75,18 +77,30 @@ type Outcome struct {
 }
 
 type Service struct {
-	manifests ManifestResolver
-	adapter   ImplementationAdapter
-	clock     Clock
+	manifests   ManifestResolver
+	adapter     ImplementationAdapter
+	artifacts   ArtifactStore
+	invocations InvocationRepository
+	clock       Clock
 }
 
 func NewService(
-	manifests ManifestResolver, adapter ImplementationAdapter, clock Clock,
+	manifests ManifestResolver,
+	adapter ImplementationAdapter,
+	artifacts ArtifactStore,
+	invocations InvocationRepository,
+	clock Clock,
 ) (*Service, error) {
-	if manifests == nil || adapter == nil || clock == nil {
-		return nil, errors.New("manifest resolver, implementation adapter, and clock are required")
+	if manifests == nil || adapter == nil || artifacts == nil ||
+		invocations == nil || clock == nil {
+		return nil, errors.New(
+			"manifest resolver, adapter, artifact store, invocation repository, and clock are required",
+		)
 	}
-	return &Service{manifests: manifests, adapter: adapter, clock: clock}, nil
+	return &Service{
+		manifests: manifests, adapter: adapter, artifacts: artifacts,
+		invocations: invocations, clock: clock,
+	}, nil
 }
 
 func (s *Service) ProposeImplementation(
@@ -96,10 +110,54 @@ func (s *Service) ProposeImplementation(
 		return Outcome{}, err
 	}
 	started := s.clock.Now().UTC()
+	requestBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("serialize implementation request: %w", err)
+	}
+	if request == nil || request.GetEnvelope() == nil ||
+		request.GetEnvelope().GetRequestId() == "" ||
+		request.GetEnvelope().GetAttempt() == 0 {
+		_, validationErr := contracts.MapImplementationRequestAt(request, started)
+		if _, ok := contracts.ValidationCode(validationErr); ok {
+			return Outcome{
+				Rejection: proposalRejection(request, validationErr, started),
+			}, nil
+		}
+		return Outcome{}, fmt.Errorf("validate implementation request: %w", validationErr)
+	}
+	requestArtifact, err := s.putArtifact(ctx, requestBytes)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("store implementation request: %w", err)
+	}
+	envelope := request.GetEnvelope()
+	handle, err := s.invocations.Begin(ctx, InvocationStart{
+		RequestID: envelope.GetRequestId(), RequestArtifact: requestArtifact,
+		RunID: envelope.GetRunId(), TaskID: envelope.TaskId,
+		Stage: implementationStage, Attempt: envelope.GetAttempt(),
+		AgentManifestDigest: envelope.GetAgentManifestDigest(), StartedAt: started,
+	})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("begin reasoning invocation: %w", err)
+	}
+	defer func() { _ = handle.Rollback(context.Background()) }()
+	if record, ok := handle.Replay(); ok {
+		return s.replayOutcome(ctx, record)
+	}
+
 	mappedRequest, err := contracts.MapImplementationRequestAt(request, started)
 	if err != nil {
 		if _, ok := contracts.ValidationCode(err); ok {
-			return Outcome{Rejection: proposalRejection(request, err, started)}, nil
+			rejection := proposalRejection(request, err, started)
+			record, completeErr := handle.Complete(ctx, InvocationCompletion{
+				Provider: "gateway", Model: "pre-adapter", CompletedAt: started,
+				Status: StatusRejected, Rejection: rejection,
+			})
+			if completeErr != nil {
+				return Outcome{}, fmt.Errorf(
+					"record implementation rejection: %w", completeErr,
+				)
+			}
+			return outcomeFromRecord(record, nil, false), nil
 		}
 		return Outcome{}, fmt.Errorf("validate implementation request: %w", err)
 	}
@@ -114,7 +172,8 @@ func (s *Service) ProposeImplementation(
 		resolved.Manifest.Output.Schema != implementationOutput {
 		return Outcome{}, errors.New("resolved manifest does not match implementation request")
 	}
-	result, err := s.adapter.ProposeImplementation(ctx, resolved.Manifest, request)
+	adapterRequest := proto.Clone(request).(*reasoningv1.ImplementationRequest)
+	result, err := s.adapter.ProposeImplementation(ctx, resolved.Manifest, adapterRequest)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("propose implementation: %w", err)
 	}
@@ -122,23 +181,129 @@ func (s *Service) ProposeImplementation(
 		return Outcome{}, err
 	}
 	completed := s.clock.Now().UTC()
-	invocation := InvocationMetadata{
-		Provider: result.Provider, Model: result.Model,
-		StartedAt: started, CompletedAt: completed, Usage: result.Usage,
+	proposalBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Proposal)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("serialize implementation proposal: %w", err)
+	}
+	proposalArtifact, err := s.putArtifact(ctx, proposalBytes)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("store implementation proposal: %w", err)
 	}
 	if _, err := contracts.MapImplementationProposal(result.Proposal, mappedRequest); err != nil {
 		if _, ok := contracts.ValidationCode(err); ok {
-			return Outcome{
-				Rejection:  proposalRejection(request, err, completed),
-				Invocation: invocation,
-			}, nil
+			rejection := proposalRejection(request, err, completed)
+			record, completeErr := handle.Complete(ctx, InvocationCompletion{
+				ProposalArtifact: proposalArtifact,
+				Provider:         result.Provider, Model: result.Model,
+				CompletedAt: completed, Usage: result.Usage,
+				Status: StatusRejected, Rejection: rejection,
+			})
+			if completeErr != nil {
+				return Outcome{}, fmt.Errorf(
+					"record implementation rejection: %w", completeErr,
+				)
+			}
+			return outcomeFromRecord(record, nil, false), nil
 		}
 		return Outcome{}, fmt.Errorf("validate implementation proposal: %w", err)
 	}
-	return Outcome{
-		Proposal:   proto.Clone(result.Proposal).(*reasoningv1.ImplementationProposal),
-		Invocation: invocation,
-	}, nil
+	record, err := handle.Complete(ctx, InvocationCompletion{
+		ProposalArtifact: proposalArtifact,
+		Provider:         result.Provider, Model: result.Model,
+		CompletedAt: completed, Usage: result.Usage, Status: StatusAccepted,
+	})
+	if err != nil {
+		return Outcome{}, fmt.Errorf("record implementation proposal: %w", err)
+	}
+	return outcomeFromRecord(record, result.Proposal, false), nil
+}
+
+func (s *Service) putArtifact(
+	ctx context.Context, body []byte,
+) (ArtifactReference, error) {
+	reference, err := s.artifacts.Put(ctx, append([]byte(nil), body...))
+	if err != nil {
+		return ArtifactReference{}, err
+	}
+	if err := verifyArtifact(reference, body); err != nil {
+		return ArtifactReference{}, err
+	}
+	return reference, nil
+}
+
+func (s *Service) replayOutcome(
+	ctx context.Context, record InvocationRecord,
+) (Outcome, error) {
+	requestBytes, err := s.artifacts.Get(ctx, record.RequestArtifact)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("load replay request artifact: %w", err)
+	}
+	if err := verifyArtifact(record.RequestArtifact, requestBytes); err != nil {
+		return Outcome{}, err
+	}
+	var request reasoningv1.ImplementationRequest
+	if err := proto.Unmarshal(requestBytes, &request); err != nil {
+		return Outcome{}, fmt.Errorf("decode replay request artifact: %w", err)
+	}
+	var proposal *reasoningv1.ImplementationProposal
+	if record.ProposalArtifact.URI != "" {
+		proposalBytes, err := s.artifacts.Get(ctx, record.ProposalArtifact)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("load replay proposal artifact: %w", err)
+		}
+		if err := verifyArtifact(record.ProposalArtifact, proposalBytes); err != nil {
+			return Outcome{}, err
+		}
+		proposal = &reasoningv1.ImplementationProposal{}
+		if err := proto.Unmarshal(proposalBytes, proposal); err != nil {
+			return Outcome{}, fmt.Errorf("decode replay proposal artifact: %w", err)
+		}
+	}
+	if record.Status == StatusAccepted {
+		mapped, err := contracts.MapImplementationRequest(&request)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("validate replay request: %w", err)
+		}
+		if _, err := contracts.MapImplementationProposal(proposal, mapped); err != nil {
+			return Outcome{}, fmt.Errorf("validate replay proposal: %w", err)
+		}
+	}
+	return outcomeFromRecord(record, proposal, true), nil
+}
+
+func outcomeFromRecord(
+	record InvocationRecord,
+	proposal *reasoningv1.ImplementationProposal,
+	replay bool,
+) Outcome {
+	outcome := Outcome{
+		RequestArtifact:  record.RequestArtifact,
+		ProposalArtifact: record.ProposalArtifact,
+		Rejection:        record.Rejection,
+		Invocation: InvocationMetadata{
+			Provider: record.Provider, Model: record.Model,
+			StartedAt: record.StartedAt, CompletedAt: record.CompletedAt,
+			Usage: record.Usage,
+		},
+		Replay: replay,
+	}
+	if record.Status == StatusAccepted && proposal != nil {
+		outcome.Proposal = proto.Clone(proposal).(*reasoningv1.ImplementationProposal)
+	}
+	if outcome.Rejection != nil {
+		outcome.Rejection = proto.Clone(outcome.Rejection).(*reasoningv1.ProposalRejection)
+	}
+	return outcome
+}
+
+func verifyArtifact(reference ArtifactReference, body []byte) error {
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	if reference.SHA256 != digest ||
+		reference.URI != "artifact://sha256/"+digest {
+		return ErrArtifactIntegrity
+	}
+	return nil
 }
 
 func proposalRejection(
