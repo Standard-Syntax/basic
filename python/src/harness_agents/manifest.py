@@ -12,6 +12,7 @@ from typing import Any, ClassVar
 
 import rfc8785
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 
 SCHEMA_ID = "urn:agent-harness:schema:agent-manifest:v1"
 SCHEMA_VERSION = "1"
@@ -199,10 +200,14 @@ class AgentDefinition:
         if schema is not None:
             schemas.append(schema)
         for validation_schema in schemas:
-            errors = sorted(
-                Draft202012Validator(validation_schema).iter_errors(value),
-                key=lambda e: e.json_path,
-            )
+            try:
+                Draft202012Validator.check_schema(validation_schema)
+                errors = sorted(
+                    Draft202012Validator(validation_schema).iter_errors(value),
+                    key=lambda e: e.json_path,
+                )
+            except SchemaError as error:
+                raise ManifestError(f"invalid manifest schema: {error.message}") from error
             if errors:
                 first = errors[0]
                 raise ManifestError(f"{first.json_path}: {first.message}")
@@ -228,6 +233,9 @@ class AgentDefinition:
                 raise ManifestError(f"cannot load packaged manifest schema: {error}") from error
             if not isinstance(loaded, dict):
                 raise ManifestError("packaged manifest schema must be a JSON object")
-            Draft202012Validator.check_schema(loaded)
+            try:
+                Draft202012Validator.check_schema(loaded)
+            except SchemaError as error:
+                raise ManifestError(f"invalid packaged manifest schema: {error.message}") from error
             cls._schema = loaded
         return cls._schema
