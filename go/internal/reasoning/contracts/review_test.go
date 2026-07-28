@@ -53,12 +53,55 @@ func TestReviewFixturesMapAndRoundTripInGo(t *testing.T) {
 	if mapped.Recommendation != ReviewAdvisoryAccept {
 		t.Fatalf("recommendation = %q", mapped.Recommendation)
 	}
+	if len(request.ActualDiff) != 1 || len(request.IndependentEvidence) != 1 ||
+		len(request.AcceptanceCoverage) != 1 || len(request.Policy.BlockingSeverities) != 2 {
+		t.Fatal("required review input data was discarded")
+	}
+	if len(mapped.ResidualRisks) != 1 {
+		t.Fatal("residual risk data was discarded")
+	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(encoded) != string(reviewFixture(t, "proposal.bin")) {
 		t.Fatal("Go deterministic serialization differs from Python fixture")
+	}
+}
+
+func TestReviewRejectsScopeReportThatDoesNotMatchActualDiff(t *testing.T) {
+	var request reasoningv1.ReviewRequest
+	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.ScopeReport.AuthorizedChangedPaths = nil
+	if _, err := MapReviewRequest(&request); err == nil {
+		t.Fatal("unsubstantiated scope report accepted")
+	}
+}
+
+func TestReviewCoverageRequiresPassingEvidence(t *testing.T) {
+	var request reasoningv1.ReviewRequest
+	if err := proto.Unmarshal(reviewFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.IndependentEvidence[0].ExitCode = 1
+	if _, err := MapReviewRequest(&request); err == nil {
+		t.Fatal("failing evidence satisfied acceptance coverage")
+	}
+}
+
+func TestReviewFindingReferencesAndBlockingPolicyAreEnforced(t *testing.T) {
+	request, proposal := validReview(t)
+	proposal.Findings[0].EvidenceReferences = []string{"EVIDENCE-999"}
+	if _, err := MapReviewProposal(proposal, request); err == nil {
+		t.Fatal("unknown finding evidence accepted")
+	}
+
+	request, proposal = validReview(t)
+	proposal.Findings[0].Severity = reasoningv1.FindingSeverity_FINDING_SEVERITY_HIGH
+	if _, err := MapReviewProposal(proposal, request); err == nil {
+		t.Fatal("advisory accept with blocking finding accepted")
 	}
 }
 
