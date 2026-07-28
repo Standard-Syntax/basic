@@ -25,6 +25,7 @@ type CommandResult struct {
 	State       RunState `json:"state"`
 	Revision    uint64   `json:"revision"`
 	EventIDs    []string `json:"event_ids"`
+	TaskIDs     []string `json:"task_ids,omitempty"`
 	Replay      bool     `json:"replay"`
 }
 
@@ -80,14 +81,14 @@ func executeRunTransaction(
 	if err != nil {
 		return CommandResult{}, err
 	}
-	next, events, err := applyRunCommand(current, command)
+	decision, err := decideRunCommand(current, command)
 	if err != nil {
 		return CommandResult{}, err
 	}
-	if err := persistRunTransition(ctx, tx, command, digest, current, next, events); err != nil {
+	if err := persistRunTransition(ctx, tx, command, digest, decision); err != nil {
 		return CommandResult{}, err
 	}
-	return recordRunCommandResult(ctx, tx, command, next, events)
+	return recordRunCommandResult(ctx, tx, command, decision)
 }
 
 func loadRunForCommand(ctx context.Context, tx pgx.Tx, command RunCommand) (Run, error) {
@@ -105,11 +106,32 @@ func loadRunForCommand(ctx context.Context, tx pgx.Tx, command RunCommand) (Run,
 	return Run{}, nil
 }
 
-func applyRunCommand(current Run, command RunCommand) (Run, []Event, error) {
+type runPersistenceDecision struct {
+	current      Run
+	next         Run
+	tasks        []Task
+	dependencies []TaskDependency
+	events       []Event
+}
+
+func decideRunCommand(current Run, command RunCommand) (runPersistenceDecision, error) {
 	if create, ok := command.(CreateRun); ok {
-		return NewRun(create)
+		next, events, err := NewRun(create)
+		return runPersistenceDecision{
+			current: current, next: next, events: events,
+		}, err
 	}
-	return current.Apply(command)
+	if approval, ok := command.(ApproveTaskGraph); ok {
+		decision, err := current.ApproveTaskGraph(approval)
+		return runPersistenceDecision{
+			current: current, next: decision.Run, tasks: decision.Tasks,
+			dependencies: decision.Dependencies, events: decision.Events,
+		}, err
+	}
+	next, events, err := current.Apply(command)
+	return runPersistenceDecision{
+		current: current, next: next, events: events,
+	}, err
 }
 
 func persistRunTransition(
@@ -117,8 +139,7 @@ func persistRunTransition(
 	tx pgx.Tx,
 	command RunCommand,
 	digest string,
-	current, next Run,
-	events []Event,
+	decision runPersistenceDecision,
 ) error {
 	if err := reserveCommand(ctx, tx, command, digest); err != nil {
 		if isUniqueViolation(err) {
@@ -126,23 +147,36 @@ func persistRunTransition(
 		}
 		return err
 	}
-	for _, event := range events {
+	for _, event := range decision.events {
 		if err := insertEvent(ctx, tx, event, command.Envelope().CommandID); err != nil {
 			return err
 		}
 	}
-	if _, ok := command.(CreateRun); ok {
-		return insertRun(ctx, tx, next)
+	for _, task := range decision.tasks {
+		if err := insertTask(ctx, tx, task); err != nil {
+			return err
+		}
 	}
-	return updateRun(ctx, tx, next, current.Revision)
+	for _, dependency := range decision.dependencies {
+		if _, err := tx.Exec(ctx, `INSERT INTO workflow_task_dependencies
+			(run_id, task_id, depends_on_task_id) VALUES ($1,$2,$3)`,
+			decision.next.ID, dependency.TaskID, dependency.DependsOnID); err != nil {
+			return fmt.Errorf("insert task dependency: %w", err)
+		}
+	}
+	if _, ok := command.(CreateRun); ok {
+		return insertRun(ctx, tx, decision.next)
+	}
+	return updateRun(ctx, tx, decision.next, decision.current.Revision)
 }
 
 func recordRunCommandResult(
-	ctx context.Context, tx pgx.Tx, command RunCommand, next Run, events []Event,
+	ctx context.Context, tx pgx.Tx, command RunCommand, decision runPersistenceDecision,
 ) (CommandResult, error) {
 	result := CommandResult{
-		AggregateID: next.ID, State: next.State, Revision: next.Revision,
-		EventIDs: eventIDs(events),
+		AggregateID: decision.next.ID, State: decision.next.State,
+		Revision: decision.next.Revision, EventIDs: eventIDs(decision.events),
+		TaskIDs: taskIDs(decision.tasks),
 	}
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -199,12 +233,13 @@ func reserveCommand(ctx context.Context, tx pgx.Tx, command RunCommand, digest s
 
 func loadRun(ctx context.Context, tx pgx.Tx, id string) (Run, bool, error) {
 	var run Run
-	var specificationURI, specificationDigest *string
+	var specificationURI, specificationDigest, taskGraphURI, taskGraphDigest *string
 	err := tx.QueryRow(ctx, `SELECT run_id, state, revision, specification_uri,
-		specification_digest, created_at, updated_at
+		specification_digest, task_graph_uri, task_graph_digest, created_at, updated_at
 		FROM workflow_runs WHERE run_id = $1 FOR UPDATE`, id).Scan(
 		&run.ID, &run.State, &run.Revision, &specificationURI,
-		&specificationDigest, &run.CreatedAt, &run.UpdatedAt)
+		&specificationDigest, &taskGraphURI, &taskGraphDigest,
+		&run.CreatedAt, &run.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, false, ErrNotFound
 	}
@@ -217,6 +252,12 @@ func loadRun(ctx context.Context, tx pgx.Tx, id string) (Run, bool, error) {
 		}
 		run.Specification = &ArtifactRef{URI: *specificationURI, Digest: *specificationDigest}
 	}
+	if taskGraphURI != nil || taskGraphDigest != nil {
+		if taskGraphURI == nil || taskGraphDigest == nil {
+			return Run{}, false, fmt.Errorf("%w: partial task graph binding", ErrInvalid)
+		}
+		run.TaskGraph = &ArtifactRef{URI: *taskGraphURI, Digest: *taskGraphDigest}
+	}
 	if err := run.Validate(); err != nil {
 		return Run{}, false, err
 	}
@@ -224,14 +265,19 @@ func loadRun(ctx context.Context, tx pgx.Tx, id string) (Run, bool, error) {
 }
 
 func insertRun(ctx context.Context, tx pgx.Tx, run Run) error {
-	var uri, digest *string
+	var uri, digest, graphURI, graphDigest *string
 	if run.Specification != nil {
 		uri, digest = &run.Specification.URI, &run.Specification.Digest
 	}
+	if run.TaskGraph != nil {
+		graphURI, graphDigest = &run.TaskGraph.URI, &run.TaskGraph.Digest
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO workflow_runs
-		(run_id, state, revision, specification_uri, specification_digest, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		run.ID, run.State, run.Revision, uri, digest, run.CreatedAt, run.UpdatedAt)
+		(run_id, state, revision, specification_uri, specification_digest,
+		 task_graph_uri, task_graph_digest, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		run.ID, run.State, run.Revision, uri, digest, graphURI, graphDigest,
+		run.CreatedAt, run.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert run: %w", err)
 	}
@@ -239,19 +285,36 @@ func insertRun(ctx context.Context, tx pgx.Tx, run Run) error {
 }
 
 func updateRun(ctx context.Context, tx pgx.Tx, run Run, expected uint64) error {
-	var uri, digest *string
+	var uri, digest, graphURI, graphDigest *string
 	if run.Specification != nil {
 		uri, digest = &run.Specification.URI, &run.Specification.Digest
 	}
+	if run.TaskGraph != nil {
+		graphURI, graphDigest = &run.TaskGraph.URI, &run.TaskGraph.Digest
+	}
 	tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET state=$2, revision=$3,
-		specification_uri=$4, specification_digest=$5, updated_at=$6
-		WHERE run_id=$1 AND revision=$7`,
-		run.ID, run.State, run.Revision, uri, digest, run.UpdatedAt, expected)
+		specification_uri=$4, specification_digest=$5, task_graph_uri=$6,
+		task_graph_digest=$7, updated_at=$8
+		WHERE run_id=$1 AND revision=$9`,
+		run.ID, run.State, run.Revision, uri, digest, graphURI, graphDigest,
+		run.UpdatedAt, expected)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrRevisionConflict
+	}
+	return nil
+}
+
+func insertTask(ctx context.Context, tx pgx.Tx, task Task) error {
+	_, err := tx.Exec(ctx, `INSERT INTO workflow_tasks
+		(task_id, run_id, state, revision, max_attempts, current_attempt, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		task.ID, task.RunID, task.State, task.Revision, task.MaxAttempts,
+		task.CurrentAttempt, task.CreatedAt, task.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("insert task: %w", err)
 	}
 	return nil
 }
@@ -278,6 +341,14 @@ func eventIDs(events []Event) []string {
 	ids := make([]string, len(events))
 	for index := range events {
 		ids[index] = events[index].ID
+	}
+	return ids
+}
+
+func taskIDs(tasks []Task) []string {
+	ids := make([]string, len(tasks))
+	for index := range tasks {
+		ids[index] = tasks[index].ID
 	}
 	return ids
 }

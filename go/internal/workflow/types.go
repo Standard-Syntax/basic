@@ -50,6 +50,40 @@ func (s RunState) Terminal() bool {
 		s == RunStateFailed || s == RunStateCancelled
 }
 
+type TaskState string
+
+const (
+	TaskStatePending          TaskState = "PENDING"
+	TaskStateReady            TaskState = "READY"
+	TaskStateLeased           TaskState = "LEASED"
+	TaskStateReasoning        TaskState = "REASONING"
+	TaskStateProposalRejected TaskState = "PROPOSAL_REJECTED"
+	TaskStateExecuting        TaskState = "EXECUTING"
+	TaskStateVerifying        TaskState = "VERIFYING"
+	TaskStateReviewing        TaskState = "REVIEWING"
+	TaskStateReworkRequired   TaskState = "REWORK_REQUIRED"
+	TaskStateAwaitingApproval TaskState = "AWAITING_APPROVAL"
+	TaskStateAccepted         TaskState = "ACCEPTED"
+	TaskStateFailed           TaskState = "FAILED"
+	TaskStateCancelled        TaskState = "CANCELLED"
+)
+
+func (s TaskState) Validate() error {
+	switch s {
+	case TaskStatePending, TaskStateReady, TaskStateLeased, TaskStateReasoning,
+		TaskStateProposalRejected, TaskStateExecuting, TaskStateVerifying,
+		TaskStateReviewing, TaskStateReworkRequired, TaskStateAwaitingApproval,
+		TaskStateAccepted, TaskStateFailed, TaskStateCancelled:
+		return nil
+	default:
+		return fmt.Errorf("%w: task state %q", ErrInvalid, s)
+	}
+}
+
+func (s TaskState) Terminal() bool {
+	return s == TaskStateAccepted || s == TaskStateFailed || s == TaskStateCancelled
+}
+
 type ActorKind string
 
 const (

@@ -10,6 +10,7 @@ type Run struct {
 	State         RunState     `json:"state"`
 	Revision      uint64       `json:"revision"`
 	Specification *ArtifactRef `json:"specification,omitempty"`
+	TaskGraph     *ArtifactRef `json:"task_graph,omitempty"`
 	CreatedAt     time.Time    `json:"created_at"`
 	UpdatedAt     time.Time    `json:"updated_at"`
 }
@@ -25,7 +26,12 @@ func (r Run) Validate() error {
 		return fmt.Errorf("%w: run snapshot", ErrInvalid)
 	}
 	if r.Specification != nil {
-		return r.Specification.Validate()
+		if err := r.Specification.Validate(); err != nil {
+			return err
+		}
+	}
+	if r.TaskGraph != nil {
+		return r.TaskGraph.Validate()
 	}
 	return nil
 }
@@ -76,6 +82,39 @@ func (ApproveSpecification) runCommand()                 {}
 func (c ApproveSpecification) Envelope() CommandEnvelope { return c.Meta }
 func (c ApproveSpecification) RunID() string             { return c.ID }
 
+type ProposeTaskGraph struct {
+	Meta      CommandEnvelope `json:"meta"`
+	ID        string          `json:"run_id"`
+	TaskGraph ArtifactRef     `json:"task_graph"`
+}
+
+func (ProposeTaskGraph) runCommand()                 {}
+func (c ProposeTaskGraph) Envelope() CommandEnvelope { return c.Meta }
+func (c ProposeTaskGraph) RunID() string             { return c.ID }
+
+type RejectTaskGraph struct {
+	Meta      CommandEnvelope `json:"meta"`
+	ID        string          `json:"run_id"`
+	TaskGraph ArtifactRef     `json:"task_graph"`
+	Reason    string          `json:"reason"`
+}
+
+func (RejectTaskGraph) runCommand()                 {}
+func (c RejectTaskGraph) Envelope() CommandEnvelope { return c.Meta }
+func (c RejectTaskGraph) RunID() string             { return c.ID }
+
+type ApproveTaskGraph struct {
+	Meta         CommandEnvelope  `json:"meta"`
+	ID           string           `json:"run_id"`
+	TaskGraph    ArtifactRef      `json:"task_graph"`
+	Tasks        []TaskDefinition `json:"tasks"`
+	Dependencies []TaskDependency `json:"dependencies"`
+}
+
+func (ApproveTaskGraph) runCommand()                 {}
+func (c ApproveTaskGraph) Envelope() CommandEnvelope { return c.Meta }
+func (c ApproveTaskGraph) RunID() string             { return c.ID }
+
 type Event struct {
 	ID            string         `json:"id"`
 	AggregateType string         `json:"aggregate_type"`
@@ -120,6 +159,12 @@ func (r Run) Apply(command RunCommand) (Run, []Event, error) {
 		transition, err = r.rejectSpecification(command)
 	case ApproveSpecification:
 		transition, err = r.approveSpecification(command)
+	case ProposeTaskGraph:
+		transition, err = r.proposeTaskGraph(command)
+	case RejectTaskGraph:
+		transition, err = r.rejectTaskGraph(command)
+	case ApproveTaskGraph:
+		return Run{}, nil, fmt.Errorf("%w: task graph approval requires planning apply", ErrInvalid)
 	default:
 		return Run{}, nil, fmt.Errorf("%w: unsupported run command", ErrInvalid)
 	}
@@ -205,6 +250,48 @@ func (r Run) approveSpecification(command ApproveSpecification) (runTransition, 
 	}, nil
 }
 
+func (r Run) proposeTaskGraph(command ProposeTaskGraph) (runTransition, error) {
+	if r.State != RunStateTaskPlanning {
+		return runTransition{}, ErrInvalidTransition
+	}
+	if command.Meta.Actor.Kind != ActorWorkflowService {
+		return runTransition{}, ErrUnauthorized
+	}
+	if err := command.TaskGraph.Validate(); err != nil {
+		return runTransition{}, err
+	}
+	next := r
+	taskGraph := command.TaskGraph
+	next.TaskGraph = &taskGraph
+	next.State = RunStateTaskPlanReview
+	return runTransition{
+		next: next, eventType: "TASK_GRAPH_PROPOSED",
+		payload: artifactPayload("task_graph", taskGraph),
+	}, nil
+}
+
+func (r Run) rejectTaskGraph(command RejectTaskGraph) (runTransition, error) {
+	if r.State != RunStateTaskPlanReview {
+		return runTransition{}, ErrInvalidTransition
+	}
+	if command.Meta.Actor.Kind != ActorHuman {
+		return runTransition{}, ErrUnauthorized
+	}
+	if err := validateBoundArtifact(r.TaskGraph, command.TaskGraph, "task graph"); err != nil {
+		return runTransition{}, err
+	}
+	if err := validateReason(command.Reason); err != nil {
+		return runTransition{}, err
+	}
+	next := r
+	next.State = RunStateTaskPlanning
+	payload := artifactPayload("task_graph", command.TaskGraph)
+	payload["reason"] = command.Reason
+	return runTransition{
+		next: next, eventType: "TASK_GRAPH_REJECTED", payload: payload,
+	}, nil
+}
+
 func (r Run) validateSpecificationReview(actor Actor, specification ArtifactRef) error {
 	if r.State != RunStateSpecificationReview {
 		return ErrInvalidTransition
@@ -227,6 +314,54 @@ func finishRunTransition(transition runTransition, meta CommandEnvelope) (Run, [
 	return transition.next, []Event{newRunEvent(
 		transition.next, meta, transition.eventType, transition.payload,
 	)}, nil
+}
+
+type PlanningDecision struct {
+	Run          Run
+	Tasks        []Task
+	Dependencies []TaskDependency
+	Events       []Event
+}
+
+func (r Run) ApproveTaskGraph(command ApproveTaskGraph) (PlanningDecision, error) {
+	if err := r.Validate(); err != nil {
+		return PlanningDecision{}, err
+	}
+	if err := validateRunCommand(command); err != nil {
+		return PlanningDecision{}, err
+	}
+	if command.ID != r.ID {
+		return PlanningDecision{}, fmt.Errorf("%w: command run mismatch", ErrInvalid)
+	}
+	if command.Meta.ExpectedRevision != r.Revision {
+		return PlanningDecision{}, ErrRevisionConflict
+	}
+	if r.State != RunStateTaskPlanReview {
+		return PlanningDecision{}, ErrInvalidTransition
+	}
+	if command.Meta.Actor.Kind != ActorHuman {
+		return PlanningDecision{}, ErrUnauthorized
+	}
+	if err := validateBoundArtifact(r.TaskGraph, command.TaskGraph, "task graph"); err != nil {
+		return PlanningDecision{}, err
+	}
+	tasks, dependencies, taskEvents, err := NewPlannedTasks(
+		r.ID, command.Tasks, command.Dependencies, command.Meta,
+	)
+	if err != nil {
+		return PlanningDecision{}, err
+	}
+	next := r
+	next.State = RunStateReady
+	next.Revision++
+	next.UpdatedAt = command.Meta.Timestamp.UTC()
+	runEvent := newRunEvent(
+		next, command.Meta, "TASK_GRAPH_APPROVED", artifactPayload("task_graph", command.TaskGraph),
+	)
+	events := append([]Event{runEvent}, taskEvents...)
+	return PlanningDecision{
+		Run: next, Tasks: tasks, Dependencies: dependencies, Events: events,
+	}, nil
 }
 
 func validateRunCommand(command RunCommand) error {
@@ -255,4 +390,14 @@ func artifactPayload(prefix string, artifact ArtifactRef) map[string]any {
 	return map[string]any{
 		prefix + "_uri": artifact.URI, prefix + "_digest": artifact.Digest,
 	}
+}
+
+func validateBoundArtifact(bound *ArtifactRef, supplied ArtifactRef, label string) error {
+	if err := supplied.Validate(); err != nil {
+		return err
+	}
+	if bound == nil || !bound.Equal(supplied) {
+		return fmt.Errorf("%w: %s binding", ErrInvalid, label)
+	}
+	return nil
 }
