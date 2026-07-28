@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,37 @@ func fixturePath(t *testing.T, name string) string {
 		t.Fatal("locate test source")
 	}
 	return filepath.Join(filepath.Dir(source), "..", "..", "..", "tests", "contracts", "v1", "manifest", name)
+}
+
+func TestReadRejectsMissingRequiredFields(t *testing.T) {
+	data, err := os.ReadFile(fixturePath(t, "implementation.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	delete(value, "metadata")
+	missingTopLevel, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := Read(missingTopLevel); err == nil {
+		t.Fatal("missing top-level field accepted")
+	}
+
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatal(err)
+	}
+	delete(value["tools"].(map[string]any), "direct_file_write")
+	missingNested, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := Read(missingNested); err == nil {
+		t.Fatal("missing nested field accepted")
+	}
 }
 
 func TestGoldenManifestAndDigest(t *testing.T) {

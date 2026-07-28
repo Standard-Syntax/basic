@@ -94,6 +94,9 @@ type Metadata struct {
 // Read validates a closed manifest, canonicalizes it with RFC 8785, and returns
 // its lowercase SHA-256 digest.
 func Read(data []byte) (Manifest, []byte, string, error) {
+	if err := validateRequiredFields(data); err != nil {
+		return Manifest{}, nil, "", err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var value Manifest
@@ -112,6 +115,48 @@ func Read(data []byte) (Manifest, []byte, string, error) {
 	}
 	sum := sha256.Sum256(canonical)
 	return value, canonical, hex.EncodeToString(sum[:]), nil
+}
+
+func validateRequiredFields(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("decode manifest: %w", err)
+	}
+	required := map[string][]string{
+		"":         {"schema_version", "agent", "stage", "prompt", "model", "context", "tools", "output", "metadata"},
+		"agent":    {"name", "version"},
+		"prompt":   {"artifact_uri", "sha256"},
+		"model":    {"capability_class", "temperature", "maximum_output_tokens"},
+		"context":  {"include_specification", "include_task", "repository_selection", "maximum_context_tokens"},
+		"tools":    {"allowed_requests", "arbitrary_shell", "arbitrary_network", "direct_file_write"},
+		"output":   {"schema"},
+		"metadata": {"description", "labels"},
+	}
+	if err := requireKeys("manifest", root, required[""]); err != nil {
+		return err
+	}
+	for field, keys := range required {
+		if field == "" {
+			continue
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(root[field], &object); err != nil {
+			return fmt.Errorf("%s must be an object: %w", field, err)
+		}
+		if err := requireKeys(field, object, keys); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireKeys(name string, object map[string]json.RawMessage, keys []string) error {
+	for _, key := range keys {
+		if _, exists := object[key]; !exists {
+			return fmt.Errorf("%s missing required field %s", name, key)
+		}
+	}
+	return nil
 }
 
 func requireEOF(decoder *json.Decoder) error {
