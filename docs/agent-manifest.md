@@ -28,6 +28,20 @@ Definitions and prompts for all four stages live in `python/agents` and
 `python/prompts`. Their generated fixtures live in
 `tests/contracts/v1/manifest` and are covered by `make generate-check`.
 
+## Registry boundary
+
+`registry.Register` accepts compiled bytes, repeats the Go reader's closed
+validation and canonicalization, and persists only exact canonical JSON.
+`(agent name, semantic version)` is an immutable identity. Re-registering the
+same canonical content returns the original timestamp with `Created=false`;
+different content for that identity returns `ErrVersionConflict`.
+
+`registry.Get` and `registry.GetByDigest` return the same validated record,
+including a defensive copy of its canonical bytes. Lookup rejects malformed
+keys before querying and fails with `ErrCorruptData` if persisted canonical
+bytes, digest, or embedded identity disagree. The application API has no
+network transport or runtime provider behavior.
+
 No manifest field grants shell, network, file-write, credential, workflow,
 approval, publication, registration, or task-specific scope authority. A
 manifest is immutable configuration evidence, not permission to perform work.

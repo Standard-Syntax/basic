@@ -1,12 +1,18 @@
 # Security
 
-## Phase 0–3 boundaries
+## Phase 0–4 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
   workflow-transition, approval, publication, or task-scope capability.
 - Manifests are schema-validated, canonicalized, immutable, and SHA-256
   addressed.
+- Registry versions and manifest digests are unique. Exact replay is
+  idempotent, conflicting replacement fails closed, and PostgreSQL triggers
+  reject both update and deletion.
+- Registry reads revalidate stored manifest bytes and verify their canonical
+  form, digest, and embedded identity against the indexed columns. Corrupt
+  persisted data is never returned as a valid record.
 - The installed compiler always applies its packaged v1 schema; an override can
   only add restrictions. Python and Go enforce the same closed stage/output
   mapping.
@@ -18,8 +24,8 @@
   interface.
 - Generated transports carry data but do not authorize it.
 - Review recommendations are advisory and cannot encode approval.
-- No production secrets, runtime side effects, automatic merge, or deployment
-  exist in this phase.
+- The registry has no HTTP/gRPC transport, authentication surface, provider,
+  runtime agent, production secrets, automatic merge, or deployment.
 - Humans alone approve or reject specifications, task graphs, reviewed tasks,
   and runs, and humans alone cancel runs.
 - Service actors record only stage-specific operational facts. Python, model,

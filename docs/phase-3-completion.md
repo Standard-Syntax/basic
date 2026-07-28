@@ -74,10 +74,6 @@ canonical bytes and lowercase digest.
 
 ## Unresolved issues and Phase 4 recommendation
 
-No unresolved Phase 3 implementation issue remains. Phase 4 should introduce a
-provider adapter and runtime reasoning boundary only after defining request
-timeouts, retry/idempotency behavior, response-size limits, secret handling,
-and immutable binding of provider responses to the exact request and agent
-manifest digest. It must preserve proposal-only authority and keep all
-authorization, mutation, verification, approval, and promotion decisions in
-the Go kernel.
+No unresolved Phase 3 implementation issue remains. The authoritative roadmap
+assigns the immutable agent registry to Phase 4, the fake reasoning gateway to
+Phase 5, and the first real provider to Phase 10.
