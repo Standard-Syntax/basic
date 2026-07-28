@@ -23,11 +23,13 @@ check because their runtime-defined attributes do not ship static type stubs.
 
 `make integration-test` starts `postgres:18.1-alpine` on
 `127.0.0.1:55433`, waits for health, applies embedded migrations, runs the
-tagged transactional suite, and removes the disposable resources even on test
-failure. Success ends with:
+tagged workflow and registry suites against one shared database, and removes
+the disposable resources even on test failure. The packages may migrate in
+either order. Success includes:
 
 ```text
 ok github.com/Standard-Syntax/basic/go/internal/workflow
+ok github.com/Standard-Syntax/basic/go/internal/registry
 ```
 
 If port 55433 is occupied, stop the conflicting process or change both the

@@ -73,52 +73,48 @@ func (r *Registry) Register(ctx context.Context, rawManifest []byte) (RegisterRe
 		return RegisterResult{}, fmt.Errorf("lock agent version: %w", err)
 	}
 
-	var (
-		storedDigest    string
-		storedCanonical []byte
-		registeredAt    time.Time
-	)
-	err = tx.QueryRow(ctx, `SELECT manifest_digest,canonical_manifest,registered_at
+	var record Record
+	var storedName, storedVersion string
+	err = tx.QueryRow(ctx, `SELECT
+			agent_name,agent_version,manifest_digest,canonical_manifest,registered_at
 		FROM agent_registrations WHERE agent_name=$1 AND agent_version=$2`,
 		value.Agent.Name, value.Agent.Version,
-	).Scan(&storedDigest, &storedCanonical, &registeredAt)
+	).Scan(
+		&storedName, &storedVersion, &record.Digest,
+		&record.CanonicalJSON, &record.RegisteredAt,
+	)
 	if err == nil {
-		if storedDigest != digest {
+		if record.Digest != digest {
 			return RegisterResult{}, ErrVersionConflict
+		}
+		record, err = validateRecord(record, storedName, storedVersion)
+		if err != nil {
+			return RegisterResult{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return RegisterResult{}, fmt.Errorf("commit registration replay: %w", err)
 		}
-		return RegisterResult{
-			Record: Record{
-				Manifest: value, CanonicalJSON: append([]byte(nil), storedCanonical...),
-				Digest: storedDigest, RegisteredAt: registeredAt,
-			},
-			Created: false,
-		}, nil
+		return RegisterResult{Record: record, Created: false}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return RegisterResult{}, fmt.Errorf("read agent version: %w", err)
 	}
 
+	record = Record{
+		Manifest: value, CanonicalJSON: append([]byte(nil), canonical...), Digest: digest,
+	}
 	err = tx.QueryRow(ctx, `INSERT INTO agent_registrations
 			(agent_name,agent_version,manifest_digest,canonical_manifest)
 		VALUES($1,$2,$3,$4) RETURNING registered_at`,
 		value.Agent.Name, value.Agent.Version, digest, canonical,
-	).Scan(&registeredAt)
+	).Scan(&record.RegisteredAt)
 	if err != nil {
 		return RegisterResult{}, fmt.Errorf("insert registration: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return RegisterResult{}, fmt.Errorf("commit registration: %w", err)
 	}
-	return RegisterResult{
-		Record: Record{
-			Manifest: value, CanonicalJSON: append([]byte(nil), canonical...),
-			Digest: digest, RegisteredAt: registeredAt,
-		},
-		Created: true,
-	}, nil
+	return RegisterResult{Record: record, Created: true}, nil
 }
 
 func (r *Registry) Get(ctx context.Context, name, version string) (Record, error) {

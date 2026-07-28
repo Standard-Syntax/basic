@@ -156,3 +156,27 @@ pre-commit errors leave no command, event, or state change.
 2026-07-27
 ### Date
 2026-07-27
+
+## DEC-010: Agent versions are immutable canonical records
+
+### Decision
+Store each validated RFC 8785 manifest once under its exact agent name and
+semantic version, with a unique lowercase SHA-256 digest.
+### Options considered
+Mutable latest-version rows; application-only immutability; immutable
+database-enforced versions.
+### Pros
+Requests can bind to stable bytes, retries converge, and conflicting
+replacement fails closed.
+### Cons
+Corrections require a new semantic version and canonical manifests consume
+database storage.
+### Why this option
+Agent identity is authority-bearing evidence and must not change underneath a
+workflow request.
+### Consequences
+Registration is serialized per identity, exact replay is idempotent, update
+and deletion are rejected by trigger, and every lookup revalidates persisted
+bytes before returning.
+### Date
+2026-07-28
