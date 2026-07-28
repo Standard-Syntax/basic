@@ -19,12 +19,19 @@ type TaskPlanningRequest struct {
 	Envelope                    Envelope
 	ApprovedSpecificationID     string
 	ApprovedSpecificationDigest string
+	RepositoryMap               []RepositoryEntry
 	ReadablePaths               []string
 	WritablePaths               []string
 	ProhibitedPaths             []string
 	TaskCountLimit              uint32
 	ParallelismLimit            uint32
 	AcceptanceCriterionIDs      []string
+}
+
+type RepositoryEntry struct {
+	Path   string
+	Kind   string
+	SHA256 string
 }
 
 type PlannedTask struct {
@@ -64,6 +71,19 @@ func MapTaskPlanningRequest(value *reasoningv1.TaskPlanningRequest) (TaskPlannin
 		len(value.GetAcceptanceCriterionIds()) == 0 {
 		return TaskPlanningRequest{}, errors.New("incomplete task planning request")
 	}
+	if len(value.GetRepositoryMap()) == 0 {
+		return TaskPlanningRequest{}, errors.New("repository map is required")
+	}
+	repositoryMap := make([]RepositoryEntry, 0, len(value.GetRepositoryMap()))
+	for _, entry := range value.GetRepositoryMap() {
+		if !validRepoPath(entry.GetPath()) || entry.GetKind() == "" ||
+			!digestPattern.MatchString(entry.GetSha256()) {
+			return TaskPlanningRequest{}, errors.New("invalid repository map entry")
+		}
+		repositoryMap = append(repositoryMap, RepositoryEntry{
+			Path: entry.GetPath(), Kind: entry.GetKind(), SHA256: entry.GetSha256(),
+		})
+	}
 	if err := validatePathScopes(
 		value.GetReadablePaths(), value.GetWritablePaths(), value.GetProhibitedPaths(),
 	); err != nil {
@@ -76,6 +96,7 @@ func MapTaskPlanningRequest(value *reasoningv1.TaskPlanningRequest) (TaskPlannin
 		Envelope:                    envelope,
 		ApprovedSpecificationID:     value.GetApprovedSpecificationId(),
 		ApprovedSpecificationDigest: value.GetApprovedSpecificationDigest(),
+		RepositoryMap:               repositoryMap,
 		ReadablePaths:               value.GetReadablePaths(),
 		WritablePaths:               value.GetWritablePaths(),
 		ProhibitedPaths:             value.GetProhibitedPaths(),

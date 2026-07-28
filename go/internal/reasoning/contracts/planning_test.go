@@ -52,6 +52,9 @@ func TestPlanningFixturesMapAndRoundTripInGo(t *testing.T) {
 	if len(mapped.Tasks) != 2 {
 		t.Fatalf("tasks = %d", len(mapped.Tasks))
 	}
+	if len(request.RepositoryMap) != 2 {
+		t.Fatal("repository map was discarded")
+	}
 	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
 	if err != nil {
 		t.Fatal(err)
