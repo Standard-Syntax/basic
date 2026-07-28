@@ -166,6 +166,13 @@ def implementation_request() -> implementation_pb2.ImplementationRequest:
     value.request_id = "request-impl-001"
     value.task_id = "TASK-001"
     value.stage = common_pb2.REASONING_STAGE_IMPLEMENTATION
+    context_digest = hashlib.sha256(b"package reasoning\n").hexdigest()
+    value.input_artifacts.append(
+        common_pb2.ArtifactDigest(
+            artifact_uri=f"artifact://sha256/{context_digest}",
+            sha256=context_digest,
+        )
+    )
     return implementation_pb2.ImplementationRequest(
         envelope=value,
         approved_task_id="TASK-001",
@@ -181,7 +188,7 @@ def implementation_request() -> implementation_pb2.ImplementationRequest:
         repository_context=[
             implementation_pb2.RepositoryContextFile(
                 path="go/internal/reasoning/existing.go",
-                sha256=hashlib.sha256(b"package reasoning\n").hexdigest(),
+                sha256=context_digest,
                 content="package reasoning\n",
             )
         ],
@@ -189,6 +196,7 @@ def implementation_request() -> implementation_pb2.ImplementationRequest:
 
 
 def implementation_proposal() -> implementation_pb2.ImplementationProposal:
+    context_digest = hashlib.sha256(b"package reasoning\n").hexdigest()
     return implementation_pb2.ImplementationProposal(
         identity=common_pb2.ProposalIdentity(
             schema_version="1",
@@ -198,7 +206,7 @@ def implementation_proposal() -> implementation_pb2.ImplementationProposal:
             stage=common_pb2.REASONING_STAGE_IMPLEMENTATION,
             attempt=1,
             agent_manifest_digest="b" * 64,
-            input_artifact_digests=["a" * 64],
+            input_artifact_digests=["a" * 64, context_digest],
         ),
         approved_task_id="TASK-001",
         approved_task_digest="c" * 64,
@@ -218,7 +226,7 @@ def implementation_proposal() -> implementation_pb2.ImplementationProposal:
             implementation_pb2.FileChange(
                 path="go/internal/reasoning/existing.go",
                 operation=implementation_pb2.FILE_OPERATION_UPDATE,
-                expected_original_sha256=hashlib.sha256(b"package reasoning\n").hexdigest(),
+                expected_original_sha256=context_digest,
                 replacement_content="package reasoning\n\n// Updated.\n",
                 rationale="Update the bounded contract.",
                 acceptance_criterion_ids=["AC-002"],

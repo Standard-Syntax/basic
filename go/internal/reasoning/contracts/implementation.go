@@ -116,6 +116,18 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 		if hex.EncodeToString(sum[:]) != file.GetSha256() {
 			return ImplementationRequest{}, errors.New("repository context digest mismatch")
 		}
+		contextBound := false
+		for _, artifact := range envelope.InputArtifacts {
+			if artifact.SHA256 == file.GetSha256() {
+				contextBound = true
+				break
+			}
+		}
+		if !contextBound {
+			return ImplementationRequest{}, errors.New(
+				"repository context is not bound to an input artifact",
+			)
+		}
 		repositoryContext = append(repositoryContext, RepositoryContextFile{
 			Path: file.GetPath(), SHA256: file.GetSha256(), Content: file.GetContent(),
 		})

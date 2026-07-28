@@ -172,4 +172,11 @@ func TestImplementationRequestRejectsUntrustedRepositoryContext(t *testing.T) {
 	if _, err := MapImplementationRequest(&request); err == nil {
 		t.Fatal("prohibited repository context accepted")
 	}
+	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.Envelope.InputArtifacts = request.Envelope.InputArtifacts[:1]
+	if _, err := MapImplementationRequest(&request); err == nil {
+		t.Fatal("repository context without envelope artifact binding accepted")
+	}
 }
