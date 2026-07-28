@@ -125,3 +125,26 @@ func mapStage(value reasoningv1.ReasoningStage) (Stage, error) {
 		return "", errors.New("unknown reasoning stage")
 	}
 }
+
+func validateProposalIdentity(
+	value *reasoningv1.ProposalIdentity, request Envelope, expected Stage,
+) error {
+	stage, err := mapStage(value.GetStage())
+	if err != nil || stage != expected || value.GetSchemaVersion() != request.SchemaVersion ||
+		value.GetRequestId() != request.RequestID || value.GetRunId() != request.RunID ||
+		value.GetAttempt() != request.Attempt ||
+		value.GetAgentManifestDigest() != request.AgentManifestDigest {
+		return errors.New("proposal request identity mismatch")
+	}
+	if (value.TaskId == nil) != (request.TaskID == nil) ||
+		(value.TaskId != nil && *value.TaskId != *request.TaskID) ||
+		len(value.GetInputArtifactDigests()) != len(request.InputArtifacts) {
+		return errors.New("proposal request identity mismatch")
+	}
+	for index, artifact := range request.InputArtifacts {
+		if value.GetInputArtifactDigests()[index] != artifact.SHA256 {
+			return errors.New("proposal request identity mismatch")
+		}
+	}
+	return nil
+}

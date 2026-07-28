@@ -42,7 +42,7 @@ func TestPythonSpecificationFixturesMapInGo(t *testing.T) {
 	if err := proto.Unmarshal(contractFixture(t, "proposal.bin"), &proposal); err != nil {
 		t.Fatal(err)
 	}
-	mappedProposal, err := MapSpecificationProposal(&proposal)
+	mappedProposal, err := MapSpecificationProposal(&proposal, mappedRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +55,25 @@ func TestPythonSpecificationFixturesMapInGo(t *testing.T) {
 	}
 	if string(encoded) != string(contractFixture(t, "proposal.bin")) {
 		t.Fatal("Go deterministic serialization differs from Python fixture")
+	}
+}
+
+func TestSpecificationProposalRejectsRequestReplay(t *testing.T) {
+	var requestPB reasoningv1.SpecificationRequest
+	if err := proto.Unmarshal(contractFixture(t, "request.bin"), &requestPB); err != nil {
+		t.Fatal(err)
+	}
+	request, err := MapSpecificationRequest(&requestPB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposal reasoningv1.SpecificationProposal
+	if err := proto.Unmarshal(contractFixture(t, "proposal.bin"), &proposal); err != nil {
+		t.Fatal(err)
+	}
+	proposal.Identity.RequestId = "request-spec-stale"
+	if _, err := MapSpecificationProposal(&proposal, request); err == nil {
+		t.Fatal("replayed proposal accepted")
 	}
 }
 

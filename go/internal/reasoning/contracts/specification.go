@@ -63,15 +63,16 @@ func MapSpecificationRequest(value *reasoningv1.SpecificationRequest) (Specifica
 	}, nil
 }
 
-func MapSpecificationProposal(value *reasoningv1.SpecificationProposal) (SpecificationProposal, error) {
+func MapSpecificationProposal(
+	value *reasoningv1.SpecificationProposal, request SpecificationRequest,
+) (SpecificationProposal, error) {
 	if value == nil || value.GetIdentity() == nil {
 		return SpecificationProposal{}, errors.New("specification proposal identity is required")
 	}
-	if value.GetIdentity().GetStage() != reasoningv1.ReasoningStage_REASONING_STAGE_SPECIFICATION ||
-		value.GetIdentity().GetRequestId() == "" || value.GetIdentity().GetRunId() == "" ||
-		value.GetIdentity().GetAttempt() == 0 ||
-		!digestPattern.MatchString(value.GetIdentity().GetAgentManifestDigest()) {
-		return SpecificationProposal{}, errors.New("invalid specification proposal identity")
+	if err := validateProposalIdentity(
+		value.GetIdentity(), request.Envelope, StageSpecification,
+	); err != nil {
+		return SpecificationProposal{}, err
 	}
 	if value.GetTitle() == "" || value.GetGoal() == "" || len(value.GetActors()) == 0 ||
 		len(value.GetAcceptanceCriteria()) == 0 {
