@@ -83,9 +83,21 @@ func executeRunTransaction(
 	if err != nil {
 		return CommandResult{}, err
 	}
+	if err := validateRunTaskGate(ctx, tx, command); err != nil {
+		return CommandResult{}, err
+	}
 	decision, err := decideRunCommand(current, command)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if cancellation, ok := command.(CancelRun); ok {
+		cancelEvents, err := cancelRunTasks(
+			ctx, tx, decision.next.ID, cancellation.Meta, cancellation.Reason,
+		)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		decision.events = append(decision.events, cancelEvents...)
 	}
 	if err := persistRunTransition(ctx, tx, command, digest, decision); err != nil {
 		return CommandResult{}, err
@@ -557,11 +569,13 @@ func reserveCommand(ctx context.Context, tx pgx.Tx, command RunCommand, digest s
 func loadRun(ctx context.Context, tx pgx.Tx, id string) (Run, bool, error) {
 	var run Run
 	var specificationURI, specificationDigest, taskGraphURI, taskGraphDigest *string
+	var lifecycle []byte
 	err := tx.QueryRow(ctx, `SELECT run_id, state, revision, specification_uri,
-		specification_digest, task_graph_uri, task_graph_digest, created_at, updated_at
+		specification_digest, task_graph_uri, task_graph_digest, lifecycle_bindings,
+		created_at, updated_at
 		FROM workflow_runs WHERE run_id = $1 FOR UPDATE`, id).Scan(
 		&run.ID, &run.State, &run.Revision, &specificationURI,
-		&specificationDigest, &taskGraphURI, &taskGraphDigest,
+		&specificationDigest, &taskGraphURI, &taskGraphDigest, &lifecycle,
 		&run.CreatedAt, &run.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, false, ErrNotFound
@@ -581,6 +595,9 @@ func loadRun(ctx context.Context, tx pgx.Tx, id string) (Run, bool, error) {
 		}
 		run.TaskGraph = &ArtifactRef{URI: *taskGraphURI, Digest: *taskGraphDigest}
 	}
+	if err := decodeRunLifecycle(lifecycle, &run); err != nil {
+		return Run{}, false, err
+	}
 	if err := run.Validate(); err != nil {
 		return Run{}, false, err
 	}
@@ -595,12 +612,16 @@ func insertRun(ctx context.Context, tx pgx.Tx, run Run) error {
 	if run.TaskGraph != nil {
 		graphURI, graphDigest = &run.TaskGraph.URI, &run.TaskGraph.Digest
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO workflow_runs
+	lifecycle, err := encodeRunLifecycle(run)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO workflow_runs
 		(run_id, state, revision, specification_uri, specification_digest,
-		 task_graph_uri, task_graph_digest, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		 task_graph_uri, task_graph_digest, lifecycle_bindings, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		run.ID, run.State, run.Revision, uri, digest, graphURI, graphDigest,
-		run.CreatedAt, run.UpdatedAt)
+		lifecycle, run.CreatedAt, run.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert run: %w", err)
 	}
@@ -615,12 +636,16 @@ func updateRun(ctx context.Context, tx pgx.Tx, run Run, expected uint64) error {
 	if run.TaskGraph != nil {
 		graphURI, graphDigest = &run.TaskGraph.URI, &run.TaskGraph.Digest
 	}
+	lifecycle, err := encodeRunLifecycle(run)
+	if err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `UPDATE workflow_runs SET state=$2, revision=$3,
 		specification_uri=$4, specification_digest=$5, task_graph_uri=$6,
-		task_graph_digest=$7, updated_at=$8
-		WHERE run_id=$1 AND revision=$9`,
+		task_graph_digest=$7, lifecycle_bindings=$8, updated_at=$9
+		WHERE run_id=$1 AND revision=$10`,
 		run.ID, run.State, run.Revision, uri, digest, graphURI, graphDigest,
-		run.UpdatedAt, expected)
+		lifecycle, run.UpdatedAt, expected)
 	if err != nil {
 		return fmt.Errorf("update run: %w", err)
 	}
@@ -628,6 +653,110 @@ func updateRun(ctx context.Context, tx pgx.Tx, run Run, expected uint64) error {
 		return ErrRevisionConflict
 	}
 	return nil
+}
+
+type runLifecycleBindings struct {
+	Execution       *ArtifactRef `json:"execution,omitempty"`
+	CandidateCommit string       `json:"candidate_commit,omitempty"`
+	Verification    *ArtifactRef `json:"verification,omitempty"`
+	Review          *ArtifactRef `json:"review,omitempty"`
+	Approval        *ArtifactRef `json:"approval,omitempty"`
+	Merge           *ArtifactRef `json:"merge,omitempty"`
+}
+
+func encodeRunLifecycle(run Run) ([]byte, error) {
+	encoded, err := json.Marshal(runLifecycleBindings{
+		Execution: run.Execution, CandidateCommit: run.CandidateCommit,
+		Verification: run.Verification, Review: run.Review,
+		Approval: run.Approval, Merge: run.Merge,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encode run lifecycle: %w", err)
+	}
+	return encoded, nil
+}
+
+func decodeRunLifecycle(encoded []byte, run *Run) error {
+	var bindings runLifecycleBindings
+	if err := json.Unmarshal(encoded, &bindings); err != nil {
+		return fmt.Errorf("decode run lifecycle: %w", err)
+	}
+	run.Execution, run.CandidateCommit = bindings.Execution, bindings.CandidateCommit
+	run.Verification, run.Review = bindings.Verification, bindings.Review
+	run.Approval, run.Merge = bindings.Approval, bindings.Merge
+	return nil
+}
+
+func validateRunTaskGate(ctx context.Context, tx pgx.Tx, command RunCommand) error {
+	switch command.(type) {
+	case StartRun:
+		var total, terminal int
+		err := tx.QueryRow(ctx, `SELECT count(*),
+			count(*) FILTER (WHERE state IN ('FAILED','CANCELLED'))
+			FROM workflow_tasks WHERE run_id=$1`, command.RunID()).Scan(&total, &terminal)
+		if err != nil {
+			return fmt.Errorf("check runnable tasks: %w", err)
+		}
+		if total == 0 || terminal != 0 {
+			return ErrInvalidTransition
+		}
+	case RecordRunExecution, RecordRunVerification, RecordRunReview,
+		ApproveRun, RejectRun, RecordMerge:
+		var total, accepted int
+		err := tx.QueryRow(ctx, `SELECT count(*),
+			count(*) FILTER (WHERE state='ACCEPTED')
+			FROM workflow_tasks WHERE run_id=$1`, command.RunID()).Scan(&total, &accepted)
+		if err != nil {
+			return fmt.Errorf("check completed tasks: %w", err)
+		}
+		if total == 0 || accepted != total {
+			return ErrInvalidTransition
+		}
+	}
+	return nil
+}
+
+func cancelRunTasks(
+	ctx context.Context, tx pgx.Tx, runID string, meta CommandEnvelope, reason string,
+) ([]Event, error) {
+	rows, err := tx.Query(ctx, `SELECT task_id,revision FROM workflow_tasks
+		WHERE run_id=$1 AND state NOT IN ('ACCEPTED','FAILED','CANCELLED') FOR UPDATE`, runID)
+	if err != nil {
+		return nil, fmt.Errorf("lock tasks for cancellation: %w", err)
+	}
+	defer rows.Close()
+	type cancellable struct {
+		id       string
+		revision uint64
+	}
+	var tasks []cancellable
+	for rows.Next() {
+		var task cancellable
+		if err := rows.Scan(&task.id, &task.revision); err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	events := make([]Event, 0, len(tasks))
+	for _, task := range tasks {
+		if _, err := tx.Exec(ctx, `UPDATE workflow_tasks SET state='CANCELLED',
+			revision=revision+1,updated_at=$3 WHERE run_id=$1 AND task_id=$2`,
+			runID, task.id, meta.Timestamp.UTC()); err != nil {
+			return nil, fmt.Errorf("cancel task: %w", err)
+		}
+		eventID := uuid.NewSHA1(uuid.MustParse(meta.CommandID), []byte(task.id+":cancel")).String()
+		events = append(events, Event{
+			ID: eventID, AggregateType: "TASK", AggregateID: task.id,
+			Revision: task.revision + 1, Type: "TASK_CANCELLED",
+			Timestamp: meta.Timestamp.UTC(), Actor: meta.Actor,
+			CorrelationID: meta.CorrelationID, CausationID: meta.CausationID,
+			Payload: map[string]any{"run_id": runID, "reason": reason},
+		})
+	}
+	return events, nil
 }
 
 func insertTask(ctx context.Context, tx pgx.Tx, task Task) error {

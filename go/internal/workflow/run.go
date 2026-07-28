@@ -6,13 +6,19 @@ import (
 )
 
 type Run struct {
-	ID            string       `json:"id"`
-	State         RunState     `json:"state"`
-	Revision      uint64       `json:"revision"`
-	Specification *ArtifactRef `json:"specification,omitempty"`
-	TaskGraph     *ArtifactRef `json:"task_graph,omitempty"`
-	CreatedAt     time.Time    `json:"created_at"`
-	UpdatedAt     time.Time    `json:"updated_at"`
+	ID              string       `json:"id"`
+	State           RunState     `json:"state"`
+	Revision        uint64       `json:"revision"`
+	Specification   *ArtifactRef `json:"specification,omitempty"`
+	TaskGraph       *ArtifactRef `json:"task_graph,omitempty"`
+	Execution       *ArtifactRef `json:"execution,omitempty"`
+	CandidateCommit string       `json:"candidate_commit,omitempty"`
+	Verification    *ArtifactRef `json:"verification,omitempty"`
+	Review          *ArtifactRef `json:"review,omitempty"`
+	Approval        *ArtifactRef `json:"approval,omitempty"`
+	Merge           *ArtifactRef `json:"merge,omitempty"`
+	CreatedAt       time.Time    `json:"created_at"`
+	UpdatedAt       time.Time    `json:"updated_at"`
 }
 
 func (r Run) Validate() error {
@@ -31,7 +37,21 @@ func (r Run) Validate() error {
 		}
 	}
 	if r.TaskGraph != nil {
-		return r.TaskGraph.Validate()
+		if err := r.TaskGraph.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, binding := range []*ArtifactRef{
+		r.Execution, r.Verification, r.Review, r.Approval, r.Merge,
+	} {
+		if binding != nil {
+			if err := binding.Validate(); err != nil {
+				return err
+			}
+		}
+	}
+	if r.CandidateCommit != "" && !commitPattern.MatchString(r.CandidateCommit) {
+		return fmt.Errorf("%w: run candidate commit", ErrInvalid)
 	}
 	return nil
 }
@@ -165,6 +185,9 @@ func (r Run) Apply(command RunCommand) (Run, []Event, error) {
 		transition, err = r.rejectTaskGraph(command)
 	case ApproveTaskGraph:
 		return Run{}, nil, fmt.Errorf("%w: task graph approval requires planning apply", ErrInvalid)
+	case StartRun, RecordRunExecution, RecordRunVerification, RecordRunReview,
+		ApproveRun, RejectRun, RecordMerge, FailRun, CancelRun:
+		return r.applyCompletion(command)
 	default:
 		return Run{}, nil, fmt.Errorf("%w: unsupported run command", ErrInvalid)
 	}
