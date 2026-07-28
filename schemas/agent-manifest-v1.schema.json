@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-harness:schema:agent-manifest:v1",
+  "title": "Agent Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent",
+    "stage",
+    "prompt",
+    "model",
+    "context",
+    "tools",
+    "output",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {"const": "1"},
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
+      }
+    },
+    "stage": {
+      "enum": ["specification", "planning", "implementation", "review"]
+    },
+    "prompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_uri", "sha256"],
+      "properties": {
+        "artifact_uri": {
+          "type": "string",
+          "pattern": "^artifact://sha256/[0-9a-f]{64}$"
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_class", "temperature", "maximum_output_tokens"],
+      "properties": {
+        "capability_class": {
+          "enum": ["general_reasoning", "strong_coding", "independent_review"]
+        },
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "maximum_output_tokens": {"type": "integer", "minimum": 1, "maximum": 200000}
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "include_specification",
+        "include_task",
+        "repository_selection",
+        "maximum_context_tokens"
+      ],
+      "properties": {
+        "include_specification": {"type": "boolean"},
+        "include_task": {"type": "boolean"},
+        "repository_selection": {"const": "kernel_selected"},
+        "maximum_context_tokens": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allowed_requests",
+        "arbitrary_shell",
+        "arbitrary_network",
+        "direct_file_write"
+      ],
+      "properties": {
+        "allowed_requests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "read_repository_file",
+              "search_repository",
+              "request_declared_check",
+              "report_blocker"
+            ]
+          }
+        },
+        "arbitrary_shell": {"const": false},
+        "arbitrary_network": {"const": false},
+        "direct_file_write": {"const": false}
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema"],
+      "properties": {
+        "schema": {
+          "enum": [
+            "specification_proposal.v1",
+            "task_graph_proposal.v1",
+            "implementation_proposal.v1",
+            "review_proposal.v1"
+          ]
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "labels"],
+      "properties": {
+        "description": {"type": "string", "maxLength": 500},
+        "labels": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"}
+        }
+      }
+    }
+  }
+}
