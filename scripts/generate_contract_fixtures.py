@@ -3,10 +3,15 @@
 from pathlib import Path
 
 from google.protobuf.timestamp_pb2 import Timestamp
-from harness_agents._generated.harness.reasoning.v1 import common_pb2, specification_pb2
+from harness_agents._generated.harness.reasoning.v1 import (
+    common_pb2,
+    planning_pb2,
+    specification_pb2,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "tests" / "contracts" / "v1" / "specification"
+PLANNING_OUTPUT = ROOT / "tests" / "contracts" / "v1" / "planning"
 
 
 def timestamp(seconds: int) -> Timestamp:
@@ -89,10 +94,81 @@ def proposal() -> specification_pb2.SpecificationProposal:
     )
 
 
+def planning_request() -> planning_pb2.TaskPlanningRequest:
+    value = request().envelope
+    value.request_id = "request-plan-001"
+    value.stage = common_pb2.REASONING_STAGE_PLANNING
+    return planning_pb2.TaskPlanningRequest(
+        envelope=value,
+        approved_specification_id="spec-001",
+        approved_specification_digest="c" * 64,
+        repository_map=[
+            planning_pb2.RepositoryEntry(path="go", kind="directory", sha256="d" * 64),
+            planning_pb2.RepositoryEntry(path="docs", kind="directory", sha256="e" * 64),
+        ],
+        readable_paths=["docs", "go"],
+        writable_paths=["docs/reasoning-contracts.md", "go/internal/reasoning"],
+        prohibited_paths=["go/gen"],
+        task_count_limit=4,
+        parallelism_limit=2,
+        acceptance_criterion_ids=["AC-001", "AC-002"],
+    )
+
+
+def planning_proposal() -> planning_pb2.TaskGraphProposal:
+    return planning_pb2.TaskGraphProposal(
+        identity=common_pb2.ProposalIdentity(
+            schema_version="1",
+            request_id="request-plan-001",
+            run_id="run-001",
+            stage=common_pb2.REASONING_STAGE_PLANNING,
+            attempt=1,
+            agent_manifest_digest="b" * 64,
+            input_artifact_digests=["a" * 64],
+        ),
+        approved_specification_id="spec-001",
+        approved_specification_digest="c" * 64,
+        tasks=[
+            planning_pb2.PlannedTask(
+                task_id="TASK-001",
+                objective="Document the planning contract.",
+                acceptance_criterion_ids=["AC-001"],
+                readable_paths=["docs"],
+                writable_paths=["docs/reasoning-contracts.md"],
+                prohibited_paths=[],
+                exclusive_resources=["public-api-contract"],
+                required_check_ids=["CHECK-DOCS"],
+                stop_conditions=["contract authority changes"],
+            ),
+            planning_pb2.PlannedTask(
+                task_id="TASK-002",
+                objective="Validate bounded task graphs.",
+                dependencies=[planning_pb2.TaskDependency(task_id="TASK-001")],
+                acceptance_criterion_ids=["AC-002"],
+                readable_paths=["go"],
+                writable_paths=["go/internal/reasoning"],
+                prohibited_paths=["go/gen"],
+                exclusive_resources=["public-api-contract"],
+                required_check_ids=["CHECK-GO-TEST"],
+                stop_conditions=["scope cannot be represented"],
+            ),
+        ],
+        assumptions=["repository map is kernel-selected"],
+        unresolved_scope_questions=[],
+    )
+
+
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / "request.bin").write_bytes(request().SerializeToString(deterministic=True))
     (OUTPUT / "proposal.bin").write_bytes(proposal().SerializeToString(deterministic=True))
+    PLANNING_OUTPUT.mkdir(parents=True, exist_ok=True)
+    (PLANNING_OUTPUT / "request.bin").write_bytes(
+        planning_request().SerializeToString(deterministic=True)
+    )
+    (PLANNING_OUTPUT / "proposal.bin").write_bytes(
+        planning_proposal().SerializeToString(deterministic=True)
+    )
 
 
 if __name__ == "__main__":
