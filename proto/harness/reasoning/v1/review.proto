@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package harness.reasoning.v1;
+
+import "google/protobuf/timestamp.proto";
+import "harness/reasoning/v1/common.proto";
+import "harness/reasoning/v1/implementation.proto";
+
+option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
+
+message ReviewCandidateIdentity {
+  string approved_specification_digest = 1;
+  string approved_task_digest = 2;
+  string base_commit = 3;
+  string candidate_commit = 4;
+  string implementation_proposal_digest = 5;
+}
+
+message ActualDiffFile {
+  string path = 1;
+  FileOperation operation = 2;
+  string before_sha256 = 3;
+  string after_sha256 = 4;
+}
+
+message ScopeReport {
+  repeated string authorized_changed_paths = 1;
+  repeated string unexpected_changed_paths = 2;
+}
+
+message IndependentEvidence {
+  string evidence_id = 1;
+  string check_id = 2;
+  string candidate_commit = 3;
+  int32 exit_code = 4;
+  string output_sha256 = 5;
+  string artifact_uri = 6;
+  google.protobuf.Timestamp started_at = 7;
+  google.protobuf.Timestamp completed_at = 8;
+}
+
+message AcceptanceEvidence {
+  string acceptance_criterion_id = 1;
+  repeated string evidence_ids = 2;
+}
+
+message ReviewPolicy {
+  repeated FindingSeverity blocking_severities = 1;
+  bool report_unrequested_changes = 2;
+}
+
+message ReviewRequest {
+  ReasoningRequestEnvelope envelope = 1;
+  ReviewCandidateIdentity candidate = 16;
+  repeated ActualDiffFile actual_diff = 17;
+  ScopeReport scope_report = 18;
+  repeated IndependentEvidence independent_evidence = 19;
+  repeated AcceptanceEvidence acceptance_coverage = 20;
+  ReviewPolicy review_policy = 21;
+  repeated string approved_acceptance_criterion_ids = 22;
+  repeated string authorized_writable_paths = 23;
+}
+
+enum ReviewRecommendation {
+  REVIEW_RECOMMENDATION_UNSPECIFIED = 0;
+  REVIEW_RECOMMENDATION_REWORK_REQUIRED = 1;
+  REVIEW_RECOMMENDATION_ADVISORY_ACCEPT = 2;
+}
+
+enum FindingSeverity {
+  FINDING_SEVERITY_UNSPECIFIED = 0;
+  FINDING_SEVERITY_INFO = 1;
+  FINDING_SEVERITY_LOW = 2;
+  FINDING_SEVERITY_MEDIUM = 3;
+  FINDING_SEVERITY_HIGH = 4;
+  FINDING_SEVERITY_CRITICAL = 5;
+}
+
+enum FindingCategory {
+  FINDING_CATEGORY_UNSPECIFIED = 0;
+  FINDING_CATEGORY_CORRECTNESS = 1;
+  FINDING_CATEGORY_SECURITY = 2;
+  FINDING_CATEGORY_SCOPE = 3;
+  FINDING_CATEGORY_TESTING = 4;
+  FINDING_CATEGORY_MAINTAINABILITY = 5;
+  FINDING_CATEGORY_COMPATIBILITY = 6;
+}
+
+message ReviewFinding {
+  string finding_id = 1;
+  FindingSeverity severity = 2;
+  FindingCategory category = 3;
+  string summary = 4;
+  repeated string evidence_references = 5;
+}
+
+message RequiredAction {
+  string action_id = 1;
+  string finding_id = 2;
+  string description = 3;
+}
+
+message ResidualRisk {
+  string risk_id = 1;
+  string description = 2;
+  FindingSeverity severity = 3;
+}
+
+message ReviewProposal {
+  ProposalIdentity identity = 1;
+  ReviewRecommendation recommendation = 16;
+  repeated ReviewFinding findings = 17;
+  repeated RequiredAction required_actions = 18;
+  repeated string unrequested_changes = 19;
+  repeated ResidualRisk residual_risks = 20;
+  repeated string assumptions = 21;
+}

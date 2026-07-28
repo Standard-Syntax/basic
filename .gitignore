@@ -1,0 +1,10 @@
+.cache/
+.coverage
+.pytest_cache/
+.ruff_cache/
+.tools/
+.venv/
+__pycache__/
+*.pyc
+coverage.xml
+dist/

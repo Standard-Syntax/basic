@@ -1,0 +1,8 @@
+
+¦
+1request-plan-001run-001(0:@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbB@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa‚spec-001Š@cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc’“
+TASK-001Document the planning contract."AC-001*docs2docs/reasoning-contracts.mdBpublic-api-contractJ
+CHECK-DOCSRcontract authority changes’¡
+TASK-002Validate bounded task graphs.
+
+TASK-001"AC-002*go2go/internal/reasoning:go/genBpublic-api-contractJCHECK-GO-TESTRscope cannot be representedš!repository map is kernel-selected

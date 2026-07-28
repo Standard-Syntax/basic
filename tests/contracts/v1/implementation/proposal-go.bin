@@ -1,0 +1,10 @@
+
+ò
+1request-impl-001run-001"TASK-001(0:@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbB@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaB@a58a5d4432d87ed45f84ed51589af4e1291530bf13d494f33baf912a6c36527d‚TASK-001Š@cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc’@ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddš'Propose three complete-file operations.¢œ
+go/internal/reasoning/create.go@e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"package reasoning
+*Add the bounded contract.2AC-001¢®
+!go/internal/reasoning/existing.go@a58a5d4432d87ed45f84ed51589af4e1291530bf13d494f33baf912a6c36527d"package reasoning
+
+// Updated.
+*Update the bounded contract.2AC-002¢‘
+!go/internal/reasoning/obsolete.go@9999999999999999999999999999999999999999999999999999999999999999* Remove obsolete transport logic.2AC-003ªCHECK-GO-TEST² kernel verifies original digests

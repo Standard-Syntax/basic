@@ -1,0 +1,33 @@
+{
+  "name": "bounded-implementation",
+  "version": "1.0.0",
+  "stage": "implementation",
+  "prompt_file": "../prompts/implementation.md",
+  "model": {
+    "capability_class": "strong_coding",
+    "temperature": 0.1,
+    "maximum_output_tokens": 20000
+  },
+  "context": {
+    "include_specification": true,
+    "include_task": true,
+    "repository_selection": "kernel_selected",
+    "maximum_context_tokens": 100000
+  },
+  "tools": {
+    "allowed_requests": [
+      "read_repository_file",
+      "search_repository",
+      "request_declared_check",
+      "report_blocker"
+    ],
+    "arbitrary_shell": false,
+    "arbitrary_network": false,
+    "direct_file_write": false
+  },
+  "output": {"schema": "implementation_proposal.v1"},
+  "metadata": {
+    "description": "Golden implementation agent",
+    "labels": ["golden"]
+  }
+}

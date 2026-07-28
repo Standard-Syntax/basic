@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package harness.reasoning.v1;
+
+import "harness/reasoning/v1/common.proto";
+
+option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
+
+message SpecificationRequest {
+  ReasoningRequestEnvelope envelope = 1;
+  string problem_statement = 16;
+  string desired_outcome = 17;
+  repeated string known_constraints = 18;
+  repeated string known_non_goals = 19;
+  repeated string stakeholders = 20;
+  optional string repository_summary = 21;
+}
+
+message AcceptanceCriterion {
+  string criterion_id = 1;
+  string description = 2;
+  string verification_method = 3;
+}
+
+message SpecificationRisk {
+  string risk_id = 1;
+  string description = 2;
+  string mitigation = 3;
+}
+
+message SpecificationQuestion {
+  string question_id = 1;
+  string question = 2;
+  bool blocking = 3;
+}
+
+message SpecificationProposal {
+  ProposalIdentity identity = 1;
+  string title = 16;
+  string goal = 17;
+  repeated string actors = 18;
+  repeated string constraints = 19;
+  repeated string non_goals = 20;
+  repeated AcceptanceCriterion acceptance_criteria = 21;
+  repeated string assumptions = 22;
+  repeated SpecificationRisk risks = 23;
+  repeated SpecificationQuestion questions = 24;
+}

@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package harness.reasoning.v1;
+
+import "harness/reasoning/v1/common.proto";
+
+option go_package = "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1;reasoningv1";
+
+message RepositoryEntry {
+  string path = 1;
+  string kind = 2;
+  string sha256 = 3;
+}
+
+message TaskPlanningRequest {
+  ReasoningRequestEnvelope envelope = 1;
+  string approved_specification_id = 16;
+  string approved_specification_digest = 17;
+  repeated RepositoryEntry repository_map = 18;
+  repeated string readable_paths = 19;
+  repeated string writable_paths = 20;
+  repeated string prohibited_paths = 21;
+  uint32 task_count_limit = 22;
+  uint32 parallelism_limit = 23;
+  repeated string acceptance_criterion_ids = 24;
+}
+
+message TaskDependency {
+  string task_id = 1;
+}
+
+message PlannedTask {
+  string task_id = 1;
+  string objective = 2;
+  repeated TaskDependency dependencies = 3;
+  repeated string acceptance_criterion_ids = 4;
+  repeated string readable_paths = 5;
+  repeated string writable_paths = 6;
+  repeated string prohibited_paths = 7;
+  repeated string exclusive_resources = 8;
+  repeated string required_check_ids = 9;
+  repeated string stop_conditions = 10;
+}
+
+message TaskGraphProposal {
+  ProposalIdentity identity = 1;
+  string approved_specification_id = 16;
+  string approved_specification_digest = 17;
+  repeated PlannedTask tasks = 18;
+  repeated string assumptions = 19;
+  repeated string unresolved_scope_questions = 20;
+}

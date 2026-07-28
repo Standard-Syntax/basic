@@ -1,0 +1,19 @@
+version = 1
+
+exclude_patterns = [
+  "go/gen/**",
+  "python/src/harness_agents/_generated/**",
+]
+
+test_patterns = [
+  "**/*_test.go",
+  "python/tests/**",
+]
+
+[[analyzers]]
+name = "go"
+enabled = true
+
+[[analyzers]]
+name = "python"
+enabled = true
