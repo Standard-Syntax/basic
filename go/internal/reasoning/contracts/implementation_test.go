@@ -132,3 +132,21 @@ func TestAllStableRejectionCodesRoundTripInGo(t *testing.T) {
 		}
 	}
 }
+
+func TestImplementationRequestRejectsUntrustedRepositoryContext(t *testing.T) {
+	var request reasoningv1.ImplementationRequest
+	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.RepositoryContext[0].Content = "tampered"
+	if _, err := MapImplementationRequest(&request); err == nil {
+		t.Fatal("repository context digest mismatch accepted")
+	}
+	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	request.RepositoryContext[0].Path = "go/gen/secret.go"
+	if _, err := MapImplementationRequest(&request); err == nil {
+		t.Fatal("prohibited repository context accepted")
+	}
+}

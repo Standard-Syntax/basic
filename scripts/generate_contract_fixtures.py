@@ -1,5 +1,6 @@
 """Generate deterministic shared Protobuf contract fixtures."""
 
+import hashlib
 from pathlib import Path
 
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -180,7 +181,7 @@ def implementation_request() -> implementation_pb2.ImplementationRequest:
         repository_context=[
             implementation_pb2.RepositoryContextFile(
                 path="go/internal/reasoning/existing.go",
-                sha256="f" * 64,
+                sha256=hashlib.sha256(b"package reasoning\n").hexdigest(),
                 content="package reasoning\n",
             )
         ],
@@ -217,7 +218,7 @@ def implementation_proposal() -> implementation_pb2.ImplementationProposal:
             implementation_pb2.FileChange(
                 path="go/internal/reasoning/existing.go",
                 operation=implementation_pb2.FILE_OPERATION_UPDATE,
-                expected_original_sha256="f" * 64,
+                expected_original_sha256=hashlib.sha256(b"package reasoning\n").hexdigest(),
                 replacement_content="package reasoning\n\n// Updated.\n",
                 rationale="Update the bounded contract.",
                 acceptance_criterion_ids=["AC-002"],

@@ -2,6 +2,8 @@ package contracts
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"slices"
@@ -88,6 +90,15 @@ func MapImplementationRequest(value *reasoningv1.ImplementationRequest) (Impleme
 		if !validRepoPath(file.GetPath()) || !pathWithin(file.GetPath(), value.GetReadablePaths()) ||
 			!digestPattern.MatchString(file.GetSha256()) {
 			return ImplementationRequest{}, errors.New("invalid repository context")
+		}
+		for _, prohibited := range value.GetProhibitedPaths() {
+			if pathWithin(file.GetPath(), []string{prohibited}) {
+				return ImplementationRequest{}, errors.New("repository context targets prohibited path")
+			}
+		}
+		sum := sha256.Sum256([]byte(file.GetContent()))
+		if hex.EncodeToString(sum[:]) != file.GetSha256() {
+			return ImplementationRequest{}, errors.New("repository context digest mismatch")
 		}
 	}
 	return ImplementationRequest{
