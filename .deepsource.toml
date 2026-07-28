@@ -3,6 +3,7 @@ version = 1
 exclude_patterns = [
   "go/gen/**",
   "python/src/harness_agents/_generated/**",
+  "tests/contracts/**/*.bin",
 ]
 
 test_patterns = [
@@ -14,6 +15,17 @@ test_patterns = [
 name = "go"
 enabled = true
 
+  [analyzers.meta]
+  # Keep review findings focused on material complexity risks, not minor cleanup.
+  cyclomatic_complexity_threshold = "critical"
+  skip_doc_coverage = ["file"]
+
 [[analyzers]]
 name = "python"
 enabled = true
+
+  [analyzers.meta]
+  # Formatting, linting, and type checking are enforced by GitHub CI.
+  cyclomatic_complexity_threshold = "critical"
+  max_line_length = 100
+  skip_doc_coverage = ["module", "magic", "init", "class", "nonpublic"]

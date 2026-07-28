@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+
+reviews:
+  # Only report high-confidence defects; style and polish belong to automated tooling.
+  profile: quiet
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+
+  # Review every layer of a stacked PR chain, including PRs whose base is another
+  # feature branch. Drafts remain quiet until they are marked ready for review.
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    drafts: false
+    base_branches:
+      - ".*"
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+    labels:
+      - "!do-not-review"
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+
+  path_filters:
+    - "!go/gen/**"
+    - "!python/src/harness_agents/_generated/**"
+    - "!tests/contracts/**/*.bin"
+    - "!tests/contracts/**/manifest/*.json"
+    - "!tests/contracts/**/manifest/*.sha256"
+    - "!uv.lock"
+    - "!go.sum"
+    - "!go.work.sum"
+
+  path_instructions:
+    - path: "**"
+      instructions: |
+        Report only actionable, high-confidence defects introduced by this pull
+        request that materially affect correctness, security, reliability, data
+        integrity, compatibility, or required tests.
+
+        Do not comment on style, naming preferences, documentation polish,
+        speculative refactors, optional improvements, or other nitpicks. Do not
+        report lint, formatting, or type-check findings; repository tooling and
+        GitHub CI own those checks.
+
+        For stacked pull requests, evaluate only this pull request's diff against
+        its declared base branch. Do not re-report changes inherited from earlier
+        stack layers.
+    - path: "proto/**/*.proto"
+      instructions: |
+        Focus on wire compatibility, field-number reuse, unsafe cardinality
+        changes, and cross-language contract breakage.
+    - path: "scripts/generate_*.py"
+      instructions: |
+        Focus on deterministic generation, path safety, and reproducibility.
+
+  # CI, DeepSource, and Semgrep own automated static analysis. Keeping these
+  # integrations off prevents duplicate or low-value review comments.
+  tools:
+    actionlint:
+      enabled: false
+    checkmake:
+      enabled: false
+    flake8:
+      enabled: false
+    github-checks:
+      enabled: false
+    golangci-lint:
+      enabled: false
+    languagetool:
+      enabled: false
+    markdownlint:
+      enabled: false
+    pylint:
+      enabled: false
+    ruff:
+      enabled: false
+    semgrep:
+      enabled: false
+    shellcheck:
+      enabled: false
+    yamllint:
+      enabled: false
+
+chat:
+  auto_reply: true

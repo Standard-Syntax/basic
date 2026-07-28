@@ -1,16 +1,23 @@
-name: check
+name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    name: Format, lint, type-check, test, and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -21,5 +28,18 @@ jobs:
         with:
           version: "0.11.28"
           enable-cache: true
-      - run: uv sync --frozen
-      - run: make check
+      - name: Install locked Python dependencies
+        run: uv sync --frozen
+      - name: Run the canonical project gate
+        run: make check
+
+  semgrep:
+    name: Semgrep security scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: semgrep/semgrep:1.171.0
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan high-confidence repository security rules
+        run: semgrep scan --config .semgrep.yml --error --metrics=off
