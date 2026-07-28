@@ -46,45 +46,23 @@ func MapEnvelope(value *reasoningv1.ReasoningRequestEnvelope, expected Stage) (E
 	if value == nil {
 		return Envelope{}, errors.New("envelope is required")
 	}
-	stage, err := mapStage(value.GetStage())
-	if err != nil || stage != expected {
-		return Envelope{}, errors.New("unexpected reasoning stage")
-	}
-	if err := validateAuthority(value.GetAuthority()); err != nil {
+	stage, err := validateEnvelopeHeader(value, expected)
+	if err != nil {
 		return Envelope{}, err
 	}
-	if value.GetSchemaVersion() != "1" || value.GetRequestId() == "" || value.GetRunId() == "" {
-		return Envelope{}, errors.New("invalid envelope identity")
+	created, expires, err := mapEnvelopeTimes(value)
+	if err != nil {
+		return Envelope{}, err
 	}
-	if value.GetAttempt() == 0 || value.GetCreatedAt() == nil || value.GetExpiresAt() == nil {
-		return Envelope{}, errors.New("invalid attempt or timestamps")
-	}
-	if err := value.GetCreatedAt().CheckValid(); err != nil {
-		return Envelope{}, fmt.Errorf("created_at: %w", err)
-	}
-	if err := value.GetExpiresAt().CheckValid(); err != nil {
-		return Envelope{}, fmt.Errorf("expires_at: %w", err)
-	}
-	created := value.GetCreatedAt().AsTime()
-	expires := value.GetExpiresAt().AsTime()
-	if !expires.After(created) {
-		return Envelope{}, errors.New("expires_at must follow created_at")
-	}
-	if value.GetBudget() == nil || value.GetBudget().GetMaximumInputTokens() == 0 ||
-		value.GetBudget().GetMaximumOutputTokens() == 0 ||
-		value.GetBudget().GetMaximumProviderRequests() == 0 {
-		return Envelope{}, errors.New("positive reasoning budget is required")
+	if err := validateEnvelopeBudget(value); err != nil {
+		return Envelope{}, err
 	}
 	if !digestPattern.MatchString(value.GetAgentManifestDigest()) {
 		return Envelope{}, errors.New("invalid agent manifest digest")
 	}
-	artifacts := make([]Artifact, 0, len(value.GetInputArtifacts()))
-	for _, artifact := range value.GetInputArtifacts() {
-		if !digestPattern.MatchString(artifact.GetSha256()) ||
-			artifact.GetArtifactUri() != "artifact://sha256/"+artifact.GetSha256() {
-			return Envelope{}, errors.New("invalid input artifact")
-		}
-		artifacts = append(artifacts, Artifact{URI: artifact.GetArtifactUri(), SHA256: artifact.GetSha256()})
+	artifacts, err := mapArtifacts(value.GetInputArtifacts())
+	if err != nil {
+		return Envelope{}, err
 	}
 	return Envelope{
 		SchemaVersion:       value.GetSchemaVersion(),
@@ -101,6 +79,61 @@ func MapEnvelope(value *reasoningv1.ReasoningRequestEnvelope, expected Stage) (E
 		InputArtifacts:      artifacts,
 		AgentManifestDigest: value.GetAgentManifestDigest(),
 	}, nil
+}
+
+func validateEnvelopeHeader(
+	value *reasoningv1.ReasoningRequestEnvelope, expected Stage,
+) (Stage, error) {
+	stage, err := mapStage(value.GetStage())
+	if err != nil || stage != expected {
+		return "", errors.New("unexpected reasoning stage")
+	}
+	if err := validateAuthority(value.GetAuthority()); err != nil {
+		return "", err
+	}
+	if value.GetSchemaVersion() != "1" || value.GetRequestId() == "" || value.GetRunId() == "" {
+		return "", errors.New("invalid envelope identity")
+	}
+	return stage, nil
+}
+
+func mapEnvelopeTimes(value *reasoningv1.ReasoningRequestEnvelope) (time.Time, time.Time, error) {
+	if value.GetAttempt() == 0 || value.GetCreatedAt() == nil || value.GetExpiresAt() == nil {
+		return time.Time{}, time.Time{}, errors.New("invalid attempt or timestamps")
+	}
+	if err := value.GetCreatedAt().CheckValid(); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("created_at: %w", err)
+	}
+	if err := value.GetExpiresAt().CheckValid(); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("expires_at: %w", err)
+	}
+	created := value.GetCreatedAt().AsTime()
+	expires := value.GetExpiresAt().AsTime()
+	if !expires.After(created) {
+		return time.Time{}, time.Time{}, errors.New("expires_at must follow created_at")
+	}
+	return created, expires, nil
+}
+
+func validateEnvelopeBudget(value *reasoningv1.ReasoningRequestEnvelope) error {
+	if value.GetBudget() == nil || value.GetBudget().GetMaximumInputTokens() == 0 ||
+		value.GetBudget().GetMaximumOutputTokens() == 0 ||
+		value.GetBudget().GetMaximumProviderRequests() == 0 {
+		return errors.New("positive reasoning budget is required")
+	}
+	return nil
+}
+
+func mapArtifacts(values []*reasoningv1.ArtifactDigest) ([]Artifact, error) {
+	artifacts := make([]Artifact, 0, len(values))
+	for _, artifact := range values {
+		if !digestPattern.MatchString(artifact.GetSha256()) ||
+			artifact.GetArtifactUri() != "artifact://sha256/"+artifact.GetSha256() {
+			return nil, errors.New("invalid input artifact")
+		}
+		artifacts = append(artifacts, Artifact{URI: artifact.GetArtifactUri(), SHA256: artifact.GetSha256()})
+	}
+	return artifacts, nil
 }
 
 func validateAuthority(value *reasoningv1.AuthorityConstraints) error {

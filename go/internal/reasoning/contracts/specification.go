@@ -92,41 +92,17 @@ func MapSpecificationProposal(
 		len(value.GetAcceptanceCriteria()) == 0 {
 		return SpecificationProposal{}, errors.New("incomplete specification proposal")
 	}
-	seen := make(map[string]struct{}, len(value.GetAcceptanceCriteria()))
-	criteria := make([]AcceptanceCriterion, 0, len(value.GetAcceptanceCriteria()))
-	for _, criterion := range value.GetAcceptanceCriteria() {
-		if !criterionID.MatchString(criterion.GetCriterionId()) ||
-			criterion.GetDescription() == "" || criterion.GetVerificationMethod() == "" {
-			return SpecificationProposal{}, errors.New("invalid acceptance criterion")
-		}
-		if _, exists := seen[criterion.GetCriterionId()]; exists {
-			return SpecificationProposal{}, errors.New("duplicate acceptance criterion")
-		}
-		seen[criterion.GetCriterionId()] = struct{}{}
-		criteria = append(criteria, AcceptanceCriterion{
-			ID:                 criterion.GetCriterionId(),
-			Description:        criterion.GetDescription(),
-			VerificationMethod: criterion.GetVerificationMethod(),
-		})
+	criteria, err := mapAcceptanceCriteria(value.GetAcceptanceCriteria())
+	if err != nil {
+		return SpecificationProposal{}, err
 	}
-	risks := make([]SpecificationRisk, 0, len(value.GetRisks()))
-	for _, risk := range value.GetRisks() {
-		if risk.GetRiskId() == "" || risk.GetDescription() == "" || risk.GetMitigation() == "" {
-			return SpecificationProposal{}, errors.New("invalid specification risk")
-		}
-		risks = append(risks, SpecificationRisk{
-			ID: risk.GetRiskId(), Description: risk.GetDescription(), Mitigation: risk.GetMitigation(),
-		})
+	risks, err := mapSpecificationRisks(value.GetRisks())
+	if err != nil {
+		return SpecificationProposal{}, err
 	}
-	questions := make([]SpecificationQuestion, 0, len(value.GetQuestions()))
-	for _, question := range value.GetQuestions() {
-		if question.GetQuestionId() == "" || question.GetQuestion() == "" {
-			return SpecificationProposal{}, errors.New("invalid specification question")
-		}
-		questions = append(questions, SpecificationQuestion{
-			ID: question.GetQuestionId(), Question: question.GetQuestion(),
-			Blocking: question.GetBlocking(),
-		})
+	questions, err := mapSpecificationQuestions(value.GetQuestions())
+	if err != nil {
+		return SpecificationProposal{}, err
 	}
 	return SpecificationProposal{
 		Title:              value.GetTitle(),
@@ -139,4 +115,56 @@ func MapSpecificationProposal(
 		Risks:              risks,
 		Questions:          questions,
 	}, nil
+}
+
+func mapAcceptanceCriteria(
+	values []*reasoningv1.AcceptanceCriterion,
+) ([]AcceptanceCriterion, error) {
+	seen := make(map[string]struct{}, len(values))
+	criteria := make([]AcceptanceCriterion, 0, len(values))
+	for _, criterion := range values {
+		if !criterionID.MatchString(criterion.GetCriterionId()) ||
+			criterion.GetDescription() == "" || criterion.GetVerificationMethod() == "" {
+			return nil, errors.New("invalid acceptance criterion")
+		}
+		if _, exists := seen[criterion.GetCriterionId()]; exists {
+			return nil, errors.New("duplicate acceptance criterion")
+		}
+		seen[criterion.GetCriterionId()] = struct{}{}
+		criteria = append(criteria, AcceptanceCriterion{
+			ID:                 criterion.GetCriterionId(),
+			Description:        criterion.GetDescription(),
+			VerificationMethod: criterion.GetVerificationMethod(),
+		})
+	}
+	return criteria, nil
+}
+
+func mapSpecificationRisks(values []*reasoningv1.SpecificationRisk) ([]SpecificationRisk, error) {
+	risks := make([]SpecificationRisk, 0, len(values))
+	for _, risk := range values {
+		if risk.GetRiskId() == "" || risk.GetDescription() == "" || risk.GetMitigation() == "" {
+			return nil, errors.New("invalid specification risk")
+		}
+		risks = append(risks, SpecificationRisk{
+			ID: risk.GetRiskId(), Description: risk.GetDescription(), Mitigation: risk.GetMitigation(),
+		})
+	}
+	return risks, nil
+}
+
+func mapSpecificationQuestions(
+	values []*reasoningv1.SpecificationQuestion,
+) ([]SpecificationQuestion, error) {
+	questions := make([]SpecificationQuestion, 0, len(values))
+	for _, question := range values {
+		if question.GetQuestionId() == "" || question.GetQuestion() == "" {
+			return nil, errors.New("invalid specification question")
+		}
+		questions = append(questions, SpecificationQuestion{
+			ID: question.GetQuestionId(), Question: question.GetQuestion(),
+			Blocking: question.GetBlocking(),
+		})
+	}
+	return questions, nil
 }

@@ -1,6 +1,7 @@
 package contracts
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,7 +57,7 @@ func TestPythonSpecificationFixturesMapInGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encoded) != string(contractFixture(t, "proposal.bin")) {
+	if !bytes.Equal(encoded, contractFixture(t, "proposal.bin")) {
 		t.Fatal("Go deterministic serialization differs from Python fixture")
 	}
 }
