@@ -1,5 +1,6 @@
 """Generate committed Go and Python Protobuf transport bindings."""
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,8 @@ def main() -> int:
 
     GO_OUT.mkdir(parents=True, exist_ok=True)
     PYTHON_OUT.mkdir(parents=True, exist_ok=True)
+    for cache in PYTHON_OUT.rglob("__pycache__"):
+        shutil.rmtree(cache)
     relative = [str(path.relative_to(PROTO_ROOT)) for path in PROTO_FILES]
 
     result = protoc.main(
