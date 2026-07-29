@@ -8,7 +8,10 @@ require (
 	google.golang.org/protobuf v1.36.10
 )
 
-require github.com/gowebpki/jcs v1.0.1
+require (
+	github.com/gowebpki/jcs v1.0.1
+	golang.org/x/sys v0.32.0
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

@@ -200,7 +200,7 @@ func TestStoreFullLifecycleAndAppendOnlyEvents(t *testing.T) {
 
 	taskRevision := uint64(1)
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour).UTC(),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour).UTC(), FencingToken: 1,
 	}
 	taskCommands := []TaskCommand{
 		LeaseTask{Meta: uniqueEnvelope(ActorWorkflowService, taskRevision), Run: runID, ID: taskID, Lease: lease},
@@ -213,10 +213,10 @@ func TestStoreFullLifecycleAndAppendOnlyEvents(t *testing.T) {
 	commit := "0123456789012345678901234567890123456789"
 	taskCommands = append(taskCommands,
 		StartReasoning{Meta: uniqueEnvelope(ActorReasoningService, 2), Run: runID, ID: taskID, Lease: lease},
-		AcceptTaskProposal{Meta: uniqueEnvelope(ActorExecutionService, 3), Run: runID, ID: taskID, Proposal: proposal},
+		AcceptTaskProposal{Meta: uniqueEnvelope(ActorExecutionService, 3), Run: runID, ID: taskID, Proposal: proposal, Lease: lease},
 		RecordTaskExecution{
 			Meta: uniqueEnvelope(ActorExecutionService, 4), Run: runID, ID: taskID,
-			Proposal: proposal, Execution: execution, CandidateCommit: commit,
+			Proposal: proposal, Execution: execution, CandidateCommit: commit, Lease: lease,
 		},
 		RecordTaskVerification{
 			Meta: uniqueEnvelope(ActorVerificationService, 5), Run: runID, ID: taskID,
@@ -337,11 +337,11 @@ func TestMigrationsAreRepeatableAndDigestTracked(t *testing.T) {
 	var count, invalidDigests int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*),
 		count(*) FILTER (WHERE digest !~ '^[a-f0-9]{64}$')
-		FROM schema_migrations WHERE version BETWEEN 1 AND 5`,
+		FROM schema_migrations WHERE version IN (1,2,3,4,5,8)`,
 	).Scan(&count, &invalidDigests); err != nil {
 		t.Fatal(err)
 	}
-	if count != 5 || invalidDigests != 0 {
+	if count != 6 || invalidDigests != 0 {
 		t.Fatalf("migration rows=%d invalid digests=%d", count, invalidDigests)
 	}
 }
@@ -385,7 +385,7 @@ func TestStoreDependencyReadinessAndCancellationCascade(t *testing.T) {
 		Meta: uniqueEnvelope(ActorWorkflowService, ready.Revision), ID: runID,
 	})
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour).UTC(),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: time.Now().Add(time.Hour).UTC(), FencingToken: 1,
 	}
 	proposal := artifact("artifact://dependency/proposal", 'a')
 	execution := artifact("artifact://dependency/execution", 'b')
@@ -396,10 +396,10 @@ func TestStoreDependencyReadinessAndCancellationCascade(t *testing.T) {
 	commands := []TaskCommand{
 		LeaseTask{Meta: uniqueEnvelope(ActorWorkflowService, 1), Run: runID, ID: rootID, Lease: lease},
 		StartReasoning{Meta: uniqueEnvelope(ActorReasoningService, 2), Run: runID, ID: rootID, Lease: lease},
-		AcceptTaskProposal{Meta: uniqueEnvelope(ActorExecutionService, 3), Run: runID, ID: rootID, Proposal: proposal},
+		AcceptTaskProposal{Meta: uniqueEnvelope(ActorExecutionService, 3), Run: runID, ID: rootID, Proposal: proposal, Lease: lease},
 		RecordTaskExecution{
 			Meta: uniqueEnvelope(ActorExecutionService, 4), Run: runID, ID: rootID,
-			Proposal: proposal, Execution: execution, CandidateCommit: commit,
+			Proposal: proposal, Execution: execution, CandidateCommit: commit, Lease: lease,
 		},
 		RecordTaskVerification{
 			Meta: uniqueEnvelope(ActorVerificationService, 5), Run: runID, ID: rootID,

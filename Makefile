@@ -39,11 +39,13 @@ test:
 check: generate-check lint type-check test build
 
 integration-test:
+	docker build -f Dockerfile.execution-worker -t basic-execution-worker:integration .
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		go test -tags=integration -count=1 \
-			./internal/workflow ./internal/registry ./internal/reasoning/gateway || status=$$?; \
+			./internal/workflow ./internal/registry ./internal/reasoning/gateway \
+			./internal/execution || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
 

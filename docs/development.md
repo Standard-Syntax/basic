@@ -21,16 +21,19 @@ type checks, Go and Python tests, all Go command builds, and a Python import
 smoke test. Generated Protobuf Python modules are excluded from the source type
 check because their runtime-defined attributes do not ship static type stubs.
 
-`make integration-test` starts `postgres:18.1-alpine` on
+`make integration-test` builds the static scratch worker, starts
+`postgres:18.1-alpine` on
 `127.0.0.1:55433`, waits for health, applies embedded migrations, runs the
-tagged workflow, registry, and reasoning-gateway suites against one shared
-database, and removes the disposable resources even on test failure. The
+tagged workflow, registry, reasoning-gateway, and execution suites against one
+shared database, exercises the live isolated worker, and removes the disposable
+resources even on test failure. The
 packages may migrate in any order. Success includes:
 
 ```text
 ok github.com/Standard-Syntax/basic/go/internal/workflow
 ok github.com/Standard-Syntax/basic/go/internal/registry
 ok github.com/Standard-Syntax/basic/go/internal/reasoning/gateway
+ok github.com/Standard-Syntax/basic/go/internal/execution
 ```
 
 If port 55433 is occupied, stop the conflicting process or change both the
@@ -94,6 +97,28 @@ There is intentionally no production artifact-store implementation in Phase 5.
 The integration tests use an integrity-checking in-memory store while
 PostgreSQL persists only artifact references and invocation metadata. The
 `go/cmd/reasoning-gateway` package builds but starts no listener.
+
+## Isolated execution service
+
+`go/internal/execution.Service` is an in-process boundary. Configure absolute
+trusted repository/worktree roots, the worker image, non-root UID/GID,
+execution actor UUID, deterministic author identity, content-addressed artifact
+store, workflow store, and execution ledger. Call `Execute` with the existing
+v1 request/proposal transports, exact proposal artifact, active lease, expected
+task revision, execution UUID, and stable execution timestamp.
+
+Build the private worker directly with:
+
+```bash
+docker build -f Dockerfile.execution-worker \
+  -t basic-execution-worker:integration .
+```
+
+The worker is not a network service. Interrupted runs may be inspected with
+`git worktree list --porcelain` and `git show-ref
+refs/harness/candidates/`. Normal cancellation and failure paths remove
+abandoned worktrees; only successfully workflow-recorded candidates retain an
+internal ref.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

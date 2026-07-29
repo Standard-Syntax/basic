@@ -428,7 +428,8 @@ func loadTask(ctx context.Context, tx pgx.Tx, runID, taskID string) (Task, error
 	var task Task
 	var bindings taskRowBindings
 	row := tx.QueryRow(ctx, `SELECT task_id,run_id,state,revision,max_attempts,current_attempt,
-		lease_id::text,lease_owner_id::text,lease_expires_at,proposal_uri,proposal_digest,
+		lease_id::text,lease_owner_id::text,lease_expires_at,lease_fencing_token,
+		proposal_uri,proposal_digest,
 		execution_uri,execution_digest,candidate_commit,verification_uri,verification_digest,
 		review_uri,review_digest,approval_uri,approval_digest,created_at,updated_at
 		FROM workflow_tasks WHERE run_id=$1 AND task_id=$2 FOR UPDATE`,
@@ -436,6 +437,7 @@ func loadTask(ctx context.Context, tx pgx.Tx, runID, taskID string) (Task, error
 	err := row.Scan(
 		&task.ID, &task.RunID, &task.State, &task.Revision, &task.MaxAttempts,
 		&task.CurrentAttempt, &bindings.leaseID, &bindings.leaseOwner, &bindings.leaseExpiry,
+		&bindings.leaseFence,
 		&bindings.proposalURI, &bindings.proposalDigest,
 		&bindings.executionURI, &bindings.executionDigest,
 		&bindings.candidateCommit, &bindings.verificationURI, &bindings.verificationDigest,
@@ -460,6 +462,7 @@ func loadTask(ctx context.Context, tx pgx.Tx, runID, taskID string) (Task, error
 type taskRowBindings struct {
 	leaseID, leaseOwner                 *string
 	leaseExpiry                         *time.Time
+	leaseFence                          *int64
 	proposalURI, proposalDigest         *string
 	executionURI, executionDigest       *string
 	candidateCommit                     *string
@@ -495,14 +498,16 @@ func (b taskRowBindings) apply(task *Task) error {
 }
 
 func (b taskRowBindings) applyLease(task *Task) error {
-	if b.leaseID == nil && b.leaseOwner == nil && b.leaseExpiry == nil {
+	if b.leaseID == nil && b.leaseOwner == nil && b.leaseExpiry == nil && b.leaseFence == nil {
 		return nil
 	}
-	if b.leaseID == nil || b.leaseOwner == nil || b.leaseExpiry == nil {
+	if b.leaseID == nil || b.leaseOwner == nil || b.leaseExpiry == nil ||
+		b.leaseFence == nil || *b.leaseFence < 1 || *b.leaseFence > int64(^uint32(0)) {
 		return fmt.Errorf("%w: partial lease", ErrInvalid)
 	}
 	task.Lease = &LeaseRef{
 		ID: *b.leaseID, OwnerID: *b.leaseOwner, ExpiresAt: *b.leaseExpiry,
+		FencingToken: uint32(*b.leaseFence),
 	}
 	return nil
 }
@@ -511,14 +516,15 @@ func updateTask(ctx context.Context, tx pgx.Tx, task Task, expected uint64) erro
 	values := taskBindingValues(task)
 	tag, err := tx.Exec(ctx, `UPDATE workflow_tasks SET state=$3,revision=$4,
 		current_attempt=$5,lease_id=$6,lease_owner_id=$7,lease_expires_at=$8,
-		proposal_uri=$9,proposal_digest=$10,execution_uri=$11,execution_digest=$12,
-		candidate_commit=$13,verification_uri=$14,verification_digest=$15,
-		review_uri=$16,review_digest=$17,approval_uri=$18,approval_digest=$19,updated_at=$20
-		WHERE run_id=$1 AND task_id=$2 AND revision=$21`,
+		lease_fencing_token=$9,proposal_uri=$10,proposal_digest=$11,
+		execution_uri=$12,execution_digest=$13,candidate_commit=$14,
+		verification_uri=$15,verification_digest=$16,review_uri=$17,review_digest=$18,
+		approval_uri=$19,approval_digest=$20,updated_at=$21
+		WHERE run_id=$1 AND task_id=$2 AND revision=$22`,
 		task.RunID, task.ID, task.State, task.Revision, task.CurrentAttempt,
 		values[0], values[1], values[2], values[3], values[4], values[5], values[6],
 		values[7], values[8], values[9], values[10], values[11], values[12],
-		values[13], task.UpdatedAt, expected)
+		values[13], values[14], task.UpdatedAt, expected)
 	if err != nil {
 		return fmt.Errorf("update task: %w", err)
 	}
@@ -529,23 +535,24 @@ func updateTask(ctx context.Context, tx pgx.Tx, task Task, expected uint64) erro
 }
 
 func taskBindingValues(task Task) []any {
-	values := make([]any, 14)
+	values := make([]any, 15)
 	if task.Lease != nil {
-		values[0], values[1], values[2] = task.Lease.ID, task.Lease.OwnerID, task.Lease.ExpiresAt
+		values[0], values[1], values[2], values[3] =
+			task.Lease.ID, task.Lease.OwnerID, task.Lease.ExpiresAt, task.Lease.FencingToken
 	}
 	putArtifact := func(offset int, value *ArtifactRef) {
 		if value != nil {
 			values[offset], values[offset+1] = value.URI, value.Digest
 		}
 	}
-	putArtifact(3, task.Proposal)
-	putArtifact(5, task.Execution)
+	putArtifact(4, task.Proposal)
+	putArtifact(6, task.Execution)
 	if task.CandidateCommit != "" {
-		values[7] = task.CandidateCommit
+		values[8] = task.CandidateCommit
 	}
-	putArtifact(8, task.Verification)
-	putArtifact(10, task.Review)
-	putArtifact(12, task.Approval)
+	putArtifact(9, task.Verification)
+	putArtifact(11, task.Review)
+	putArtifact(13, task.Approval)
 	return values
 }
 
@@ -862,14 +869,14 @@ func insertTask(ctx context.Context, tx pgx.Tx, task Task) error {
 	values := taskBindingValues(task)
 	_, err := tx.Exec(ctx, `INSERT INTO workflow_tasks
 		(task_id,run_id,state,revision,max_attempts,current_attempt,
-		 lease_id,lease_owner_id,lease_expires_at,proposal_uri,proposal_digest,
+		 lease_id,lease_owner_id,lease_expires_at,lease_fencing_token,proposal_uri,proposal_digest,
 		 execution_uri,execution_digest,candidate_commit,verification_uri,verification_digest,
 		 review_uri,review_digest,approval_uri,approval_digest,created_at,updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
 		task.ID, task.RunID, task.State, task.Revision, task.MaxAttempts,
 		task.CurrentAttempt, values[0], values[1], values[2], values[3], values[4],
 		values[5], values[6], values[7], values[8], values[9], values[10], values[11],
-		values[12], values[13], task.CreatedAt, task.UpdatedAt)
+		values[12], values[13], values[14], task.CreatedAt, task.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert task: %w", err)
 	}
