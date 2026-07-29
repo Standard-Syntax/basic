@@ -115,16 +115,8 @@ func (s *Service) ProposeImplementation(
 	if err != nil {
 		return Outcome{}, fmt.Errorf("serialize implementation request: %w", err)
 	}
-	if request == nil || request.GetEnvelope() == nil ||
-		request.GetEnvelope().GetRequestId() == "" ||
-		request.GetEnvelope().GetAttempt() == 0 {
-		_, validationErr := contracts.MapImplementationRequestAt(request, started)
-		if _, ok := contracts.ValidationCode(validationErr); ok {
-			return Outcome{
-				Rejection: proposalRejection(request, validationErr, started),
-			}, nil
-		}
-		return Outcome{}, fmt.Errorf("validate implementation request: %w", validationErr)
+	if outcome, err := preflightRequest(request, started); outcome != nil || err != nil {
+		return valueOrEmptyOutcome(outcome), err
 	}
 	requestArtifact, err := s.putArtifact(ctx, requestBytes)
 	if err != nil {
@@ -151,42 +143,102 @@ func (s *Service) ProposeImplementation(
 		return s.replayOutcome(ctx, record)
 	}
 
-	mappedRequest, err := contracts.MapImplementationRequestAt(request, started)
-	if err != nil {
-		if _, ok := contracts.ValidationCode(err); ok {
-			rejection := proposalRejection(request, err, started)
-			record, completeErr := handle.Complete(ctx, InvocationCompletion{
-				Provider: "gateway", Model: "pre-adapter", CompletedAt: started,
-				Status: StatusRejected, Rejection: rejection,
-			})
-			if completeErr != nil {
-				return Outcome{}, fmt.Errorf(
-					"record implementation rejection: %w", completeErr,
-				)
-			}
-			return outcomeFromRecord(record, nil, false), nil
-		}
-		return Outcome{}, fmt.Errorf("validate implementation request: %w", err)
-	}
-	resolved, err := s.manifests.ResolveManifest(
-		ctx, mappedRequest.Envelope.AgentManifestDigest,
+	mappedRequest, outcome, err := validateRecordedRequest(
+		ctx, handle, request, started,
 	)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("resolve implementation manifest: %w", err)
+		return Outcome{}, err
 	}
-	if resolved.Digest != mappedRequest.Envelope.AgentManifestDigest ||
-		resolved.Manifest.Stage != implementationStage ||
-		resolved.Manifest.Output.Schema != implementationOutput {
-		return Outcome{}, errors.New("resolved manifest does not match implementation request")
+	if outcome != nil {
+		return *outcome, nil
 	}
-	adapterRequest := proto.Clone(request).(*reasoningv1.ImplementationRequest)
-	result, err := s.adapter.ProposeImplementation(ctx, resolved.Manifest, adapterRequest)
+	result, err := s.invokeImplementation(ctx, request, mappedRequest)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("propose implementation: %w", err)
+		return Outcome{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return Outcome{}, err
 	}
+	return s.finalizeProposal(ctx, handle, request, mappedRequest, result)
+}
+
+func preflightRequest(
+	request *reasoningv1.ImplementationRequest, started time.Time,
+) (*Outcome, error) {
+	if request != nil && request.GetEnvelope() != nil &&
+		request.GetEnvelope().GetRequestId() != "" &&
+		request.GetEnvelope().GetAttempt() != 0 {
+		return nil, nil
+	}
+	_, err := contracts.MapImplementationRequestAt(request, started)
+	if _, ok := contracts.ValidationCode(err); ok {
+		return &Outcome{Rejection: proposalRejection(request, err, started)}, nil
+	}
+	return nil, fmt.Errorf("validate implementation request: %w", err)
+}
+
+func validateRecordedRequest(
+	ctx context.Context,
+	handle InvocationHandle,
+	request *reasoningv1.ImplementationRequest,
+	started time.Time,
+) (contracts.ImplementationRequest, *Outcome, error) {
+	mapped, err := contracts.MapImplementationRequestAt(request, started)
+	if err == nil {
+		return mapped, nil, nil
+	}
+	if _, ok := contracts.ValidationCode(err); !ok {
+		return contracts.ImplementationRequest{}, nil, fmt.Errorf(
+			"validate implementation request: %w", err,
+		)
+	}
+	rejection := proposalRejection(request, err, started)
+	record, completeErr := handle.Complete(ctx, InvocationCompletion{
+		Provider: "gateway", Model: "pre-adapter", CompletedAt: started,
+		Status: StatusRejected, Rejection: rejection,
+	})
+	if completeErr != nil {
+		return contracts.ImplementationRequest{}, nil, fmt.Errorf(
+			"record implementation rejection: %w", completeErr,
+		)
+	}
+	outcome := outcomeFromRecord(record, nil, false)
+	return contracts.ImplementationRequest{}, &outcome, nil
+}
+
+func (s *Service) invokeImplementation(
+	ctx context.Context,
+	request *reasoningv1.ImplementationRequest,
+	mapped contracts.ImplementationRequest,
+) (AdapterResult, error) {
+	resolved, err := s.manifests.ResolveManifest(
+		ctx, mapped.Envelope.AgentManifestDigest,
+	)
+	if err != nil {
+		return AdapterResult{}, fmt.Errorf("resolve implementation manifest: %w", err)
+	}
+	if resolved.Digest != mapped.Envelope.AgentManifestDigest ||
+		resolved.Manifest.Stage != implementationStage ||
+		resolved.Manifest.Output.Schema != implementationOutput {
+		return AdapterResult{}, errors.New(
+			"resolved manifest does not match implementation request",
+		)
+	}
+	adapterRequest := proto.Clone(request).(*reasoningv1.ImplementationRequest)
+	result, err := s.adapter.ProposeImplementation(ctx, resolved.Manifest, adapterRequest)
+	if err != nil {
+		return AdapterResult{}, fmt.Errorf("propose implementation: %w", err)
+	}
+	return result, nil
+}
+
+func (s *Service) finalizeProposal(
+	ctx context.Context,
+	handle InvocationHandle,
+	request *reasoningv1.ImplementationRequest,
+	mapped contracts.ImplementationRequest,
+	result AdapterResult,
+) (Outcome, error) {
 	completed := s.clock.Now().UTC()
 	proposalBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Proposal)
 	if err != nil {
@@ -196,7 +248,7 @@ func (s *Service) ProposeImplementation(
 	if err != nil {
 		return Outcome{}, fmt.Errorf("store implementation proposal: %w", err)
 	}
-	if _, err := contracts.MapImplementationProposal(result.Proposal, mappedRequest); err != nil {
+	if _, err := contracts.MapImplementationProposal(result.Proposal, mapped); err != nil {
 		if _, ok := contracts.ValidationCode(err); ok {
 			rejection := proposalRejection(request, err, completed)
 			record, completeErr := handle.Complete(ctx, InvocationCompletion{
@@ -223,6 +275,13 @@ func (s *Service) ProposeImplementation(
 		return Outcome{}, fmt.Errorf("record implementation proposal: %w", err)
 	}
 	return outcomeFromRecord(record, result.Proposal, false), nil
+}
+
+func valueOrEmptyOutcome(outcome *Outcome) Outcome {
+	if outcome == nil {
+		return Outcome{}
+	}
+	return *outcome
 }
 
 func (s *Service) putArtifact(
