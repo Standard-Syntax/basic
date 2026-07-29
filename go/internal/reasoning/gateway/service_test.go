@@ -540,71 +540,70 @@ func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
 	}
 }
 
-func TestGatewayConcurrentReplayAndConflict(t *testing.T) {
-	t.Run("identical", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		const calls = 12
-		outcomes := make(chan Outcome, calls)
-		errs := make(chan error, calls)
-		request := gatewayRequest(t)
-		for range calls {
-			go func() {
-				outcome, err := service.ProposeImplementation(
-					context.Background(),
-					proto.Clone(request).(*reasoningv1.ImplementationRequest),
-				)
-				outcomes <- outcome
-				errs <- err
-			}()
-		}
-		replays := 0
-		for range calls {
-			if err := <-errs; err != nil {
-				t.Fatal(err)
-			}
-			if (<-outcomes).Replay {
-				replays++
-			}
-		}
-		if adapter.calls.Load() != 1 || replays != calls-1 {
-			t.Fatalf("adapter calls=%d replays=%d", adapter.calls.Load(), replays)
-		}
-	})
-	t.Run("conflicting", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		first := gatewayRequest(t)
-		second := proto.Clone(first).(*reasoningv1.ImplementationRequest)
-		replacement := "f"
-		if second.GetBaseCommit()[0] == 'f' {
-			replacement = "e"
-		}
-		second.BaseCommit = replacement + second.GetBaseCommit()[1:]
-		errs := make(chan error, 2)
-		for _, request := range []*reasoningv1.ImplementationRequest{first, second} {
-			go func() {
-				_, err := service.ProposeImplementation(context.Background(), request)
-				errs <- err
-			}()
-		}
-		var successes, conflicts int
-		for range 2 {
-			err := <-errs
-			switch {
-			case err == nil:
-				successes++
-			case errors.Is(err, ErrInvocationConflict):
-				conflicts++
-			default:
-				t.Fatalf("unexpected error: %v", err)
-			}
-		}
-		if successes != 1 || conflicts != 1 || adapter.calls.Load() != 1 {
-			t.Fatalf(
-				"successes=%d conflicts=%d adapter calls=%d",
-				successes, conflicts, adapter.calls.Load(),
+func TestGatewayConcurrentIdenticalRequestsReplay(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	const calls = 12
+	outcomes := make(chan Outcome, calls)
+	errs := make(chan error, calls)
+	request := gatewayRequest(t)
+	for range calls {
+		go func() {
+			outcome, err := service.ProposeImplementation(
+				context.Background(),
+				proto.Clone(request).(*reasoningv1.ImplementationRequest),
 			)
+			outcomes <- outcome
+			errs <- err
+		}()
+	}
+	replays := 0
+	for range calls {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
 		}
-	})
+		if (<-outcomes).Replay {
+			replays++
+		}
+	}
+	if adapter.calls.Load() != 1 || replays != calls-1 {
+		t.Fatalf("adapter calls=%d replays=%d", adapter.calls.Load(), replays)
+	}
+}
+
+func TestGatewayConcurrentConflictingRequests(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	first := gatewayRequest(t)
+	second := proto.Clone(first).(*reasoningv1.ImplementationRequest)
+	replacement := "f"
+	if second.GetBaseCommit()[0] == 'f' {
+		replacement = "e"
+	}
+	second.BaseCommit = replacement + second.GetBaseCommit()[1:]
+	errs := make(chan error, 2)
+	for _, request := range []*reasoningv1.ImplementationRequest{first, second} {
+		go func() {
+			_, err := service.ProposeImplementation(context.Background(), request)
+			errs <- err
+		}()
+	}
+	var successes, conflicts int
+	for range 2 {
+		err := <-errs
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrInvocationConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 || adapter.calls.Load() != 1 {
+		t.Fatalf(
+			"successes=%d conflicts=%d adapter calls=%d",
+			successes, conflicts, adapter.calls.Load(),
+		)
+	}
 }
 
 func TestExpiredRequestIsRejectedBeforeAdapter(t *testing.T) {
