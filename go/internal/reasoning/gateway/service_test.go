@@ -309,8 +309,8 @@ func TestMemoryInvocationRepositoryConflictAndRejectedReplay(t *testing.T) {
 		); !errors.Is(err, ErrInvocationConflict) {
 			t.Fatalf("conflicting request error = %v", err)
 		}
-		if adapter.calls != 1 {
-			t.Fatalf("adapter calls = %d; want 1", adapter.calls)
+		if adapter.calls.Load() != 1 {
+			t.Fatalf("adapter calls = %d; want 1", adapter.calls.Load())
 		}
 	})
 
@@ -333,8 +333,8 @@ func TestMemoryInvocationRepositoryConflictAndRejectedReplay(t *testing.T) {
 			!proto.Equal(first.Rejection, replay.Rejection) {
 			t.Fatalf("first=%+v replay=%+v", first, replay)
 		}
-		if adapter.calls != 1 {
-			t.Fatalf("adapter calls = %d; want 1", adapter.calls)
+		if adapter.calls.Load() != 1 {
+			t.Fatalf("adapter calls = %d; want 1", adapter.calls.Load())
 		}
 	})
 }
@@ -574,7 +574,11 @@ func TestGatewayConcurrentReplayAndConflict(t *testing.T) {
 		service, _, adapter := gatewayService(t, gatewayProposal(t))
 		first := gatewayRequest(t)
 		second := proto.Clone(first).(*reasoningv1.ImplementationRequest)
-		second.BaseCommit = "f" + second.GetBaseCommit()[1:]
+		replacement := "f"
+		if second.GetBaseCommit()[0] == 'f' {
+			replacement = "e"
+		}
+		second.BaseCommit = replacement + second.GetBaseCommit()[1:]
 		errs := make(chan error, 2)
 		for _, request := range []*reasoningv1.ImplementationRequest{first, second} {
 			go func() {

@@ -242,7 +242,11 @@ func TestPostgresConcurrentIdenticalAndConflictingRequests(t *testing.T) {
 		first := gatewayRequest(t)
 		first.Envelope.RequestId = "request-" + uuid.NewString()
 		second := proto.Clone(first).(*reasoningv1.ImplementationRequest)
-		second.BaseCommit = "f" + second.GetBaseCommit()[1:]
+		replacement := "f"
+		if second.GetBaseCommit()[0] == 'f' {
+			replacement = "e"
+		}
+		second.BaseCommit = replacement + second.GetBaseCommit()[1:]
 		errs := make(chan error, 2)
 		for _, request := range []*reasoningv1.ImplementationRequest{first, second} {
 			go func() {
