@@ -164,6 +164,85 @@ func bytesTrimSpace(value []byte) []byte {
 	return value
 }
 
+func executeConcurrently(t *testing.T, service *Service, request Request) []Result {
+	t.Helper()
+	var wait sync.WaitGroup
+	results := make([]Result, 2)
+	executionErrors := make([]error, 2)
+	for index := range results {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results[index], executionErrors[index] = service.Execute(t.Context(), request)
+		}()
+	}
+	wait.Wait()
+	for _, err := range executionErrors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return results
+}
+
+func requirePrimaryResult(t *testing.T, results []Result) Result {
+	t.Helper()
+	if results[0].Replay == results[1].Replay {
+		t.Fatalf("concurrent results did not converge to one replay: %#v", results)
+	}
+	if results[0].Replay {
+		return results[1]
+	}
+	return results[0]
+}
+
+func requireExecutionResult(
+	t *testing.T,
+	result Result,
+	repository, commit string,
+	proposal *reasoningv1.ImplementationProposal,
+	applicator *localApplicator,
+	workflowStore *fakeWorkflow,
+) {
+	t.Helper()
+	if applicator.calls.Load() != 1 || result.BaseCommit != commit ||
+		len(workflowStore.commands) != 2 || result.CandidateCommit == "" {
+		t.Fatalf("unexpected result: %#v calls=%d", result, applicator.calls.Load())
+	}
+	if len(result.ActualDiff) != len(proposal.GetChanges()) {
+		t.Fatalf("actual diff = %#v", result.ActualDiff)
+	}
+	if resolved := runGit(t, repository, "rev-parse", result.CandidateRef); resolved != result.CandidateCommit {
+		t.Fatalf("candidate ref = %s, want %s", resolved, result.CandidateCommit)
+	}
+}
+
+func requireReplayAndConflict(
+	t *testing.T,
+	service *Service,
+	request Request,
+	result Result,
+	applicator *localApplicator,
+) {
+	t.Helper()
+	repeated, err := service.Execute(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.CandidateCommit != result.CandidateCommit ||
+		!repeated.ReportArtifact.Equal(result.ReportArtifact) || !repeated.Replay {
+		t.Fatalf("execution was not deterministic: %#v %#v", result, repeated)
+	}
+	conflict := request
+	conflict.ExpectedTaskRevision++
+	if _, err := service.Execute(t.Context(), conflict); !errors.Is(err, ErrExecutionConflict) {
+		t.Fatalf("conflicting execution error = %v", err)
+	}
+	if applicator.calls.Load() != 1 {
+		t.Fatalf("conflicting execution reached applicator %d times", applicator.calls.Load())
+	}
+}
+
 func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 	request, proposal, proposalBody := executionFixture(t)
 	repository, worktrees, commit := fixtureRepository(t, request)
@@ -193,56 +272,12 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 		Implementation: request, Proposal: proposal,
 		ProposalArtifact: artifact, Lease: lease, ExpectedTaskRevision: 3,
 	}
-	var wait sync.WaitGroup
-	results := make([]Result, 2)
-	executionErrors := make([]error, 2)
-	for index := range results {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			results[index], executionErrors[index] = service.Execute(t.Context(), executionRequest)
-		}()
-	}
-	wait.Wait()
-	for _, executionErr := range executionErrors {
-		if executionErr != nil {
-			t.Fatal(executionErr)
-		}
-	}
-	if results[0].Replay == results[1].Replay {
-		t.Fatalf("concurrent results did not converge to one replay: %#v", results)
-	}
-	result := results[0]
-	if result.Replay {
-		result = results[1]
-	}
-	if applicator.calls.Load() != 1 || result.BaseCommit != commit ||
-		len(workflowStore.commands) != 2 || result.CandidateCommit == "" {
-		t.Fatalf("unexpected result: %#v calls=%d", result, applicator.calls.Load())
-	}
-	if len(result.ActualDiff) != len(proposal.GetChanges()) {
-		t.Fatalf("actual diff = %#v", result.ActualDiff)
-	}
-	if resolved := runGit(t, repository, "rev-parse", result.CandidateRef); resolved != result.CandidateCommit {
-		t.Fatalf("candidate ref = %s, want %s", resolved, result.CandidateCommit)
-	}
+	result := requirePrimaryResult(t, executeConcurrently(t, service, executionRequest))
+	requireExecutionResult(
+		t, result, repository, commit, proposal, applicator, workflowStore,
+	)
 	workflowStore.replay = true
-	repeated, err := service.Execute(t.Context(), executionRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repeated.CandidateCommit != result.CandidateCommit ||
-		!repeated.ReportArtifact.Equal(result.ReportArtifact) || !repeated.Replay {
-		t.Fatalf("execution was not deterministic: %#v %#v", result, repeated)
-	}
-	conflict := executionRequest
-	conflict.ExpectedTaskRevision++
-	if _, err := service.Execute(t.Context(), conflict); !errors.Is(err, ErrExecutionConflict) {
-		t.Fatalf("conflicting execution error = %v", err)
-	}
-	if applicator.calls.Load() != 1 {
-		t.Fatalf("conflicting execution reached applicator %d times", applicator.calls.Load())
-	}
+	requireReplayAndConflict(t, service, executionRequest, result, applicator)
 	if status := runGit(t, repository, "status", "--short"); status != "" {
 		t.Fatalf("source checkout changed: %s", status)
 	}
