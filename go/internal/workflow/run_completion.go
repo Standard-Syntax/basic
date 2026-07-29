@@ -80,6 +80,18 @@ func (RecordMerge) runCommand()                 {}
 func (c RecordMerge) Envelope() CommandEnvelope { return c.Meta }
 func (c RecordMerge) RunID() string             { return c.ID }
 
+type RecordDraftPullRequest struct {
+	Meta            CommandEnvelope `json:"meta"`
+	ID              string          `json:"run_id"`
+	CandidateCommit string          `json:"candidate_commit"`
+	Approval        ArtifactRef     `json:"approval"`
+	Publication     ArtifactRef     `json:"publication"`
+}
+
+func (RecordDraftPullRequest) runCommand()                 {}
+func (c RecordDraftPullRequest) Envelope() CommandEnvelope { return c.Meta }
+func (c RecordDraftPullRequest) RunID() string             { return c.ID }
+
 type FailRun struct {
 	Meta     CommandEnvelope `json:"meta"`
 	ID       string          `json:"run_id"`
@@ -117,6 +129,8 @@ func (r Run) applyCompletion(command RunCommand) (Run, []Event, error) {
 		transition, err = r.approve(command)
 	case RejectRun:
 		transition, err = r.reject(command)
+	case RecordDraftPullRequest:
+		transition, err = r.recordDraftPullRequest(command)
 	case RecordMerge:
 		transition, err = r.recordMerge(command)
 	case FailRun:
@@ -130,6 +144,34 @@ func (r Run) applyCompletion(command RunCommand) (Run, []Event, error) {
 		return Run{}, nil, err
 	}
 	return finishRunTransition(transition, command.Envelope())
+}
+
+func (r Run) recordDraftPullRequest(command RecordDraftPullRequest) (runTransition, error) {
+	if r.State != RunStateMergeReady {
+		return runTransition{}, ErrInvalidTransition
+	}
+	if command.Meta.Actor.Kind != ActorPublicationService {
+		return runTransition{}, ErrUnauthorized
+	}
+	if command.CandidateCommit != r.CandidateCommit {
+		return runTransition{}, fmt.Errorf("%w: run candidate commit", ErrInvalid)
+	}
+	if err := validateBoundArtifact(r.Approval, command.Approval, "run approval"); err != nil {
+		return runTransition{}, err
+	}
+	if err := command.Publication.Validate(); err != nil {
+		return runTransition{}, err
+	}
+	if r.Publication != nil && !r.Publication.Equal(command.Publication) {
+		return runTransition{}, fmt.Errorf("%w: run publication binding", ErrInvalid)
+	}
+	next := r
+	publication := command.Publication
+	next.Publication = &publication
+	return runTransition{
+		next: next, eventType: "DRAFT_PULL_REQUEST_CREATED",
+		payload: artifactPayload("publication", publication),
+	}, nil
 }
 
 func (r Run) start(command StartRun) (runTransition, error) {

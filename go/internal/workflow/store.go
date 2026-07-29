@@ -766,6 +766,7 @@ type runLifecycleBindings struct {
 	Verification    *ArtifactRef `json:"verification,omitempty"`
 	Review          *ArtifactRef `json:"review,omitempty"`
 	Approval        *ArtifactRef `json:"approval,omitempty"`
+	Publication     *ArtifactRef `json:"publication,omitempty"`
 	Merge           *ArtifactRef `json:"merge,omitempty"`
 }
 
@@ -773,7 +774,7 @@ func encodeRunLifecycle(run Run) ([]byte, error) {
 	encoded, err := json.Marshal(runLifecycleBindings{
 		Execution: run.Execution, CandidateCommit: run.CandidateCommit,
 		Verification: run.Verification, Review: run.Review,
-		Approval: run.Approval, Merge: run.Merge,
+		Approval: run.Approval, Publication: run.Publication, Merge: run.Merge,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode run lifecycle: %w", err)
@@ -788,7 +789,7 @@ func decodeRunLifecycle(encoded []byte, run *Run) error {
 	}
 	run.Execution, run.CandidateCommit = bindings.Execution, bindings.CandidateCommit
 	run.Verification, run.Review = bindings.Verification, bindings.Review
-	run.Approval, run.Merge = bindings.Approval, bindings.Merge
+	run.Approval, run.Publication, run.Merge = bindings.Approval, bindings.Publication, bindings.Merge
 	return nil
 }
 
@@ -806,7 +807,7 @@ func validateRunTaskGate(ctx context.Context, tx pgx.Tx, command RunCommand) err
 			return ErrInvalidTransition
 		}
 	case RecordRunExecution, RecordRunVerification, RecordRunReview,
-		ApproveRun, RejectRun, RecordMerge:
+		ApproveRun, RejectRun, RecordDraftPullRequest, RecordMerge:
 		var total, accepted int
 		err := tx.QueryRow(ctx, `SELECT count(*),
 			count(*) FILTER (WHERE state='ACCEPTED')

@@ -96,6 +96,51 @@ func TestRunCancellationRequiresHuman(t *testing.T) {
 	}
 }
 
+func TestRecordDraftPullRequestBindsPublicationWithoutLeavingMergeReady(t *testing.T) {
+	run := readyRun(t)
+	run.State = RunStateMergeReady
+	run.CandidateCommit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	approval := artifact("artifact://run-approvals/publication", 'a')
+	run.Approval = &approval
+	publication := artifact("artifact://publications/1", 'b')
+	command := RecordDraftPullRequest{
+		Meta: envelope(ActorPublicationService, run.Revision), ID: run.ID,
+		CandidateCommit: run.CandidateCommit, Approval: approval, Publication: publication,
+	}
+	next, events, err := run.Apply(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.State != RunStateMergeReady || next.Revision != run.Revision+1 ||
+		next.Publication == nil || !next.Publication.Equal(publication) ||
+		len(events) != 1 || events[0].Type != "DRAFT_PULL_REQUEST_CREATED" {
+		t.Fatalf("unexpected publication transition: %#v %#v", next, events)
+	}
+
+	for name, mutate := range map[string]func(*RecordDraftPullRequest){
+		"actor": func(value *RecordDraftPullRequest) {
+			value.Meta.Actor.Kind = ActorMergeService
+		},
+		"candidate": func(value *RecordDraftPullRequest) {
+			value.CandidateCommit = "1111111111111111111111111111111111111111"
+		},
+		"approval": func(value *RecordDraftPullRequest) {
+			value.Approval = artifact("artifact://run-approvals/other", 'c')
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := command
+			mutate(&invalid)
+			before := run
+			got, gotEvents, gotErr := run.Apply(invalid)
+			if gotErr == nil || !reflect.DeepEqual(run, before) ||
+				!reflect.DeepEqual(got, Run{}) || gotEvents != nil {
+				t.Fatalf("invalid publication leaked output: %#v %#v %v", got, gotEvents, gotErr)
+			}
+		})
+	}
+}
+
 func TestTerminalRunsRejectFailureAndCancellation(t *testing.T) {
 	for _, state := range []RunState{
 		RunStateMerged, RunStateRejected, RunStateFailed, RunStateCancelled,

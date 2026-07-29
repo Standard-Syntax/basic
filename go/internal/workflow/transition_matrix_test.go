@@ -128,6 +128,14 @@ func TestRunCommandStateMatrix(t *testing.T) {
 					Review: *r.Review, CandidateCommit: r.CandidateCommit, Reason: "reject",
 				}
 			}},
+		{"record draft pull request", setRunStates(RunStateMergeReady),
+			RunStateMergeReady, "DRAFT_PULL_REQUEST_CREATED", func(r Run) RunCommand {
+				return RecordDraftPullRequest{
+					Meta: envelope(ActorPublicationService, r.Revision), ID: r.ID,
+					Approval: *r.Approval, CandidateCommit: r.CandidateCommit,
+					Publication: artifact("artifact://matrix/publication", '0'),
+				}
+			}},
 		{"record merge", setRunStates(RunStateMergeReady),
 			RunStateMerged, "RUN_MERGED", func(r Run) RunCommand {
 				return RecordMerge{

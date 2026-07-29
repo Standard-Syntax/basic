@@ -246,6 +246,7 @@ func TestStoreFullLifecycleAndAppendOnlyEvents(t *testing.T) {
 	runVerification := artifact("artifact://run-verifications/integration", '2')
 	runReview := artifact("artifact://run-reviews/integration", '3')
 	runApproval := artifact("artifact://run-approvals/integration", '4')
+	publication := artifact("artifact://publications/integration", '6')
 	merge := artifact("artifact://merges/integration", '5')
 	runCommands := []RunCommand{
 		RecordRunExecution{
@@ -264,8 +265,12 @@ func TestStoreFullLifecycleAndAppendOnlyEvents(t *testing.T) {
 			Meta: uniqueEnvelope(ActorHuman, executingRun.Revision+3), ID: runID,
 			CandidateCommit: commit, Review: runReview, Approval: runApproval,
 		},
+		RecordDraftPullRequest{
+			Meta: uniqueEnvelope(ActorPublicationService, executingRun.Revision+4), ID: runID,
+			CandidateCommit: commit, Approval: runApproval, Publication: publication,
+		},
 		RecordMerge{
-			Meta: uniqueEnvelope(ActorMergeService, executingRun.Revision+4), ID: runID,
+			Meta: uniqueEnvelope(ActorMergeService, executingRun.Revision+5), ID: runID,
 			CandidateCommit: commit, Approval: runApproval, Merge: merge,
 		},
 	}
@@ -337,11 +342,11 @@ func TestMigrationsAreRepeatableAndDigestTracked(t *testing.T) {
 	var count, invalidDigests int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*),
 		count(*) FILTER (WHERE digest !~ '^[a-f0-9]{64}$')
-		FROM schema_migrations WHERE version IN (1,2,3,4,5,8)`,
+		FROM schema_migrations WHERE version IN (1,2,3,4,5,8,14)`,
 	).Scan(&count, &invalidDigests); err != nil {
 		t.Fatal(err)
 	}
-	if count != 6 || invalidDigests != 0 {
+	if count != 7 || invalidDigests != 0 {
 		t.Fatalf("migration rows=%d invalid digests=%d", count, invalidDigests)
 	}
 }
