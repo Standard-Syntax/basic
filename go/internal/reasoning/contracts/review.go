@@ -210,7 +210,9 @@ func validateReviewRequestScope(value *reasoningv1.ReviewRequest) error {
 		)
 	}
 	_, actualPaths, _ := mapActualDiff(value)
-	if _, err := validateScopeReport(value.GetScopeReport(), actualPaths); err != nil {
+	if _, err := validateScopeReport(
+		value.GetScopeReport(), actualPaths, value.GetAuthorizedWritablePaths(),
+	); err != nil {
 		return validationFailure(
 			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
 			"request.scope_report", err.Error(),
@@ -300,7 +302,9 @@ func convertReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, erro
 	if err != nil {
 		return ReviewRequest{}, err
 	}
-	authorizedPaths, err := validateScopeReport(value.GetScopeReport(), actualPaths)
+	authorizedPaths, err := validateScopeReport(
+		value.GetScopeReport(), actualPaths, value.GetAuthorizedWritablePaths(),
+	)
 	if err != nil {
 		return ReviewRequest{}, err
 	}
@@ -365,7 +369,6 @@ func mapActualDiff(
 	for _, changed := range value.GetActualDiff() {
 		operation, ok := mapReviewFileOperation(changed.GetOperation())
 		if !validRepoPath(changed.GetPath()) || !ok ||
-			!pathWithin(changed.GetPath(), value.GetAuthorizedWritablePaths()) ||
 			!digestPattern.MatchString(changed.GetBeforeSha256()) ||
 			!digestPattern.MatchString(changed.GetAfterSha256()) {
 			return nil, nil, errors.New("invalid actual diff")
@@ -383,21 +386,34 @@ func mapActualDiff(
 }
 
 func validateScopeReport(
-	value *reasoningv1.ScopeReport, actualPaths map[string]struct{},
+	value *reasoningv1.ScopeReport,
+	actualPaths map[string]struct{},
+	authorizedWritablePaths []string,
 ) ([]string, error) {
 	authorizedPaths := value.GetAuthorizedChangedPaths()
-	if len(authorizedPaths) != len(actualPaths) {
+	unexpectedPaths := value.GetUnexpectedChangedPaths()
+	if len(authorizedPaths)+len(unexpectedPaths) != len(actualPaths) {
 		return nil, errors.New("scope report does not match actual diff")
 	}
 	seenAuthorized := make(map[string]struct{}, len(authorizedPaths))
 	for _, authorizedPath := range authorizedPaths {
-		if _, exists := actualPaths[authorizedPath]; !exists {
+		if _, exists := actualPaths[authorizedPath]; !exists ||
+			!pathWithin(authorizedPath, authorizedWritablePaths) {
 			return nil, errors.New("scope report does not match actual diff")
 		}
 		if _, exists := seenAuthorized[authorizedPath]; exists {
 			return nil, errors.New("scope report contains duplicate path")
 		}
 		seenAuthorized[authorizedPath] = struct{}{}
+	}
+	for _, unexpectedPath := range unexpectedPaths {
+		if _, exists := actualPaths[unexpectedPath]; !exists {
+			return nil, errors.New("scope report does not match actual diff")
+		}
+		if _, exists := seenAuthorized[unexpectedPath]; exists {
+			return nil, errors.New("scope report contains duplicate path")
+		}
+		seenAuthorized[unexpectedPath] = struct{}{}
 	}
 	return authorizedPaths, nil
 }
