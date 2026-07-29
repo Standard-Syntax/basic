@@ -230,6 +230,32 @@ func (l *Ledger) Retry(
 	return nil
 }
 
+func (l *Ledger) Fail(
+	ctx context.Context, jobID, owner string, fence uint64, failure workflow.ArtifactRef, now time.Time,
+) error {
+	if err := failure.Validate(); err != nil {
+		return err
+	}
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs SET state='FAILED',
+		failure_uri=$4,failure_digest=$5,claim_owner=NULL,claim_expires_at=NULL,updated_at=$6
+		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
+		jobID, owner, fence, failure.URI, failure.Digest, now.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return l.classifyJobUpdate(ctx, jobID)
+	}
+	return nil
+}
+
+func (l *Ledger) CancelRun(ctx context.Context, runID string, now time.Time) error {
+	_, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs SET state='CANCELLED',
+		claim_owner=NULL,claim_expires_at=NULL,updated_at=$2
+		WHERE run_id=$1 AND state IN ('READY','RETRY','CLAIMED')`, runID, now.UTC())
+	return err
+}
+
 func (l *Ledger) classifyJobUpdate(ctx context.Context, jobID string) error {
 	var state string
 	err := l.pool.QueryRow(ctx, `SELECT state FROM runtime_stage_jobs WHERE job_id=$1`, jobID).Scan(&state)
