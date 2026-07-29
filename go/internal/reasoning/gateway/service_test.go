@@ -284,6 +284,54 @@ func requireFakeInvocationMetadata(
 	}
 }
 
+func TestMemoryInvocationRepositoryConflictAndRejectedReplay(t *testing.T) {
+	t.Run("conflicting request bytes", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		request := gatewayRequest(t)
+		if _, err := service.ProposeImplementation(t.Context(), request); err != nil {
+			t.Fatal(err)
+		}
+		conflict := proto.Clone(request).(*reasoningv1.ImplementationRequest)
+		replacement := "f"
+		if conflict.GetBaseCommit()[0] == 'f' {
+			replacement = "e"
+		}
+		conflict.BaseCommit = replacement + conflict.GetBaseCommit()[1:]
+		if _, err := service.ProposeImplementation(
+			t.Context(), conflict,
+		); !errors.Is(err, ErrInvocationConflict) {
+			t.Fatalf("conflicting request error = %v", err)
+		}
+		if adapter.calls != 1 {
+			t.Fatalf("adapter calls = %d; want 1", adapter.calls)
+		}
+	})
+
+	t.Run("rejected proposal", func(t *testing.T) {
+		proposal := gatewayProposal(t)
+		proposal.Summary = ""
+		service, _, adapter := gatewayService(t, proposal)
+		request := gatewayRequest(t)
+		first, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replay, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first.Replay || !replay.Replay ||
+			first.Rejection.GetCode() !=
+				reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+			!proto.Equal(first.Rejection, replay.Rejection) {
+			t.Fatalf("first=%+v replay=%+v", first, replay)
+		}
+		if adapter.calls != 1 {
+			t.Fatalf("adapter calls = %d; want 1", adapter.calls)
+		}
+	})
+}
+
 func TestPolicyFailuresReturnStructuredRejections(t *testing.T) {
 	t.Run("invalid request authority", func(t *testing.T) {
 		service, resolver, adapter := gatewayService(t, gatewayProposal(t))

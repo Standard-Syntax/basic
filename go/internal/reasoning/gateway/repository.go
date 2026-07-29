@@ -40,39 +40,64 @@ func NewPostgresInvocationRepository(
 func (r *PostgresInvocationRepository) Begin(
 	ctx context.Context, start InvocationStart,
 ) (InvocationHandle, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin reasoning invocation: %w", err)
-	}
-	handle := &postgresInvocationHandle{tx: tx, start: start}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(
-		hashtextextended($1, 557047220213918512))`, start.RequestID); err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, fmt.Errorf("lock reasoning request: %w", err)
-	}
-	record, found, err := readInvocation(ctx, tx, start.RequestID)
-	if err != nil {
-		_ = tx.Rollback(ctx)
-		return nil, err
-	}
-	if found {
-		if record.RequestArtifact.SHA256 != start.RequestArtifact.SHA256 {
-			_ = tx.Rollback(ctx)
+	for {
+		result, err := r.pool.Exec(ctx, `INSERT INTO reasoning_invocations (
+			request_id,request_artifact_uri,request_digest,run_id,task_id,stage,attempt,
+			agent_manifest_digest,started_at,input_tokens,output_tokens,
+			provider_requests,state
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,0,0,'in_progress')
+		ON CONFLICT (request_id) DO NOTHING`,
+			start.RequestID, start.RequestArtifact.URI, start.RequestArtifact.SHA256,
+			start.RunID, start.TaskID, start.Stage, start.Attempt,
+			start.AgentManifestDigest, start.StartedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("reserve reasoning invocation: %w", err)
+		}
+		if result.RowsAffected() == 1 {
+			return &postgresInvocationHandle{
+				repository: r, start: start, active: true,
+			}, nil
+		}
+
+		var requestDigest, state string
+		if err := r.pool.QueryRow(ctx, `SELECT request_digest,state
+			FROM reasoning_invocations WHERE request_id=$1`,
+			start.RequestID,
+		).Scan(&requestDigest, &state); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, fmt.Errorf("read reasoning reservation: %w", err)
+		}
+		if requestDigest != start.RequestArtifact.SHA256 {
 			return nil, ErrInvocationConflict
 		}
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("commit reasoning replay: %w", err)
+		if state != "in_progress" {
+			record, found, err := readInvocation(ctx, r.pool, start.RequestID)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				continue
+			}
+			return &postgresInvocationHandle{replay: &record}, nil
 		}
-		handle.tx = nil
-		handle.replay = &record
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
-	return handle, nil
 }
 
 type postgresInvocationHandle struct {
-	tx     pgx.Tx
-	start  InvocationStart
-	replay *InvocationRecord
+	repository *PostgresInvocationRepository
+	start      InvocationStart
+	replay     *InvocationRecord
+	active     bool
 }
 
 func (h *postgresInvocationHandle) Replay() (InvocationRecord, bool) {
@@ -85,7 +110,7 @@ func (h *postgresInvocationHandle) Replay() (InvocationRecord, bool) {
 func (h *postgresInvocationHandle) Complete(
 	ctx context.Context, completion InvocationCompletion,
 ) (InvocationRecord, error) {
-	if h.tx == nil || h.replay != nil {
+	if !h.active || h.repository == nil || h.replay != nil {
 		return InvocationRecord{}, ErrInvocationState
 	}
 	details, code, summary, retryable, rejectionTime, err := rejectionColumns(
@@ -102,46 +127,54 @@ func (h *postgresInvocationHandle) Complete(
 		proposalURI = &completion.ProposalArtifact.URI
 		proposalDigest = &completion.ProposalArtifact.SHA256
 	}
-	_, err = h.tx.Exec(ctx, `INSERT INTO reasoning_invocations (
-		request_id,request_artifact_uri,request_digest,run_id,task_id,stage,attempt,
-		agent_manifest_digest,proposal_artifact_uri,proposal_digest,provider,model,
-		started_at,completed_at,input_tokens,output_tokens,provider_requests,
-		final_status,rejection_code,rejection_summary,rejection_details,
-		rejection_retryable,rejection_timestamp
-	) VALUES (
-		$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-		$19,$20,$21,$22,$23
-	)`,
-		h.start.RequestID, h.start.RequestArtifact.URI, h.start.RequestArtifact.SHA256,
-		h.start.RunID, h.start.TaskID, h.start.Stage, h.start.Attempt,
-		h.start.AgentManifestDigest, proposalURI, proposalDigest,
-		completion.Provider, completion.Model, h.start.StartedAt, completion.CompletedAt,
+	tx, err := h.repository.pool.Begin(ctx)
+	if err != nil {
+		return InvocationRecord{}, fmt.Errorf("begin reasoning completion: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result, err := tx.Exec(ctx, `UPDATE reasoning_invocations SET
+		proposal_artifact_uri=$3,proposal_digest=$4,provider=$5,model=$6,
+		completed_at=$7,input_tokens=$8,output_tokens=$9,provider_requests=$10,
+		state='completed',final_status=$11,rejection_code=$12,rejection_summary=$13,
+		rejection_details=$14,rejection_retryable=$15,rejection_timestamp=$16
+		WHERE request_id=$1 AND request_digest=$2 AND state='in_progress'`,
+		h.start.RequestID, h.start.RequestArtifact.SHA256, proposalURI, proposalDigest,
+		completion.Provider, completion.Model, completion.CompletedAt,
 		completion.Usage.InputTokens, completion.Usage.OutputTokens,
 		completion.Usage.ProviderRequests, completion.Status, code, summary, details,
 		retryable, rejectionTime,
 	)
 	if err != nil {
-		return InvocationRecord{}, fmt.Errorf("insert reasoning invocation: %w", err)
+		return InvocationRecord{}, fmt.Errorf("finalize reasoning invocation: %w", err)
 	}
-	if err := h.tx.Commit(ctx); err != nil {
+	if result.RowsAffected() != 1 {
+		return InvocationRecord{}, ErrInvocationState
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return InvocationRecord{}, fmt.Errorf("commit reasoning invocation: %w", err)
 	}
-	h.tx = nil
+	h.active = false
 	return InvocationRecord{
 		InvocationStart: h.start, InvocationCompletion: completion,
 	}, nil
 }
 
 func (h *postgresInvocationHandle) Rollback(ctx context.Context) error {
-	if h.tx == nil {
+	if !h.active || h.repository == nil {
 		return nil
 	}
-	err := h.tx.Rollback(ctx)
-	h.tx = nil
-	if errors.Is(err, pgx.ErrTxClosed) {
-		return nil
+	result, err := h.repository.pool.Exec(ctx, `DELETE FROM reasoning_invocations
+		WHERE request_id=$1 AND request_digest=$2 AND state='in_progress'`,
+		h.start.RequestID, h.start.RequestArtifact.SHA256,
+	)
+	if err != nil {
+		return fmt.Errorf("release reasoning invocation: %w", err)
 	}
-	return err
+	if result.RowsAffected() != 1 {
+		return ErrInvocationState
+	}
+	h.active = false
+	return nil
 }
 
 func rejectionColumns(
@@ -166,7 +199,7 @@ func rejectionColumns(
 }
 
 func readInvocation(
-	ctx context.Context, tx pgx.Tx, requestID string,
+	ctx context.Context, pool *pgxpool.Pool, requestID string,
 ) (InvocationRecord, bool, error) {
 	var record InvocationRecord
 	var proposalURI, proposalDigest *string
@@ -178,7 +211,7 @@ func readInvocation(
 	var rejectionDetails []byte
 	var rejectionRetryable *bool
 	var rejectionTimestamp *time.Time
-	err := tx.QueryRow(ctx, `SELECT
+	err := pool.QueryRow(ctx, `SELECT
 		request_id,request_artifact_uri,request_digest,run_id,task_id,stage,attempt,
 		agent_manifest_digest,proposal_artifact_uri,proposal_digest,provider,model,
 		started_at,completed_at,input_tokens,output_tokens,provider_requests,

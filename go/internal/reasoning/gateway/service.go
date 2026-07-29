@@ -20,6 +20,7 @@ import (
 const (
 	implementationStage  = "implementation"
 	implementationOutput = "implementation_proposal.v1"
+	rollbackTimeout      = 5 * time.Second
 )
 
 type Clock interface {
@@ -139,7 +140,13 @@ func (s *Service) ProposeImplementation(
 	if err != nil {
 		return Outcome{}, fmt.Errorf("begin reasoning invocation: %w", err)
 	}
-	defer func() { _ = handle.Rollback(context.Background()) }()
+	defer func() {
+		rollbackContext, cancel := context.WithTimeout(
+			context.Background(), rollbackTimeout,
+		)
+		defer cancel()
+		_ = handle.Rollback(rollbackContext)
+	}()
 	if record, ok := handle.Replay(); ok {
 		return s.replayOutcome(ctx, record)
 	}

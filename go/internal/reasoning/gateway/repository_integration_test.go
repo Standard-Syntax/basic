@@ -97,7 +97,11 @@ func TestPostgresInvocationReplayConflictAndImmutability(t *testing.T) {
 	}
 
 	conflict := proto.Clone(request).(*reasoningv1.ImplementationRequest)
-	conflict.BaseCommit = "f" + conflict.GetBaseCommit()[1:]
+	replacement := "f"
+	if conflict.GetBaseCommit()[0] == 'f' {
+		replacement = "e"
+	}
+	conflict.BaseCommit = replacement + conflict.GetBaseCommit()[1:]
 	if _, err := service.ProposeImplementation(
 		t.Context(), conflict,
 	); !errors.Is(err, ErrInvocationConflict) {
@@ -116,6 +120,33 @@ func TestPostgresInvocationReplayConflictAndImmutability(t *testing.T) {
 		WHERE request_id=$1`, request.GetEnvelope().GetRequestId(),
 	); err == nil {
 		t.Fatal("completed invocation delete succeeded")
+	}
+}
+
+func TestPostgresInvocationReservationReleasesConnection(t *testing.T) {
+	service, pool, _ := integrationService(t)
+	request := gatewayRequest(t)
+	request.Envelope.RequestId = "request-" + uuid.NewString()
+	envelope := request.GetEnvelope()
+	handle, err := service.invocations.Begin(t.Context(), InvocationStart{
+		RequestID: envelope.GetRequestId(),
+		RequestArtifact: ArtifactReference{
+			URI:    "artifact://sha256/" + envelope.GetAgentManifestDigest(),
+			SHA256: envelope.GetAgentManifestDigest(),
+		},
+		RunID: envelope.GetRunId(), TaskID: envelope.TaskId,
+		Stage: implementationStage, Attempt: envelope.GetAttempt(),
+		AgentManifestDigest: envelope.GetAgentManifestDigest(),
+		StartedAt:           envelope.GetCreatedAt().AsTime(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired := pool.Stat().AcquiredConns(); acquired != 0 {
+		t.Fatalf("reservation retained %d database connections", acquired)
+	}
+	if err := handle.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
