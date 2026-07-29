@@ -1,0 +1,90 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 5 Fake Reasoning Gateway
+
+## Summary
+
+Implement an independent five-branch stack rooted at refreshed `main`. Phase 5 will execute only implementation reasoning through an in-process Go API. It will use a deterministic fake adapter, validate proposals into the five stable rejection codes, and persist immutable metadata while payload bodies flow through an artifact-store interface.
+
+No Protobuf or manifest-v1 changes, gRPC server, real model provider, workflow transition, repository mutation, command execution, or Python runtime behavior will be added.
+
+Current baseline: `make check` and `make integration-test` pass.
+
+## Stack Initialization
+
+Because the checkout is on a fully merged Phase 4 stack and local `main` is behind remote `main`, begin implementation with:
+
+```bash
+gh stack unstack --local
+git switch main
+git pull --ff-only origin main
+gh stack init --base main phase05/implementation-validation
+gh stack view --json
+```
+
+Create subsequent branches with `gh stack add <branch>` only after committing and validating the preceding slice. Do not push or create PRs unless separately requested.
+
+## Thin Vertical Slices
+
+1. `phase05/implementation-validation`
+   - Add typed validation failures that map deterministically to `SCHEMA_INVALID`, `REQUEST_MISMATCH`, `AUTHORITY_VIOLATION`, `SCOPE_VIOLATION`, and `REQUIRED_COVERAGE_MISSING`.
+   - Reorder implementation request/proposal validation to follow schema → identity and expiry → artifact/manifest binding → authority → scope → coverage → stage policy.
+   - Preserve scope-change requests as advisory data without applying them.
+   - Test every code and multi-fault cases proving the first applicable rejection wins.
+
+2. `phase05/fake-implementation`
+   - Add an application-layer gateway with small `ManifestResolver`, `ImplementationAdapter`, and clock interfaces.
+   - Resolve the exact registered manifest digest and require the closed `implementation`/`implementation_proposal.v1` pairing.
+   - Add a deterministic fake adapter configured with a proposal template; it binds request, task, attempt, manifest, and artifact identities without executing anything.
+   - Return an outcome containing exactly one validated implementation proposal or structured `ProposalRejection`. Infrastructure, cancellation, registry, or adapter failures remain Go errors rather than policy rejections.
+
+3. `phase05/invocation-ledger`
+   - Add content-addressed `ArtifactStore.Put/Get` ports; tests use an integrity-checking in-memory implementation. No production filesystem/object backend is introduced.
+   - Add PostgreSQL migration `0007` and a reasoning invocation repository storing request/proposal artifact URIs and digests, identity, stage, attempt, fake-adapter metadata, timestamps, usage counters, final status, and rejection metadata—never complete payload bodies.
+   - Make request IDs idempotent: identical replay returns the original immutable outcome without invoking the adapter again; different request bytes under the same ID fail with a conflict.
+   - Protect completed invocation rows from update/delete and extend `make integration-test` to include the reasoning package.
+
+4. `phase05/gateway-hardening`
+   - Add configurable request/proposal byte limits, with a conservative 1 MiB default, and enforce the single fake provider request against the request budget.
+   - Cover concurrent identical requests, conflicting reuse, artifact failures, adapter failures, database rollback, corrupt/missing artifacts, expired requests, migration replay, and migration-digest protection.
+   - Add PostgreSQL-backed acceptance tests for all five rejection paths and a valid replay.
+   - Prove rejected proposals do not change workflow tables or repository files. Immutable request/proposal artifacts and reasoning audit rows are the only permitted records.
+
+5. `phase05/completion-docs`
+   - Update architecture, reasoning contracts, security, resource analysis, development instructions, README, and the decision log.
+   - Add a Phase 5 completion report with stack, boundaries, commands, results, assumptions, deviations, and the Phase 6 recommendation.
+   - Keep `go/cmd/reasoning-gateway` buildable but non-networked.
+
+## Public Go Interfaces
+
+- Add `Service.ProposeImplementation(context.Context, *reasoningv1.ImplementationRequest) (Outcome, error)`.
+- `Outcome` exposes request/proposal artifact references, validated proposal or rejection, invocation metadata, and replay status.
+- Add narrow manifest-resolution, fake-adapter, artifact-store, and invocation-repository interfaces; no generic `any` interface.
+- Preserve the four existing consumer-owned reasoner interfaces and all published Protobuf, enum, field-number, JSON Schema, canonicalization, and digest contracts.
+
+## Verification
+
+Run on every branch:
+
+```bash
+make check
+git diff --check
+```
+
+Run from the persistence slice onward:
+
+```bash
+make integration-test
+```
+
+Final acceptance:
+
+```bash
+make generate-check
+make check
+make integration-test
+git diff --check
+gh stack view --json
+```
+
+The final tests must demonstrate a valid deterministic fake proposal, durable replay without a second adapter call, all five exact rejection codes and ordering, immutable invocation evidence, and absence of workflow or repository side effects.
