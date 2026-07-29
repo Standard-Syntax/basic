@@ -57,8 +57,10 @@ func TestGitPublisherRejectsCollisionMissingCandidateAndCancellation(t *testing.
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := publisher.Publish(ctx, "harness/cancelled", other); err == nil {
-		t.Fatal("cancelled publication succeeded")
+	if _, err := publisher.Publish(
+		ctx, "harness/cancelled", other,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled publication error = %v", err)
 	}
 }
 

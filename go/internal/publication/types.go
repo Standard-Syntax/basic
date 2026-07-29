@@ -88,7 +88,7 @@ type DraftPullRequestInput struct {
 }
 
 type ArtifactStore interface {
-	Get(context.Context, workflow.ArtifactRef) ([]byte, error)
+	Get(context.Context, workflow.ArtifactRef, int64) ([]byte, error)
 	Put(context.Context, []byte) (workflow.ArtifactRef, error)
 }
 

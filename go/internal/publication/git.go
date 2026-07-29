@@ -57,6 +57,9 @@ func (p *GitCommandPublisher) Publish(
 		return false, fmt.Errorf("%w: branch publication binding", ErrInvalidRequest)
 	}
 	if err := p.run(ctx, nil, "cat-file", "-e", candidate+"^{commit}"); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
 		return false, fmt.Errorf("%w: candidate commit is unavailable: %v", ErrInvalidRequest, err)
 	}
 	head, exists, err := p.BranchHead(ctx, branch)
@@ -124,6 +127,9 @@ func (p *GitCommandPublisher) run(
 	}
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		message := strings.TrimSpace(stderr.String())
 		if message == "" {
 			return err

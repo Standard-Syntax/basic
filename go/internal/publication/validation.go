@@ -174,7 +174,7 @@ func loadJSON[T any](
 func loadArtifact(
 	ctx context.Context, store ArtifactStore, ref workflow.ArtifactRef, limit int64,
 ) ([]byte, error) {
-	body, err := store.Get(ctx, ref)
+	body, err := store.Get(ctx, ref, limit)
 	if err != nil {
 		return nil, fmt.Errorf("load publication input: %w", err)
 	}
