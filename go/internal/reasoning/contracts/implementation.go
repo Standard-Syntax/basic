@@ -87,10 +87,10 @@ func MapImplementationRequestAt(
 	if err := validateImplementationRequest(value, now); err != nil {
 		return ImplementationRequest{}, err
 	}
-	return mapImplementationRequest(value)
+	return convertImplementationRequest(value)
 }
 
-func mapImplementationRequest(
+func convertImplementationRequest(
 	value *reasoningv1.ImplementationRequest,
 ) (ImplementationRequest, error) {
 	if value == nil {
@@ -398,10 +398,10 @@ func MapImplementationProposal(
 	if err := validateImplementationProposal(value, request); err != nil {
 		return ImplementationProposal{}, err
 	}
-	return mapImplementationProposal(value, request)
+	return convertImplementationProposal(value, request)
 }
 
-func mapImplementationProposal(
+func convertImplementationProposal(
 	value *reasoningv1.ImplementationProposal, request ImplementationRequest,
 ) (ImplementationProposal, error) {
 	if value == nil || value.GetIdentity() == nil {
