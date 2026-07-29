@@ -32,13 +32,15 @@ type InvocationStart struct {
 }
 
 type InvocationCompletion struct {
-	ProposalArtifact ArtifactReference
-	Provider         string
-	Model            string
-	CompletedAt      time.Time
-	Usage            Usage
-	Status           FinalStatus
-	Rejection        *reasoningv1.ProposalRejection
+	ProposalArtifact         ArtifactReference
+	ProviderResponseArtifact ArtifactReference
+	ProviderRequestID        string
+	Provider                 string
+	Model                    string
+	CompletedAt              time.Time
+	Usage                    Usage
+	Status                   FinalStatus
+	Rejection                *reasoningv1.ProposalRejection
 }
 
 type InvocationRecord struct {

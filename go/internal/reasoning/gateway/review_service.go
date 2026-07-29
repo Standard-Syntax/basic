@@ -25,19 +25,23 @@ type ReviewAdapter interface {
 }
 
 type ReviewAdapterResult struct {
-	Proposal *reasoningv1.ReviewProposal
-	Provider string
-	Model    string
-	Usage    Usage
+	Proposal          *reasoningv1.ReviewProposal
+	ProviderResponse  []byte
+	ProviderRequestID string
+	MalformedOutput   *MalformedOutput
+	Provider          string
+	Model             string
+	Usage             Usage
 }
 
 type ReviewOutcome struct {
-	RequestArtifact  ArtifactReference
-	ProposalArtifact ArtifactReference
-	Proposal         *reasoningv1.ReviewProposal
-	Rejection        *reasoningv1.ProposalRejection
-	Invocation       InvocationMetadata
-	Replay           bool
+	RequestArtifact          ArtifactReference
+	ProposalArtifact         ArtifactReference
+	ProviderResponseArtifact ArtifactReference
+	Proposal                 *reasoningv1.ReviewProposal
+	Rejection                *reasoningv1.ProposalRejection
+	Invocation               InvocationMetadata
+	Replay                   bool
 }
 
 type ReviewService struct {
@@ -219,11 +223,9 @@ func (s *ReviewService) invokeReviewAdapter(
 	if err != nil {
 		return ReviewAdapterResult{}, fmt.Errorf("propose review: %w", err)
 	}
-	if result.Usage.ProviderRequests != 1 ||
+	if result.Usage.ProviderRequests < 1 ||
 		result.Usage.ProviderRequests > mapped.Envelope.MaximumRequests {
-		return ReviewAdapterResult{}, errors.New(
-			"fake review adapter violated provider request budget",
-		)
+		return ReviewAdapterResult{}, errors.New("review adapter violated provider request budget")
 	}
 	return result, nil
 }
@@ -236,6 +238,33 @@ func (s *ReviewService) finalizeReview(
 	result ReviewAdapterResult,
 ) (ReviewOutcome, error) {
 	completed := s.clock.Now().UTC()
+	responseArtifact, err := s.putArtifact(ctx, result.ProviderResponse)
+	if err != nil {
+		return ReviewOutcome{}, fmt.Errorf("store review provider response: %w", err)
+	}
+	completion := InvocationCompletion{
+		ProviderResponseArtifact: responseArtifact,
+		ProviderRequestID:        result.ProviderRequestID,
+		Provider:                 result.Provider, Model: result.Model,
+		CompletedAt: completed, Usage: result.Usage,
+	}
+	if result.MalformedOutput != nil {
+		message := result.MalformedOutput.Message
+		if message == "" {
+			message = "provider output does not match the closed review schema"
+		}
+		failure := &contracts.ValidationFailure{
+			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field: "provider_response", Message: message,
+		}
+		completion.Status = StatusRejected
+		completion.Rejection = reviewRejection(request, failure, completed)
+		record, completeErr := handle.Complete(ctx, completion)
+		if completeErr != nil {
+			return ReviewOutcome{}, fmt.Errorf("record malformed review output: %w", completeErr)
+		}
+		return reviewOutcomeFromRecord(record, nil, false), nil
+	}
 	proposalBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Proposal)
 	if err != nil {
 		return ReviewOutcome{}, fmt.Errorf("serialize review proposal: %w", err)
@@ -260,20 +289,17 @@ func (s *ReviewService) finalizeReview(
 			return ReviewOutcome{}, fmt.Errorf("validate review proposal: %w", validationErr)
 		}
 		rejection := reviewRejection(request, validationErr, completed)
-		record, completeErr := handle.Complete(ctx, InvocationCompletion{
-			ProposalArtifact: proposalArtifact, Provider: result.Provider, Model: result.Model,
-			CompletedAt: completed, Usage: result.Usage, Status: StatusRejected,
-			Rejection: rejection,
-		})
+		completion.ProposalArtifact = proposalArtifact
+		completion.Status, completion.Rejection = StatusRejected, rejection
+		record, completeErr := handle.Complete(ctx, completion)
 		if completeErr != nil {
 			return ReviewOutcome{}, fmt.Errorf("record review rejection: %w", completeErr)
 		}
 		return reviewOutcomeFromRecord(record, nil, false), nil
 	}
-	record, err := handle.Complete(ctx, InvocationCompletion{
-		ProposalArtifact: proposalArtifact, Provider: result.Provider, Model: result.Model,
-		CompletedAt: completed, Usage: result.Usage, Status: StatusAccepted,
-	})
+	completion.ProposalArtifact = proposalArtifact
+	completion.Status = StatusAccepted
+	record, err := handle.Complete(ctx, completion)
 	if err != nil {
 		return ReviewOutcome{}, fmt.Errorf("record review proposal: %w", err)
 	}
@@ -283,6 +309,9 @@ func (s *ReviewService) finalizeReview(
 func (s *ReviewService) replayReview(
 	ctx context.Context, record InvocationRecord,
 ) (ReviewOutcome, error) {
+	if err := verifyReplayProviderResponse(ctx, s.artifacts, record); err != nil {
+		return ReviewOutcome{}, err
+	}
 	requestBytes, err := s.artifacts.Get(ctx, record.RequestArtifact)
 	if err != nil {
 		return ReviewOutcome{}, fmt.Errorf("load replay review request: %w", err)
@@ -338,9 +367,11 @@ func reviewOutcomeFromRecord(
 ) ReviewOutcome {
 	outcome := ReviewOutcome{
 		RequestArtifact: record.RequestArtifact, ProposalArtifact: record.ProposalArtifact,
-		Rejection: record.Rejection, Replay: replay,
+		ProviderResponseArtifact: record.ProviderResponseArtifact,
+		Rejection:                record.Rejection, Replay: replay,
 		Invocation: InvocationMetadata{
-			Provider: record.Provider, Model: record.Model, StartedAt: record.StartedAt,
+			ProviderRequestID: record.ProviderRequestID,
+			Provider:          record.Provider, Model: record.Model, StartedAt: record.StartedAt,
 			CompletedAt: record.CompletedAt, Usage: record.Usage,
 		},
 	}

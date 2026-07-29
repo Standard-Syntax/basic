@@ -53,8 +53,13 @@ func (a *FakeImplementationAdapter) ProposeImplementation(
 	proposal.ApprovedTaskId = request.GetApprovedTaskId()
 	proposal.ApprovedTaskDigest = request.GetApprovedTaskDigest()
 	proposal.ApprovedSpecificationDigest = request.GetApprovedSpecificationDigest()
+	response, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
+	if err != nil {
+		return AdapterResult{}, err
+	}
 	return AdapterResult{
-		Proposal: proposal, Provider: FakeProvider, Model: a.model, Usage: a.usage,
+		Proposal: proposal, ProviderResponse: response,
+		Provider: FakeProvider, Model: a.model, Usage: a.usage,
 	}, nil
 }
 

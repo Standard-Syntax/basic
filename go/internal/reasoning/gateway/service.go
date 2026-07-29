@@ -59,18 +59,29 @@ type Usage struct {
 }
 
 type AdapterResult struct {
-	Proposal *reasoningv1.ImplementationProposal
-	Provider string
-	Model    string
-	Usage    Usage
+	Proposal          *reasoningv1.ImplementationProposal
+	ProviderResponse  []byte
+	ProviderRequestID string
+	MalformedOutput   *MalformedOutput
+	Provider          string
+	Model             string
+	Usage             Usage
+}
+
+// MalformedOutput is a deterministic provider response that could not be
+// projected into the closed stage schema. Adapters return transport and
+// provider failures as errors instead.
+type MalformedOutput struct {
+	Message string
 }
 
 type InvocationMetadata struct {
-	Provider    string
-	Model       string
-	StartedAt   time.Time
-	CompletedAt time.Time
-	Usage       Usage
+	ProviderRequestID string
+	Provider          string
+	Model             string
+	StartedAt         time.Time
+	CompletedAt       time.Time
+	Usage             Usage
 }
 
 type ArtifactReference struct {
@@ -79,12 +90,13 @@ type ArtifactReference struct {
 }
 
 type Outcome struct {
-	RequestArtifact  ArtifactReference
-	ProposalArtifact ArtifactReference
-	Proposal         *reasoningv1.ImplementationProposal
-	Rejection        *reasoningv1.ProposalRejection
-	Invocation       InvocationMetadata
-	Replay           bool
+	RequestArtifact          ArtifactReference
+	ProposalArtifact         ArtifactReference
+	ProviderResponseArtifact ArtifactReference
+	Proposal                 *reasoningv1.ImplementationProposal
+	Rejection                *reasoningv1.ProposalRejection
+	Invocation               InvocationMetadata
+	Replay                   bool
 }
 
 type Service struct {
@@ -267,11 +279,9 @@ func (s *Service) invokeImplementation(
 func validateProviderBudget(
 	result AdapterResult, request contracts.ImplementationRequest,
 ) error {
-	if result.Usage.ProviderRequests != 1 ||
+	if result.Usage.ProviderRequests < 1 ||
 		result.Usage.ProviderRequests > request.Envelope.MaximumRequests {
-		return errors.New(
-			"fake implementation adapter violated provider request budget",
-		)
+		return errors.New("implementation adapter violated provider request budget")
 	}
 	return nil
 }
@@ -284,6 +294,33 @@ func (s *Service) finalizeProposal(
 	result AdapterResult,
 ) (Outcome, error) {
 	completed := s.clock.Now().UTC()
+	responseArtifact, err := s.putArtifact(ctx, result.ProviderResponse)
+	if err != nil {
+		return Outcome{}, fmt.Errorf("store provider response: %w", err)
+	}
+	completion := InvocationCompletion{
+		ProviderResponseArtifact: responseArtifact,
+		ProviderRequestID:        result.ProviderRequestID,
+		Provider:                 result.Provider, Model: result.Model,
+		CompletedAt: completed, Usage: result.Usage,
+	}
+	if result.MalformedOutput != nil {
+		message := result.MalformedOutput.Message
+		if message == "" {
+			message = "provider output does not match the closed implementation schema"
+		}
+		failure := &contracts.ValidationFailure{
+			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field: "provider_response", Message: message,
+		}
+		completion.Status = StatusRejected
+		completion.Rejection = proposalRejection(request, failure, completed)
+		record, completeErr := handle.Complete(ctx, completion)
+		if completeErr != nil {
+			return Outcome{}, fmt.Errorf("record malformed implementation output: %w", completeErr)
+		}
+		return outcomeFromRecord(record, nil, false), nil
+	}
 	proposalBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(result.Proposal)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("serialize implementation proposal: %w", err)
@@ -294,11 +331,8 @@ func (s *Service) finalizeProposal(
 			Field: "proposal", Message: "serialized proposal exceeds byte limit",
 		}
 		rejection := proposalRejection(request, failure, completed)
-		record, completeErr := handle.Complete(ctx, InvocationCompletion{
-			Provider: result.Provider, Model: result.Model,
-			CompletedAt: completed, Usage: result.Usage,
-			Status: StatusRejected, Rejection: rejection,
-		})
+		completion.Status, completion.Rejection = StatusRejected, rejection
+		record, completeErr := handle.Complete(ctx, completion)
 		if completeErr != nil {
 			return Outcome{}, fmt.Errorf(
 				"record oversized implementation proposal: %w", completeErr,
@@ -313,12 +347,9 @@ func (s *Service) finalizeProposal(
 	if _, err := contracts.MapImplementationProposal(result.Proposal, mapped); err != nil {
 		if _, ok := contracts.ValidationCode(err); ok {
 			rejection := proposalRejection(request, err, completed)
-			record, completeErr := handle.Complete(ctx, InvocationCompletion{
-				ProposalArtifact: proposalArtifact,
-				Provider:         result.Provider, Model: result.Model,
-				CompletedAt: completed, Usage: result.Usage,
-				Status: StatusRejected, Rejection: rejection,
-			})
+			completion.ProposalArtifact = proposalArtifact
+			completion.Status, completion.Rejection = StatusRejected, rejection
+			record, completeErr := handle.Complete(ctx, completion)
 			if completeErr != nil {
 				return Outcome{}, fmt.Errorf(
 					"record implementation rejection: %w", completeErr,
@@ -328,11 +359,9 @@ func (s *Service) finalizeProposal(
 		}
 		return Outcome{}, fmt.Errorf("validate implementation proposal: %w", err)
 	}
-	record, err := handle.Complete(ctx, InvocationCompletion{
-		ProposalArtifact: proposalArtifact,
-		Provider:         result.Provider, Model: result.Model,
-		CompletedAt: completed, Usage: result.Usage, Status: StatusAccepted,
-	})
+	completion.ProposalArtifact = proposalArtifact
+	completion.Status = StatusAccepted
+	record, err := handle.Complete(ctx, completion)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("record implementation proposal: %w", err)
 	}
@@ -362,6 +391,9 @@ func (s *Service) putArtifact(
 func (s *Service) replayOutcome(
 	ctx context.Context, record InvocationRecord,
 ) (Outcome, error) {
+	if err := verifyReplayProviderResponse(ctx, s.artifacts, record); err != nil {
+		return Outcome{}, err
+	}
 	requestBytes, err := s.artifacts.Get(ctx, record.RequestArtifact)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load replay request artifact: %w", err)
@@ -399,17 +431,34 @@ func (s *Service) replayOutcome(
 	return outcomeFromRecord(record, proposal, true), nil
 }
 
+func verifyReplayProviderResponse(
+	ctx context.Context, artifacts ArtifactStore, record InvocationRecord,
+) error {
+	if record.ProviderResponseArtifact.URI == "" {
+		return nil
+	}
+	body, err := artifacts.Get(ctx, record.ProviderResponseArtifact)
+	if err != nil {
+		return fmt.Errorf("load replay provider response artifact: %w", err)
+	}
+	if err := verifyArtifact(record.ProviderResponseArtifact, body); err != nil {
+		return err
+	}
+	return nil
+}
+
 func outcomeFromRecord(
 	record InvocationRecord,
 	proposal *reasoningv1.ImplementationProposal,
 	replay bool,
 ) Outcome {
 	outcome := Outcome{
-		RequestArtifact:  record.RequestArtifact,
-		ProposalArtifact: record.ProposalArtifact,
-		Rejection:        record.Rejection,
+		RequestArtifact: record.RequestArtifact, ProposalArtifact: record.ProposalArtifact,
+		ProviderResponseArtifact: record.ProviderResponseArtifact,
+		Rejection:                record.Rejection,
 		Invocation: InvocationMetadata{
-			Provider: record.Provider, Model: record.Model,
+			ProviderRequestID: record.ProviderRequestID,
+			Provider:          record.Provider, Model: record.Model,
 			StartedAt: record.StartedAt, CompletedAt: record.CompletedAt,
 			Usage: record.Usage,
 		},

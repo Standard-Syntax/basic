@@ -85,6 +85,16 @@ type countingAdapter struct {
 	calls atomic.Int32
 }
 
+type implementationAdapterFunc func(
+	context.Context, manifest.Manifest, *reasoningv1.ImplementationRequest,
+) (AdapterResult, error)
+
+func (f implementationAdapterFunc) ProposeImplementation(
+	ctx context.Context, value manifest.Manifest, request *reasoningv1.ImplementationRequest,
+) (AdapterResult, error) {
+	return f(ctx, value, request)
+}
+
 type memoryArtifactStore struct {
 	mu      sync.Mutex
 	values  map[string][]byte
@@ -467,6 +477,63 @@ func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
 			t.Fatal("multi-request fake adapter configuration accepted")
 		}
 	})
+	t.Run("multiple requests within budget", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		request := gatewayRequest(t)
+		request.Envelope.Budget.MaximumProviderRequests = 2
+		original := adapter.inner
+		adapter.inner = implementationAdapterFunc(func(
+			ctx context.Context, value manifest.Manifest,
+			request *reasoningv1.ImplementationRequest,
+		) (AdapterResult, error) {
+			result, err := original.ProposeImplementation(ctx, value, request)
+			result.Usage.ProviderRequests = 2
+			return result, err
+		})
+		outcome, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil || outcome.Proposal == nil ||
+			outcome.Invocation.Usage.ProviderRequests != 2 {
+			t.Fatalf("outcome=%+v err=%v", outcome, err)
+		}
+	})
+}
+
+func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
+	service, resolver, adapter := gatewayService(t, gatewayProposal(t))
+	response := []byte(`{"unexpected":true}`)
+	adapter.inner = implementationAdapterFunc(func(
+		context.Context, manifest.Manifest, *reasoningv1.ImplementationRequest,
+	) (AdapterResult, error) {
+		return AdapterResult{
+			ProviderResponse: response,
+			MalformedOutput:  &MalformedOutput{Message: "unknown field unexpected"},
+			Provider:         "provider", Model: "model",
+			ProviderRequestID: "req_123", Usage: Usage{ProviderRequests: 1},
+		}, nil
+	})
+	request := gatewayRequest(t)
+	first, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Rejection.GetCode() != reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		first.ProviderResponseArtifact == (ArtifactReference{}) ||
+		first.Invocation.ProviderRequestID != "req_123" || !second.Replay ||
+		adapter.calls.Load() != 1 || resolver.calls.Load() != 1 {
+		t.Fatalf(
+			"first=%+v second=%+v adapter=%d resolver=%d",
+			first, second, adapter.calls.Load(), resolver.calls.Load(),
+		)
+	}
+	store := service.artifacts.(*memoryArtifactStore)
+	stored, err := store.Get(t.Context(), first.ProviderResponseArtifact)
+	if err != nil || string(stored) != string(response) {
+		t.Fatalf("stored=%q err=%v", stored, err)
+	}
 }
 
 func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {

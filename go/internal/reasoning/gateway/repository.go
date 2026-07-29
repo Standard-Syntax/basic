@@ -135,6 +135,16 @@ func (h *postgresInvocationHandle) Complete(
 		proposalURI = &completion.ProposalArtifact.URI
 		proposalDigest = &completion.ProposalArtifact.SHA256
 	}
+	var responseURI, responseDigest *string
+	if completion.ProviderResponseArtifact.URI != "" ||
+		completion.ProviderResponseArtifact.SHA256 != "" {
+		if completion.ProviderResponseArtifact.URI == "" ||
+			completion.ProviderResponseArtifact.SHA256 == "" {
+			return InvocationRecord{}, ErrInvocationState
+		}
+		responseURI = &completion.ProviderResponseArtifact.URI
+		responseDigest = &completion.ProviderResponseArtifact.SHA256
+	}
 	if err := h.fault(FaultBeforeInvocationInsert); err != nil {
 		return InvocationRecord{}, err
 	}
@@ -147,13 +157,16 @@ func (h *postgresInvocationHandle) Complete(
 		proposal_artifact_uri=$3,proposal_digest=$4,provider=$5,model=$6,
 		completed_at=$7,input_tokens=$8,output_tokens=$9,provider_requests=$10,
 		state='completed',final_status=$11,rejection_code=$12,rejection_summary=$13,
-		rejection_details=$14,rejection_retryable=$15,rejection_timestamp=$16
+		rejection_details=$14,rejection_retryable=$15,rejection_timestamp=$16,
+		provider_response_artifact_uri=$17,provider_response_digest=$18,
+		provider_request_id=$19
 		WHERE request_id=$1 AND request_digest=$2 AND state='in_progress'`,
 		h.start.RequestID, h.start.RequestArtifact.SHA256, proposalURI, proposalDigest,
 		completion.Provider, completion.Model, completion.CompletedAt,
 		completion.Usage.InputTokens, completion.Usage.OutputTokens,
 		completion.Usage.ProviderRequests, completion.Status, code, summary, details,
-		retryable, rejectionTime,
+		retryable, rejectionTime, responseURI, responseDigest,
+		nullableString(completion.ProviderRequestID),
 	)
 	if err != nil {
 		return InvocationRecord{}, fmt.Errorf("finalize reasoning invocation: %w", err)
@@ -224,6 +237,7 @@ func readInvocation(
 ) (InvocationRecord, bool, error) {
 	var record InvocationRecord
 	var proposalURI, proposalDigest *string
+	var responseURI, responseDigest, providerRequestID *string
 	var provider, model string
 	var taskIDPointer *string
 	var status string
@@ -237,7 +251,8 @@ func readInvocation(
 		agent_manifest_digest,proposal_artifact_uri,proposal_digest,provider,model,
 		started_at,completed_at,input_tokens,output_tokens,provider_requests,
 		final_status,rejection_code,rejection_summary,rejection_details,
-		rejection_retryable,rejection_timestamp
+		rejection_retryable,rejection_timestamp,provider_response_artifact_uri,
+		provider_response_digest,provider_request_id
 		FROM reasoning_invocations WHERE request_id=$1`, requestID,
 	).Scan(
 		&record.RequestID, &record.RequestArtifact.URI, &record.RequestArtifact.SHA256,
@@ -246,7 +261,7 @@ func readInvocation(
 		&record.StartedAt, &record.CompletedAt, &record.Usage.InputTokens,
 		&record.Usage.OutputTokens, &record.Usage.ProviderRequests, &status,
 		&rejectionCode, &rejectionSummary, &rejectionDetails, &rejectionRetryable,
-		&rejectionTimestamp,
+		&rejectionTimestamp, &responseURI, &responseDigest, &providerRequestID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return InvocationRecord{}, false, nil
@@ -263,6 +278,12 @@ func readInvocation(
 			URI: *proposalURI, SHA256: *proposalDigest,
 		}
 	}
+	if responseURI != nil && responseDigest != nil {
+		record.ProviderResponseArtifact = ArtifactReference{
+			URI: *responseURI, SHA256: *responseDigest,
+		}
+	}
+	record.ProviderRequestID = valueOrEmpty(providerRequestID)
 	if rejectionCode != nil {
 		var details []*reasoningv1.RejectionDetail
 		if err := json.Unmarshal(rejectionDetails, &details); err != nil {
@@ -293,4 +314,11 @@ func valueOrEmpty(value *string) string {
 
 func valueOrFalse(value *bool) bool {
 	return value != nil && *value
+}
+
+func nullableString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
