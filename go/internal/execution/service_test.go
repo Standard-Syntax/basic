@@ -86,7 +86,7 @@ func fixtureRepository(
 	t.Helper()
 	root := t.TempDir()
 	repository, worktrees = filepath.Join(root, "repository"), filepath.Join(root, "worktrees")
-	if err := os.Mkdir(repository, 0o755); err != nil {
+	if err := os.Mkdir(repository, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, repository, "init", "-q")
@@ -94,7 +94,7 @@ func fixtureRepository(
 	runGit(t, repository, "config", "user.email", "fixture@example.invalid")
 	for _, file := range request.GetRepositoryContext() {
 		target := filepath.Join(repository, filepath.FromSlash(file.GetPath()))
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(target, []byte(file.GetContent()), 0o644); err != nil {
@@ -102,7 +102,7 @@ func fixtureRepository(
 		}
 	}
 	obsolete := filepath.Join(repository, "go", "internal", "reasoning", "obsolete.go")
-	if err := os.MkdirAll(filepath.Dir(obsolete), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(obsolete), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(obsolete, []byte("package reasoning\n"), 0o644); err != nil {

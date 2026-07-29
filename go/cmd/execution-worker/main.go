@@ -37,10 +37,13 @@ func run(input io.Reader) error {
 		Changes []contracts.FileChange `json:"changes"`
 		Limits  execution.Limits       `json:"limits"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(input, execution.DefaultMaxTotalBytes+1<<20))
+	decoder := json.NewDecoder(io.LimitReader(input, execution.DefaultMaxTotalBytes*6+1<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		return fmt.Errorf("decode request: %w", err)
+	}
+	if err := validateRequest(request.Changes, request.Limits); err != nil {
+		return err
 	}
 	rootFD, err := unix.Open("/workspace", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -54,7 +57,7 @@ func run(input io.Reader) error {
 		}
 	}()
 	for _, change := range request.Changes {
-		item, err := prepare(rootFD, change)
+		item, err := prepare(rootFD, change, request.Limits.MaxFileBytes)
 		if err != nil {
 			return err
 		}
@@ -68,7 +71,36 @@ func run(input io.Reader) error {
 	return nil
 }
 
-func prepare(rootFD int, change contracts.FileChange) (preparedChange, error) {
+func validateRequest(changes []contracts.FileChange, limits execution.Limits) error {
+	if limits.MaxChangedFiles < 1 || limits.MaxFileBytes < 1 || limits.MaxTotalBytes < 1 ||
+		limits.MaxChangedFiles > execution.DefaultMaxChangedFiles ||
+		limits.MaxFileBytes > execution.DefaultMaxFileBytes ||
+		limits.MaxTotalBytes > execution.DefaultMaxTotalBytes {
+		return errors.New("invalid worker limits")
+	}
+	if len(changes) > limits.MaxChangedFiles {
+		return errors.New("too many changed files")
+	}
+	var total int64
+	for _, change := range changes {
+		if change.ReplacementContent == nil {
+			continue
+		}
+		size := int64(len(*change.ReplacementContent))
+		if size > limits.MaxFileBytes {
+			return errors.New("replacement exceeds per-file limit")
+		}
+		total += size
+		if total > limits.MaxTotalBytes {
+			return errors.New("replacement content exceeds total limit")
+		}
+	}
+	return nil
+}
+
+func prepare(
+	rootFD int, change contracts.FileChange, maxFileBytes int64,
+) (preparedChange, error) {
 	if change.Path == "" || path.IsAbs(change.Path) || path.Clean(change.Path) != change.Path ||
 		strings.HasPrefix(change.Path, "../") || strings.Contains(change.Path, `\`) {
 		return preparedChange{}, errors.New("unsafe change path")
@@ -115,11 +147,15 @@ func prepare(rootFD int, change contracts.FileChange) (preparedChange, error) {
 		return preparedChange{}, fmt.Errorf("open target: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), item.leaf)
-	body, readErr := io.ReadAll(io.LimitReader(file, execution.DefaultMaxFileBytes+1))
+	body, readErr := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
 	closeErr := file.Close()
 	if readErr != nil || closeErr != nil {
 		_ = unix.Close(dirFD)
 		return preparedChange{}, errors.New("read target")
+	}
+	if int64(len(body)) > maxFileBytes {
+		_ = unix.Close(dirFD)
+		return preparedChange{}, errors.New("target exceeds per-file limit")
 	}
 	sum := sha256.Sum256(body)
 	if hex.EncodeToString(sum[:]) != change.ExpectedOriginalSHA256 {
@@ -156,7 +192,7 @@ func apply(item preparedChange) error {
 		return fmt.Errorf("create replacement: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), temporary)
-	_, writeErr := io.WriteString(file, *item.change.ReplacementContent)
+	_, writeErr := file.WriteString(*item.change.ReplacementContent)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if writeErr != nil || syncErr != nil || closeErr != nil {

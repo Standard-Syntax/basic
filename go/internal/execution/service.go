@@ -137,6 +137,12 @@ func validateLimits(limits Limits) error {
 		limits.MaxTotalBytes < 1 || limits.Timeout <= 0 {
 		return errors.New("positive execution limits are required")
 	}
+	if limits.MaxChangedFiles > DefaultMaxChangedFiles ||
+		limits.MaxFileBytes > DefaultMaxFileBytes ||
+		limits.MaxTotalBytes > DefaultMaxTotalBytes ||
+		limits.Timeout > DefaultTimeout {
+		return errors.New("execution limits exceed service maximums")
+	}
 	return nil
 }
 

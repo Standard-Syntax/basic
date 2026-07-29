@@ -73,7 +73,7 @@ func materializeTree(ctx context.Context, repository, worktree, commit string) e
 		}
 		parent := filepath.ToSlash(filepath.Dir(path))
 		if parent != "." {
-			if err := root.MkdirAll(parent, 0o755); err != nil {
+			if err := root.MkdirAll(parent, 0o750); err != nil {
 				return fmt.Errorf("create tracked parent %q: %w", parent, err)
 			}
 		}
@@ -115,9 +115,13 @@ func gitOutput(ctx context.Context, repository string, arguments ...string) ([]b
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_OPTIONAL_LOCKS=0",
 	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("git %s: %w: %s", arguments[0], err, strings.TrimSpace(string(output)))
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf(
+			"git %s: %w: %s", arguments[0], err, strings.TrimSpace(stderr.String()),
+		)
 	}
-	return output, nil
+	return stdout.Bytes(), nil
 }
