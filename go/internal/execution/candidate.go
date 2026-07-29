@@ -36,80 +36,153 @@ func buildCandidate(
 	mappedRequest contracts.ImplementationRequest,
 	proposal contracts.ImplementationProposal,
 ) (string, string, []DiffEntry, bool, error) {
-	index, err := os.CreateTemp(config.WorktreeRoot, ".candidate-index-*")
+	indexPath, err := prepareCandidateIndex(
+		ctx, config.RepositoryRoot, config.WorktreeRoot, mappedRequest.BaseCommit,
+	)
 	if err != nil {
-		return "", "", nil, false, fmt.Errorf("create candidate index: %w", err)
+		return "", "", nil, false, err
+	}
+	defer os.Remove(indexPath)
+	if err := applyCandidateChanges(
+		ctx, config.RepositoryRoot, indexPath, worktree, mappedRequest, proposal.Changes,
+	); err != nil {
+		return "", "", nil, false, err
+	}
+	candidate, err := writeCandidateCommit(
+		ctx, config, indexPath, request, mappedRequest,
+	)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	actual, err := verifyCandidateDiff(
+		ctx, config.RepositoryRoot, mappedRequest.BaseCommit, candidate, proposal.Changes,
+	)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	ref, err := candidateRef(mappedRequest, request.Lease.FencingToken)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	created, err := retainCandidateRef(
+		ctx, config.RepositoryRoot, indexPath, ref, candidate,
+	)
+	if err != nil {
+		return "", "", nil, false, err
+	}
+	return candidate, ref, actual, created, nil
+}
+
+func prepareCandidateIndex(
+	ctx context.Context, repository, worktreeRoot, baseCommit string,
+) (string, error) {
+	index, err := os.CreateTemp(worktreeRoot, ".candidate-index-*")
+	if err != nil {
+		return "", fmt.Errorf("create candidate index: %w", err)
 	}
 	indexPath := index.Name()
 	if err := index.Close(); err != nil {
-		return "", "", nil, false, fmt.Errorf("close candidate index: %w", err)
+		return "", fmt.Errorf("close candidate index: %w", err)
 	}
 	if err := os.Remove(indexPath); err != nil {
-		return "", "", nil, false, fmt.Errorf("prepare candidate index: %w", err)
+		return "", fmt.Errorf("prepare candidate index: %w", err)
 	}
-	defer os.Remove(indexPath)
 	if _, err := gitIndexOutput(
-		ctx, config.RepositoryRoot, indexPath, nil, "read-tree", mappedRequest.BaseCommit,
+		ctx, repository, indexPath, nil, "read-tree", baseCommit,
 	); err != nil {
-		return "", "", nil, false, fmt.Errorf("read candidate base tree: %w", err)
+		return "", fmt.Errorf("read candidate base tree: %w", err)
 	}
-	for _, change := range proposal.Changes {
-		switch change.Operation {
-		case contracts.FileDelete:
-			if _, err := gitIndexOutput(
-				ctx, config.RepositoryRoot, indexPath, nil,
-				"update-index", "--force-remove", "--", change.Path,
-			); err != nil {
-				return "", "", nil, false,
-					fmt.Errorf("remove candidate path %q: %w", change.Path, err)
-			}
-		case contracts.FileCreate, contracts.FileUpdate:
-			body, err := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(change.Path)))
-			if err != nil {
-				return "", "", nil, false,
-					fmt.Errorf("read applied path %q: %w", change.Path, err)
-			}
-			sum := sha256.Sum256(body)
-			if change.ReplacementContent == nil ||
-				hex.EncodeToString(sum[:]) != sha256Hex([]byte(*change.ReplacementContent)) {
-				return "", "", nil, false,
-					fmt.Errorf("%w: applied content %q", ErrArtifactIntegrity, change.Path)
-			}
-			objectID, err := gitIndexOutput(
-				ctx, config.RepositoryRoot, indexPath, body, "hash-object", "-w", "--stdin",
-			)
-			if err != nil {
-				return "", "", nil, false,
-					fmt.Errorf("hash candidate path %q: %w", change.Path, err)
-			}
-			mode := "100644"
-			if change.Operation == contracts.FileUpdate {
-				base, err := readTreeEntry(
-					ctx, config.RepositoryRoot, mappedRequest.BaseCommit, change.Path,
-				)
-				if err != nil {
-					return "", "", nil, false, err
-				}
-				mode = base.mode
-			}
-			cacheInfo := mode + "," + strings.TrimSpace(string(objectID)) + "," + change.Path
-			if _, err := gitIndexOutput(
-				ctx, config.RepositoryRoot, indexPath, nil,
-				"update-index", "--add", "--cacheinfo", cacheInfo,
-			); err != nil {
-				return "", "", nil, false,
-					fmt.Errorf("index candidate path %q: %w", change.Path, err)
-			}
-		default:
-			return "", "", nil, false,
-				fmt.Errorf("%w: unsupported operation", ErrInvalidRequest)
+	return indexPath, nil
+}
+
+func applyCandidateChanges(
+	ctx context.Context,
+	repository, indexPath, worktree string,
+	request contracts.ImplementationRequest,
+	changes []contracts.FileChange,
+) error {
+	for _, change := range changes {
+		if err := applyCandidateChange(
+			ctx, repository, indexPath, worktree, request.BaseCommit, change,
+		); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func applyCandidateChange(
+	ctx context.Context,
+	repository, indexPath, worktree, baseCommit string,
+	change contracts.FileChange,
+) error {
+	if change.Operation == contracts.FileDelete {
+		if _, err := gitIndexOutput(
+			ctx, repository, indexPath, nil,
+			"update-index", "--force-remove", "--", change.Path,
+		); err != nil {
+			return fmt.Errorf("remove candidate path %q: %w", change.Path, err)
+		}
+		return nil
+	}
+	if change.Operation != contracts.FileCreate && change.Operation != contracts.FileUpdate {
+		return fmt.Errorf("%w: unsupported operation", ErrInvalidRequest)
+	}
+	body, err := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(change.Path)))
+	if err != nil {
+		return fmt.Errorf("read applied path %q: %w", change.Path, err)
+	}
+	if change.ReplacementContent == nil ||
+		sha256Hex(body) != sha256Hex([]byte(*change.ReplacementContent)) {
+		return fmt.Errorf("%w: applied content %q", ErrArtifactIntegrity, change.Path)
+	}
+	objectID, err := gitIndexOutput(
+		ctx, repository, indexPath, body, "hash-object", "-w", "--stdin",
+	)
+	if err != nil {
+		return fmt.Errorf("hash candidate path %q: %w", change.Path, err)
+	}
+	mode, err := candidateMode(ctx, repository, baseCommit, change)
+	if err != nil {
+		return err
+	}
+	cacheInfo := mode + "," + strings.TrimSpace(string(objectID)) + "," + change.Path
+	if _, err := gitIndexOutput(
+		ctx, repository, indexPath, nil,
+		"update-index", "--add", "--cacheinfo", cacheInfo,
+	); err != nil {
+		return fmt.Errorf("index candidate path %q: %w", change.Path, err)
+	}
+	return nil
+}
+
+func candidateMode(
+	ctx context.Context,
+	repository, baseCommit string,
+	change contracts.FileChange,
+) (string, error) {
+	if change.Operation == contracts.FileCreate {
+		return "100644", nil
+	}
+	base, err := readTreeEntry(ctx, repository, baseCommit, change.Path)
+	if err != nil {
+		return "", err
+	}
+	return base.mode, nil
+}
+
+func writeCandidateCommit(
+	ctx context.Context,
+	config Config,
+	indexPath string,
+	request Request,
+	mappedRequest contracts.ImplementationRequest,
+) (string, error) {
 	tree, err := gitIndexOutput(
 		ctx, config.RepositoryRoot, indexPath, nil, "write-tree",
 	)
 	if err != nil {
-		return "", "", nil, false, fmt.Errorf("write candidate tree: %w", err)
+		return "", fmt.Errorf("write candidate tree: %w", err)
 	}
 	message := fmt.Sprintf(
 		"harness: apply task %s attempt %d\n",
@@ -128,37 +201,30 @@ func buildCandidate(
 		"commit-tree", strings.TrimSpace(string(tree)), "-p", mappedRequest.BaseCommit,
 	)
 	if err != nil {
-		return "", "", nil, false, fmt.Errorf("create candidate commit: %w", err)
+		return "", fmt.Errorf("create candidate commit: %w", err)
 	}
-	candidate := strings.TrimSpace(string(commit))
-	actual, err := verifyCandidateDiff(
-		ctx, config.RepositoryRoot, mappedRequest.BaseCommit, candidate, proposal.Changes,
-	)
-	if err != nil {
-		return "", "", nil, false, err
-	}
-	ref, err := candidateRef(mappedRequest, request.Lease.FencingToken)
-	if err != nil {
-		return "", "", nil, false, err
-	}
-	created := false
+	return strings.TrimSpace(string(commit)), nil
+}
+
+func retainCandidateRef(
+	ctx context.Context, repository, indexPath, ref, candidate string,
+) (bool, error) {
 	existing, resolveErr := gitOutput(
-		ctx, config.RepositoryRoot, "rev-parse", "--verify", "--end-of-options", ref,
+		ctx, repository, "rev-parse", "--verify", "--end-of-options", ref,
 	)
 	if resolveErr == nil {
 		if strings.TrimSpace(string(existing)) != candidate {
-			return "", "", nil, false,
-				fmt.Errorf("%w: candidate ref conflict", ErrArtifactIntegrity)
+			return false, fmt.Errorf("%w: candidate ref conflict", ErrArtifactIntegrity)
 		}
-	} else if _, err := gitIndexOutput(
-		ctx, config.RepositoryRoot, indexPath, nil,
+		return false, nil
+	}
+	if _, err := gitIndexOutput(
+		ctx, repository, indexPath, nil,
 		"update-ref", ref, candidate, strings.Repeat("0", 40),
 	); err != nil {
-		return "", "", nil, false, fmt.Errorf("retain candidate ref: %w", err)
-	} else {
-		created = true
+		return false, fmt.Errorf("retain candidate ref: %w", err)
 	}
-	return candidate, ref, actual, created, nil
+	return true, nil
 }
 
 func verifyCandidateDiff(
@@ -166,6 +232,32 @@ func verifyCandidateDiff(
 	repository, baseCommit, candidate string,
 	changes []contracts.FileChange,
 ) ([]DiffEntry, error) {
+	actualPaths, err := candidatePathStatuses(ctx, repository, baseCommit, candidate)
+	if err != nil {
+		return nil, err
+	}
+	if len(actualPaths) != len(changes) {
+		return nil, fmt.Errorf("%w: candidate changed unauthorized paths", ErrArtifactIntegrity)
+	}
+	result := make([]DiffEntry, 0, len(changes))
+	for _, change := range changes {
+		entry, err := verifyCandidateChange(
+			ctx, repository, baseCommit, candidate, change, actualPaths,
+		)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, entry)
+	}
+	slices.SortFunc(result, func(left, right DiffEntry) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return result, nil
+}
+
+func candidatePathStatuses(
+	ctx context.Context, repository, baseCommit, candidate string,
+) (map[string]string, error) {
 	names, err := gitOutput(
 		ctx, repository, "diff-tree", "-r", "--no-commit-id",
 		"--name-status", "-z", "--no-renames", baseCommit, candidate,
@@ -174,58 +266,82 @@ func verifyCandidateDiff(
 		return nil, fmt.Errorf("list candidate diff: %w", err)
 	}
 	fields := bytes.Split(names, []byte{0})
-	actualPaths := make(map[string]string, len(changes))
+	actualPaths := make(map[string]string, len(fields)/2)
 	for index := 0; index+1 < len(fields); index += 2 {
 		if len(fields[index]) == 0 {
 			continue
 		}
 		actualPaths[string(fields[index+1])] = string(fields[index])
 	}
-	if len(actualPaths) != len(changes) {
-		return nil, fmt.Errorf("%w: candidate changed unauthorized paths", ErrArtifactIntegrity)
+	return actualPaths, nil
+}
+
+func verifyCandidateChange(
+	ctx context.Context,
+	repository, baseCommit, candidate string,
+	change contracts.FileChange,
+	actualPaths map[string]string,
+) (DiffEntry, error) {
+	status, exists := actualPaths[change.Path]
+	wantStatus := map[contracts.FileOperation]string{
+		contracts.FileCreate: "A", contracts.FileUpdate: "M", contracts.FileDelete: "D",
+	}[change.Operation]
+	if !exists || status != wantStatus {
+		return DiffEntry{},
+			fmt.Errorf("%w: candidate operation %q", ErrArtifactIntegrity, change.Path)
 	}
-	result := make([]DiffEntry, 0, len(changes))
-	for _, change := range changes {
-		status, exists := actualPaths[change.Path]
-		wantStatus := map[contracts.FileOperation]string{
-			contracts.FileCreate: "A", contracts.FileUpdate: "M", contracts.FileDelete: "D",
-		}[change.Operation]
-		if !exists || status != wantStatus {
-			return nil, fmt.Errorf("%w: candidate operation %q", ErrArtifactIntegrity, change.Path)
-		}
-		before := treeEntry{}
-		if change.Operation != contracts.FileCreate {
-			before, err = readTreeEntry(ctx, repository, baseCommit, change.Path)
-			if err != nil || sha256Hex(before.body) != change.ExpectedOriginalSHA256 {
-				return nil, fmt.Errorf("%w: before digest %q", ErrArtifactIntegrity, change.Path)
-			}
-		}
-		after := treeEntry{}
-		if change.Operation != contracts.FileDelete {
-			after, err = readTreeEntry(ctx, repository, candidate, change.Path)
-			if err != nil || change.ReplacementContent == nil ||
-				sha256Hex(after.body) != sha256Hex([]byte(*change.ReplacementContent)) {
-				return nil, fmt.Errorf("%w: after digest %q", ErrArtifactIntegrity, change.Path)
-			}
-			if change.Operation == contracts.FileCreate && after.mode != "100644" ||
-				change.Operation == contracts.FileUpdate && after.mode != before.mode {
-				return nil, fmt.Errorf("%w: candidate mode %q", ErrArtifactIntegrity, change.Path)
-			}
-		}
-		mode := after.mode
-		if change.Operation == contracts.FileDelete {
-			mode = before.mode
-		}
-		result = append(result, DiffEntry{
-			Operation: change.Operation, Path: change.Path, Mode: mode,
-			BeforeSHA256: digestOrEmpty(before.body, change.Operation == contracts.FileCreate),
-			AfterSHA256:  digestOrEmpty(after.body, change.Operation == contracts.FileDelete),
-		})
+	before, err := verifiedBeforeEntry(ctx, repository, baseCommit, change)
+	if err != nil {
+		return DiffEntry{}, err
 	}
-	slices.SortFunc(result, func(left, right DiffEntry) int {
-		return strings.Compare(left.Path, right.Path)
-	})
-	return result, nil
+	after, err := verifiedAfterEntry(ctx, repository, candidate, change, before.mode)
+	if err != nil {
+		return DiffEntry{}, err
+	}
+	mode := after.mode
+	if change.Operation == contracts.FileDelete {
+		mode = before.mode
+	}
+	return DiffEntry{
+		Operation: change.Operation, Path: change.Path, Mode: mode,
+		BeforeSHA256: digestOrEmpty(before.body, change.Operation == contracts.FileCreate),
+		AfterSHA256:  digestOrEmpty(after.body, change.Operation == contracts.FileDelete),
+	}, nil
+}
+
+func verifiedBeforeEntry(
+	ctx context.Context, repository, baseCommit string, change contracts.FileChange,
+) (treeEntry, error) {
+	if change.Operation == contracts.FileCreate {
+		return treeEntry{}, nil
+	}
+	before, err := readTreeEntry(ctx, repository, baseCommit, change.Path)
+	if err != nil || sha256Hex(before.body) != change.ExpectedOriginalSHA256 {
+		return treeEntry{},
+			fmt.Errorf("%w: before digest %q", ErrArtifactIntegrity, change.Path)
+	}
+	return before, nil
+}
+
+func verifiedAfterEntry(
+	ctx context.Context,
+	repository, candidate string,
+	change contracts.FileChange,
+	beforeMode string,
+) (treeEntry, error) {
+	if change.Operation == contracts.FileDelete {
+		return treeEntry{}, nil
+	}
+	after, err := readTreeEntry(ctx, repository, candidate, change.Path)
+	if err != nil || change.ReplacementContent == nil ||
+		sha256Hex(after.body) != sha256Hex([]byte(*change.ReplacementContent)) {
+		return treeEntry{}, fmt.Errorf("%w: after digest %q", ErrArtifactIntegrity, change.Path)
+	}
+	if change.Operation == contracts.FileCreate && after.mode != "100644" ||
+		change.Operation == contracts.FileUpdate && after.mode != beforeMode {
+		return treeEntry{}, fmt.Errorf("%w: candidate mode %q", ErrArtifactIntegrity, change.Path)
+	}
+	return after, nil
 }
 
 func readTreeEntry(
