@@ -1,0 +1,73 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 3 Python Agent SDK
+
+## Summary
+
+Complete and harden the existing Phase 1 SDK instead of rebuilding it. Preserve the agent-manifest v1 wire format and digest rules while making validation unavoidable, making the installed CLI portable, and supplying working examples for all four reasoning stages.
+
+`gh stack init` remains unexecuted because Plan Mode prohibits repository mutation. At implementation start, create an independent stack from current `main`:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git config rerere.enabled true
+git config remote.pushDefault origin
+gh stack init --base main phase03/sdk-validation
+```
+
+Add later slices with `gh stack add <branch>` after committing the preceding slice. Do not push or create PRs unless separately requested.
+
+## Implementation Slices
+
+1. **`phase03/sdk-validation` — Safe SDK compilation**
+   - Make `AgentDefinition.compile()` always validate against the packaged v1 schema; retain the optional schema override without allowing validation bypass.
+   - Bundle the schema in the Python wheel and load it through package resources.
+   - Enforce the exact stage/output mapping: specification, planning, implementation, and review must use their corresponding v1 proposal schemas.
+   - Reject invalid agent names, versions, metadata, non-UTF-8 prompt files, unsafe permissions, and unsupported values before emitting canonical bytes.
+   - Preserve public dataclass names, manifest JSON shape, RFC 8785 canonicalization, exact prompt-byte hashing, and lowercase SHA-256 digests.
+   - Apply equivalent stage/output validation in the Go manifest reader so both languages accept the same v1 documents.
+   - Commit, then run `gh stack add phase03/manifest-cli`.
+
+2. **`phase03/manifest-cli` — Portable authoring workflow**
+   - Retain `harness-agents compile`, its JSON definition format, required output paths, and `--schema` override.
+   - Make the default schema resolve from the installed package rather than the repository layout.
+   - Keep parsing closed and deterministic, validate completely before writing outputs, clean temporary files after write failures, and preserve exit code `2` for authoring or I/O errors.
+   - Add a wheel-install smoke test that invokes the CLI outside the repository and produces a manifest plus digest.
+   - Commit, then run `gh stack add phase03/stage-catalog`.
+
+3. **`phase03/stage-catalog` — Four usable agent definitions**
+   - Retain the implementation agent and add specification, planning, and independent-review definitions with prompt files and stage-appropriate model, context, tool-request, and output policies.
+   - Generate reproducible canonical manifest and digest fixtures for all four examples.
+   - Add one checked generation path so `make generate-check` detects fixture drift.
+   - Verify Python compilation and Go reading return identical canonical bytes and digests for every example.
+   - Commit, then run `gh stack add phase03/compatibility-docs`.
+
+4. **`phase03/compatibility-docs` — Release-quality integration**
+   - Add negative compatibility coverage for stage/output mismatches, invalid UTF-8 prompts, unsafe permissions, unknown fields, invalid identity metadata, and digest drift.
+   - Update agent-manifest, development, architecture, security, and resource documentation with the SDK’s offline-only authority boundary and installed CLI workflow.
+   - Produce a Phase 3 completion report with files changed, commands and results, assumptions, deviations, unresolved issues, and Phase 4 recommendation.
+   - Do not add providers, runtime Python agents, database access, Git/shell/network execution, task-specific scope, registration APIs, or manifest v2 fields.
+
+## Public Interfaces
+
+- Keep `AgentDefinition`, `PromptTemplate`, `ModelPolicy`, `ContextPolicy`, `ToolRequestPolicy`, `OutputContract`, `ConfigurationMetadata`, and `CompiledManifest`.
+- Keep `AgentDefinition.compile(schema=None)`, but `None` now selects the bundled schema rather than disabling schema validation.
+- Keep the `harness-agents compile` command and existing flags.
+- Make no manifest v1 field, enum, canonicalization, artifact URI, or digest-format changes.
+
+## Test and Acceptance Plan
+
+- Run `make check` on every branch; the researched baseline currently passes with 19 Python tests and all Go checks.
+- Test deterministic output across repeated compilation and reordered set-valued inputs for all four stages.
+- Test that every unsafe or incoherent definition fails without producing a valid manifest/digest pair.
+- Build and install the wheel into a temporary environment, change outside the repository, and compile an example using the bundled default schema.
+- Verify all four Python-produced fixtures through the Go reader and confirm exact digest equality.
+- Finish with `make generate-check`, `make check`, and `git diff --check`.
+- Verify stack state non-interactively with `gh stack view --json`. Publication remains out of scope.
+
+## Assumptions
+
+- The stack is independent and rooted at `main`, as selected; it does not depend on the open Phase 2 stack.
+- Phase 3 preserves manifest v1 compatibility and focuses on hardening, portability, examples, and evidence.
+- If Phase 2 merges first and shared documentation conflicts, rebase the Phase 3 stack onto updated `main`, reconcile the reports, and rerun the complete gate before publication.
