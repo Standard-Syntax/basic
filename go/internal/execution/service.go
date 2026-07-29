@@ -37,6 +37,16 @@ func NewService(
 	workflowStore WorkflowStore,
 	ledger ExecutionLedger,
 ) (*Service, error) {
+	return newService(config, artifacts, applicator, workflowStore, ledger)
+}
+
+func newService(
+	config Config,
+	artifacts ArtifactStore,
+	applicator Applicator,
+	workflowStore WorkflowStore,
+	ledger ExecutionLedger,
+) (*Service, error) {
 	if err := validateServiceDependencies(
 		artifacts, applicator, workflowStore, ledger,
 	); err != nil {
@@ -121,6 +131,10 @@ func validateServiceIdentity(config Config) error {
 }
 
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
+	return s.execute(ctx, request)
+}
+
+func (s *Service) execute(ctx context.Context, request Request) (Result, error) {
 	mappedRequest, mappedProposal, err := s.validateRequest(ctx, request)
 	if err != nil {
 		return Result{}, err
