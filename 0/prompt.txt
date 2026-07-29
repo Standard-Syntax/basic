@@ -1,0 +1,32 @@
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+# Global Task-Packet Working Agreements
+
+Apply these rules when the user invokes a task-packet skill or `/prompts:task-*` command. Repository-specific `AGENTS.md` files may add or override local build, test, architecture, and style requirements.
+
+- The audited specification is the highest-priority project authority for the task-packet workflow.
+- Precedence within the workflow: audited spec > architecture decisions > roadmap > prior task evidence > repository state > task packet.
+- Preserve stable `REQ-*` and `RULE-*` identifiers.
+- Stop on specification drift; invoke `$task-sync-spec` before continuing; use `/prompts:task-sync-spec` only as a deprecated compatibility fallback.
+- Store project workflow state under the active repository's `docs/tasks/` directory.
+- Lifecycle: `proposed -> ready -> in_progress -> implemented -> review -> done`; alternatives: `blocked`, `superseded`.
+- Only an independent reviewer may approve `done`.
+- Create the task inventory first, then progressively detail packets rather than generating every future packet.
+- Before editing code, read the active repository's spec, audit, task index, assigned packet, dependency reviews, and relevant code, tests, and configuration.
+- Each task has one primary outcome, explicit scope and non-scope, testable acceptance criteria, and validation commands.
+- Implement the smallest defensible change. Avoid unrelated rewrites, speculative abstractions, and hidden scope expansion.
+- Never claim completion without exact command evidence in `completion.md`.
+- `completion.md`, `review.md`, and schema-validated `evidence.yaml` are mandatory evidence artifacts.
+- Failed validation, unmet acceptance, or missing evidence means the task is not complete.
+- Use parallel subagents for read-heavy exploration, testing, security, and review; avoid concurrent writes to overlapping files.
+- Do not merge, deploy, alter holdout evaluations, or self-modify the workflow without explicit human approval.
+</INSTRUCTIONS>
+
+<environment_context>
+  <cwd>/home/dscv/Repo/basic</cwd>
+  <shell>bash</shell>
+  <current_date>2026-07-27</current_date>
+  <timezone>US/Central</timezone>
+  <filesystem><workspace_roots><root>/home/dscv/Repo/basic</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
