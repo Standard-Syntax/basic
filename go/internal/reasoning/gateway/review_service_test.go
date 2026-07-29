@@ -144,6 +144,12 @@ func TestReviewGatewayReturnsAllStableRejectionCodes(t *testing.T) {
 			func(r *reasoningv1.ReviewRequest) { r.Envelope.Authority.MayApproveWork = true }},
 		{"scope", reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
 			func(r *reasoningv1.ReviewRequest) { r.ActualDiff[0].Path = "../escape" }},
+		{"empty writable scope", reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+			func(r *reasoningv1.ReviewRequest) { r.AuthorizedWritablePaths = nil }},
+		{"empty criteria", reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			func(r *reasoningv1.ReviewRequest) { r.ApprovedAcceptanceCriterionIds = nil }},
+		{"empty evidence", reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			func(r *reasoningv1.ReviewRequest) { r.IndependentEvidence = nil }},
 		{"coverage", reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
 			func(r *reasoningv1.ReviewRequest) { r.AcceptanceCoverage = nil }},
 	}

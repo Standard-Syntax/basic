@@ -111,110 +111,177 @@ func MapReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
 func MapReviewRequestAt(
 	value *reasoningv1.ReviewRequest, now time.Time,
 ) (ReviewRequest, error) {
-	if value == nil || value.GetEnvelope() == nil || value.GetCandidate() == nil ||
-		value.GetEnvelope().GetCreatedAt() == nil || value.GetEnvelope().GetExpiresAt() == nil ||
-		value.GetEnvelope().GetBudget() == nil || value.GetScopeReport() == nil ||
-		value.GetReviewPolicy() == nil || len(value.GetActualDiff()) == 0 {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			"request", "required v1 review fields are missing",
-		)
+	validators := []func(*reasoningv1.ReviewRequest) error{
+		validateReviewRequestShape,
+		func(value *reasoningv1.ReviewRequest) error {
+			return validateReviewRequestBindings(value, now)
+		},
+		validateReviewRequestAuthority,
+		validateReviewRequestScope,
+		validateReviewRequestCoverage,
+		validateReviewRequestPolicy,
 	}
-	envelope := value.GetEnvelope()
-	_, expires, err := mapEnvelopeTimes(envelope)
-	if err != nil || envelope.GetRequestId() == "" || envelope.GetRunId() == "" ||
-		envelope.GetTaskId() == "" || envelope.GetAttempt() == 0 {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
-			"request.envelope", "request identity, attempt, or lifetime is invalid",
-		)
-	}
-	if !now.IsZero() && !expires.After(now) {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
-			"request.envelope.expires_at", "request has expired",
-		)
-	}
-	if err := validateReviewCandidate(value.GetCandidate()); err != nil ||
-		!digestPattern.MatchString(envelope.GetAgentManifestDigest()) {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
-			"request.candidate", "candidate or manifest binding is invalid",
-		)
-	}
-	if _, err := mapArtifacts(envelope.GetInputArtifacts()); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
-			"request.envelope.input_artifacts", err.Error(),
-		)
-	}
-	if err := validateAuthority(envelope.GetAuthority()); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION,
-			"request.envelope.authority", err.Error(),
-		)
-	}
-	if _, _, err := mapActualDiff(value); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
-			"request.actual_diff", err.Error(),
-		)
-	}
-	_, actualPaths, _ := mapActualDiff(value)
-	if _, err := validateScopeReport(value.GetScopeReport(), actualPaths); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
-			"request.scope_report", err.Error(),
-		)
-	}
-	if !validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
-			"request.approved_acceptance_criterion_ids",
-			"approved acceptance criteria are required",
-		)
-	}
-	_, passingEvidence, err := mapIndependentEvidence(
-		value.GetIndependentEvidence(), value.GetCandidate().GetCandidateCommit(),
-	)
-	if err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
-			"request.independent_evidence", err.Error(),
-		)
-	}
-	if _, err := mapAcceptanceCoverage(
-		value.GetAcceptanceCoverage(), value.GetApprovedAcceptanceCriterionIds(), passingEvidence,
-	); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
-			"request.acceptance_coverage", err.Error(),
-		)
-	}
-	if envelope.GetSchemaVersion() != "1" ||
-		envelope.GetStage() != reasoningv1.ReasoningStage_REASONING_STAGE_REVIEW {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			"request.envelope.stage", "review stage and schema version 1 are required",
-		)
-	}
-	if err := validateEnvelopeBudget(envelope); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			"request.envelope.budget", err.Error(),
-		)
-	}
-	if _, err := mapReviewPolicy(value.GetReviewPolicy()); err != nil {
-		return ReviewRequest{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			"request.review_policy", err.Error(),
-		)
+	for _, validate := range validators {
+		if err := validate(value); err != nil {
+			return ReviewRequest{}, err
+		}
 	}
 	mapped, err := convertReviewRequest(value)
 	if err != nil {
 		return ReviewRequest{}, fmt.Errorf("validated review request conversion: %w", err)
 	}
 	return mapped, nil
+}
+
+func validateReviewRequestShape(value *reasoningv1.ReviewRequest) error {
+	if value == nil || value.GetEnvelope() == nil || value.GetCandidate() == nil ||
+		value.GetEnvelope().GetCreatedAt() == nil || value.GetEnvelope().GetExpiresAt() == nil ||
+		value.GetEnvelope().GetBudget() == nil || value.GetScopeReport() == nil ||
+		value.GetReviewPolicy() == nil || len(value.GetActualDiff()) == 0 {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			"request", "required v1 review fields are missing",
+		)
+	}
+	return nil
+}
+
+func validateReviewRequestBindings(value *reasoningv1.ReviewRequest, now time.Time) error {
+	envelope := value.GetEnvelope()
+	_, expires, err := mapEnvelopeTimes(envelope)
+	if err != nil || envelope.GetRequestId() == "" || envelope.GetRunId() == "" ||
+		envelope.GetTaskId() == "" || envelope.GetAttempt() == 0 {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+			"request.envelope", "request identity, attempt, or lifetime is invalid",
+		)
+	}
+	if !now.IsZero() && !expires.After(now) {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+			"request.envelope.expires_at", "request has expired",
+		)
+	}
+	if err := validateReviewCandidate(value.GetCandidate()); err != nil ||
+		!digestPattern.MatchString(envelope.GetAgentManifestDigest()) {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+			"request.candidate", "candidate or manifest binding is invalid",
+		)
+	}
+	if _, err := mapArtifacts(envelope.GetInputArtifacts()); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+			"request.envelope.input_artifacts", err.Error(),
+		)
+	}
+	return nil
+}
+
+func validateReviewRequestAuthority(value *reasoningv1.ReviewRequest) error {
+	if err := validateAuthority(value.GetEnvelope().GetAuthority()); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION,
+			"request.envelope.authority", err.Error(),
+		)
+	}
+	return nil
+}
+
+func validateReviewRequestScope(value *reasoningv1.ReviewRequest) error {
+	if len(value.GetAuthorizedWritablePaths()) == 0 {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+			"request.authorized_writable_paths", "authorized writable paths are required",
+		)
+	}
+	for _, writablePath := range value.GetAuthorizedWritablePaths() {
+		if !validRepoPath(writablePath) {
+			return validationFailure(
+				reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+				"request.authorized_writable_paths", "invalid authorized writable path",
+			)
+		}
+	}
+	if _, _, err := mapActualDiff(value); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+			"request.actual_diff", err.Error(),
+		)
+	}
+	_, actualPaths, _ := mapActualDiff(value)
+	if _, err := validateScopeReport(value.GetScopeReport(), actualPaths); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+			"request.scope_report", err.Error(),
+		)
+	}
+	return nil
+}
+
+func validateReviewRequestCoverage(value *reasoningv1.ReviewRequest) error {
+	if len(value.GetApprovedAcceptanceCriterionIds()) == 0 ||
+		!validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			"request.approved_acceptance_criterion_ids",
+			"approved acceptance criteria are required",
+		)
+	}
+	if len(value.GetIndependentEvidence()) == 0 {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			"request.independent_evidence", "independent evidence is required",
+		)
+	}
+	_, passingEvidence, err := mapIndependentEvidence(
+		value.GetIndependentEvidence(), value.GetCandidate().GetCandidateCommit(),
+	)
+	if err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			"request.independent_evidence", err.Error(),
+		)
+	}
+	if len(value.GetAcceptanceCoverage()) == 0 {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			"request.acceptance_coverage", "acceptance coverage is required",
+		)
+	}
+	if _, err := mapAcceptanceCoverage(
+		value.GetAcceptanceCoverage(), value.GetApprovedAcceptanceCriterionIds(), passingEvidence,
+	); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+			"request.acceptance_coverage", err.Error(),
+		)
+	}
+	return nil
+}
+
+func validateReviewRequestPolicy(value *reasoningv1.ReviewRequest) error {
+	envelope := value.GetEnvelope()
+	if envelope.GetSchemaVersion() != "1" ||
+		envelope.GetStage() != reasoningv1.ReasoningStage_REASONING_STAGE_REVIEW {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			"request.envelope.stage", "review stage and schema version 1 are required",
+		)
+	}
+	if err := validateEnvelopeBudget(envelope); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			"request.envelope.budget", err.Error(),
+		)
+	}
+	if _, err := mapReviewPolicy(value.GetReviewPolicy()); err != nil {
+		return validationFailure(
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			"request.review_policy", err.Error(),
+		)
+	}
+	return nil
 }
 
 func convertReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, error) {
@@ -227,9 +294,6 @@ func convertReviewRequest(value *reasoningv1.ReviewRequest) (ReviewRequest, erro
 	}
 	candidate := value.GetCandidate()
 	if err := validateReviewCandidate(candidate); err != nil {
-		return ReviewRequest{}, err
-	}
-	if err := validateReviewInput(value); err != nil {
 		return ReviewRequest{}, err
 	}
 	actualDiff, actualPaths, err := mapActualDiff(value)
@@ -289,27 +353,6 @@ func validateReviewCandidate(candidate *reasoningv1.ReviewCandidateIdentity) err
 		!digestPattern.MatchString(candidate.GetImplementationProposalDigest()) ||
 		candidate.GetBaseCommit() == candidate.GetCandidateCommit() {
 		return errors.New("invalid review candidate identity")
-	}
-	return nil
-}
-
-func validateReviewInput(value *reasoningv1.ReviewRequest) error {
-	if len(value.GetActualDiff()) == 0 || value.GetScopeReport() == nil ||
-		len(value.GetIndependentEvidence()) == 0 || len(value.GetAcceptanceCoverage()) == 0 ||
-		value.GetReviewPolicy() == nil || len(value.GetApprovedAcceptanceCriterionIds()) == 0 ||
-		len(value.GetAuthorizedWritablePaths()) == 0 {
-		return errors.New("incomplete independent review input")
-	}
-	if !validCriteria(value.GetApprovedAcceptanceCriterionIds()) {
-		return errors.New("invalid approved acceptance criteria")
-	}
-	for _, writablePath := range value.GetAuthorizedWritablePaths() {
-		if !validRepoPath(writablePath) {
-			return errors.New("invalid authorized writable path")
-		}
-	}
-	if len(value.GetScopeReport().GetUnexpectedChangedPaths()) != 0 {
-		return errors.New("scope report contains unexpected changes")
 	}
 	return nil
 }
@@ -486,10 +529,7 @@ func MapReviewProposal(
 		value.GetFindings(), knownEvidence, request.Policy,
 	)
 	if err != nil {
-		return ReviewProposal{}, validationFailure(
-			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
-			"proposal.findings", err.Error(),
-		)
+		return ReviewProposal{}, err
 	}
 	if hasBlockingFinding && recommendation != ReviewReworkRequired {
 		return ReviewProposal{}, validationFailure(
@@ -552,14 +592,24 @@ func mapReviewFindings(
 			finding.GetSeverity() == reasoningv1.FindingSeverity_FINDING_SEVERITY_UNSPECIFIED ||
 			finding.GetCategory() == reasoningv1.FindingCategory_FINDING_CATEGORY_UNSPECIFIED ||
 			finding.GetSummary() == "" || len(finding.GetEvidenceReferences()) == 0 {
-			return nil, nil, false, errors.New("invalid review finding")
+			return nil, nil, false, validationFailure(
+				reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+				"proposal.findings", "invalid review finding",
+			)
 		}
 		if _, exists := findingIDs[finding.GetFindingId()]; exists {
-			return nil, nil, false, errors.New("duplicate review finding")
+			return nil, nil, false, validationFailure(
+				reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+				"proposal.findings", "duplicate review finding",
+			)
 		}
 		for _, reference := range finding.GetEvidenceReferences() {
 			if _, exists := knownEvidence[reference]; !exists {
-				return nil, nil, false, errors.New("finding references unknown evidence")
+				return nil, nil, false, validationFailure(
+					reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+					"proposal.findings.evidence_references",
+					"finding references evidence outside the bound review request",
+				)
 			}
 		}
 		severity := finding.GetSeverity().String()

@@ -3,4 +3,8 @@ ALTER TABLE reasoning_invocations
 
 ALTER TABLE reasoning_invocations
     ADD CONSTRAINT reasoning_invocations_stage_check
-    CHECK (stage IN ('implementation', 'review'));
+    CHECK (stage IN ('implementation', 'review'))
+    NOT VALID;
+
+ALTER TABLE reasoning_invocations
+    VALIDATE CONSTRAINT reasoning_invocations_stage_check;

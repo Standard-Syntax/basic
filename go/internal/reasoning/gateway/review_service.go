@@ -86,31 +86,74 @@ func (s *ReviewService) ProposeReview(
 		return ReviewOutcome{}, err
 	}
 	started := s.clock.Now().UTC()
+	requestBytes, earlyOutcome, err := s.prepareReviewRequest(request, started)
+	if err != nil {
+		return ReviewOutcome{}, err
+	}
+	if earlyOutcome != nil {
+		return *earlyOutcome, nil
+	}
+	requestArtifact, err := s.putArtifact(ctx, requestBytes)
+	if err != nil {
+		return ReviewOutcome{}, fmt.Errorf("store review request: %w", err)
+	}
+	handle, err := s.beginReviewInvocation(ctx, request, requestArtifact, started)
+	if err != nil {
+		return ReviewOutcome{}, err
+	}
+	defer rollbackReview(handle)
+	if record, ok := handle.Replay(); ok {
+		return s.replayReview(ctx, record)
+	}
+	mapped, rejection, err := validateRecordedReviewRequest(ctx, handle, request, started)
+	if err != nil {
+		return ReviewOutcome{}, err
+	}
+	if rejection != nil {
+		return *rejection, nil
+	}
+	result, err := s.invokeReviewAdapter(ctx, request, mapped)
+	if err != nil {
+		return ReviewOutcome{}, err
+	}
+	return s.finalizeReview(ctx, handle, request, mapped, result)
+}
+
+func (s *ReviewService) prepareReviewRequest(
+	request *reasoningv1.ReviewRequest, started time.Time,
+) ([]byte, *ReviewOutcome, error) {
 	requestBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(request)
 	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("serialize review request: %w", err)
+		return nil, nil, fmt.Errorf("serialize review request: %w", err)
 	}
 	if len(requestBytes) > s.limits.Request {
 		failure := &contracts.ValidationFailure{
 			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
 			Field: "request", Message: "serialized request exceeds byte limit",
 		}
-		return ReviewOutcome{Rejection: reviewRejection(request, failure, started)}, nil
+		outcome := ReviewOutcome{Rejection: reviewRejection(request, failure, started)}
+		return nil, &outcome, nil
 	}
 	if request == nil || request.GetEnvelope() == nil ||
 		request.GetEnvelope().GetRequestId() == "" || request.GetEnvelope().GetAttempt() == 0 {
 		_, validationErr := contracts.MapReviewRequestAt(request, started)
 		if _, ok := contracts.ValidationCode(validationErr); ok {
-			return ReviewOutcome{
+			outcome := ReviewOutcome{
 				Rejection: reviewRejection(request, validationErr, started),
-			}, nil
+			}
+			return nil, &outcome, nil
 		}
-		return ReviewOutcome{}, fmt.Errorf("validate review request: %w", validationErr)
+		return nil, nil, fmt.Errorf("validate review request: %w", validationErr)
 	}
-	requestArtifact, err := s.putArtifact(ctx, requestBytes)
-	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("store review request: %w", err)
-	}
+	return requestBytes, nil, nil
+}
+
+func (s *ReviewService) beginReviewInvocation(
+	ctx context.Context,
+	request *reasoningv1.ReviewRequest,
+	requestArtifact ArtifactReference,
+	started time.Time,
+) (InvocationHandle, error) {
 	envelope := request.GetEnvelope()
 	handle, err := s.invocations.Begin(ctx, InvocationStart{
 		RequestID: envelope.GetRequestId(), RequestArtifact: requestArtifact,
@@ -119,50 +162,70 @@ func (s *ReviewService) ProposeReview(
 		StartedAt: started,
 	})
 	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("begin review invocation: %w", err)
+		return nil, fmt.Errorf("begin review invocation: %w", err)
 	}
-	defer func() {
-		rollbackContext, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
-		defer cancel()
-		_ = handle.Rollback(rollbackContext)
-	}()
-	if record, ok := handle.Replay(); ok {
-		return s.replayReview(ctx, record)
-	}
+	return handle, nil
+}
+
+func rollbackReview(handle InvocationHandle) {
+	rollbackContext, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	_ = handle.Rollback(rollbackContext)
+}
+
+func validateRecordedReviewRequest(
+	ctx context.Context,
+	handle InvocationHandle,
+	request *reasoningv1.ReviewRequest,
+	started time.Time,
+) (contracts.ReviewRequest, *ReviewOutcome, error) {
 	mapped, err := contracts.MapReviewRequestAt(request, started)
-	if err != nil {
-		if _, ok := contracts.ValidationCode(err); !ok {
-			return ReviewOutcome{}, fmt.Errorf("validate review request: %w", err)
-		}
-		rejection := reviewRejection(request, err, started)
-		record, completeErr := handle.Complete(ctx, InvocationCompletion{
-			Provider: "gateway", Model: "pre-adapter", CompletedAt: started,
-			Status: StatusRejected, Rejection: rejection,
-		})
-		if completeErr != nil {
-			return ReviewOutcome{}, fmt.Errorf("record review rejection: %w", completeErr)
-		}
-		return reviewOutcomeFromRecord(record, nil, false), nil
+	if err == nil {
+		return mapped, nil, nil
 	}
+	if _, ok := contracts.ValidationCode(err); !ok {
+		return contracts.ReviewRequest{}, nil, fmt.Errorf("validate review request: %w", err)
+	}
+	rejection := reviewRejection(request, err, started)
+	record, completeErr := handle.Complete(ctx, InvocationCompletion{
+		Provider: "gateway", Model: "pre-adapter", CompletedAt: started,
+		Status: StatusRejected, Rejection: rejection,
+	})
+	if completeErr != nil {
+		return contracts.ReviewRequest{}, nil, fmt.Errorf(
+			"record review rejection: %w", completeErr,
+		)
+	}
+	outcome := reviewOutcomeFromRecord(record, nil, false)
+	return contracts.ReviewRequest{}, &outcome, nil
+}
+
+func (s *ReviewService) invokeReviewAdapter(
+	ctx context.Context,
+	request *reasoningv1.ReviewRequest,
+	mapped contracts.ReviewRequest,
+) (ReviewAdapterResult, error) {
 	resolved, err := s.manifests.ResolveManifest(ctx, mapped.Envelope.AgentManifestDigest)
 	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("resolve review manifest: %w", err)
+		return ReviewAdapterResult{}, fmt.Errorf("resolve review manifest: %w", err)
 	}
 	if resolved.Digest != mapped.Envelope.AgentManifestDigest ||
 		resolved.Manifest.Stage != reviewStage || resolved.Manifest.Output.Schema != reviewOutput {
-		return ReviewOutcome{}, errors.New("resolved manifest does not match review request")
+		return ReviewAdapterResult{}, errors.New("resolved manifest does not match review request")
 	}
 	result, err := s.adapter.ProposeReview(
 		ctx, resolved.Manifest, proto.Clone(request).(*reasoningv1.ReviewRequest),
 	)
 	if err != nil {
-		return ReviewOutcome{}, fmt.Errorf("propose review: %w", err)
+		return ReviewAdapterResult{}, fmt.Errorf("propose review: %w", err)
 	}
 	if result.Usage.ProviderRequests != 1 ||
 		result.Usage.ProviderRequests > mapped.Envelope.MaximumRequests {
-		return ReviewOutcome{}, errors.New("fake review adapter violated provider request budget")
+		return ReviewAdapterResult{}, errors.New(
+			"fake review adapter violated provider request budget",
+		)
 	}
-	return s.finalizeReview(ctx, handle, request, mapped, result)
+	return result, nil
 }
 
 func (s *ReviewService) finalizeReview(
