@@ -293,3 +293,17 @@ func TestForgedExecutionEvidenceCausesNoReviewOrTransition(t *testing.T) {
 		t.Fatal("forged evidence reached reviewer or workflow")
 	}
 }
+
+func TestMismatchedExecutionArtifactURICausesNoReviewOrTransition(t *testing.T) {
+	proposal := &reasoningv1.ReviewProposal{
+		Recommendation: reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT,
+	}
+	service, request, gatewayPort, workflowPort, _ := fixture(t, proposal)
+	request.ExecutionArtifact.URI = "artifact://alternate/" + request.ExecutionArtifact.Digest
+	if _, err := service.Review(t.Context(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("mismatched execution artifact URI err=%v", err)
+	}
+	if gatewayPort.calls != 0 || workflowPort.calls != 0 {
+		t.Fatal("mismatched execution artifact URI reached reviewer or workflow")
+	}
+}

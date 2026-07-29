@@ -118,18 +118,7 @@ func (s *Service) Review(ctx context.Context, request Request) (Result, error) {
 func (s *Service) validateRequest(
 	ctx context.Context, request Request,
 ) (contracts.ReviewRequest, execution.ExecutionReport, verification.VerificationReport, error) {
-	if _, err := uuid.Parse(request.ReviewID); err != nil || request.ReviewTimestamp.IsZero() ||
-		request.Review == nil || request.ExpectedTaskRevision == 0 {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, ErrInvalidRequest
-	}
-	for _, label := range request.ExclusiveResourceLabels {
-		if !resourceLabelPattern.MatchString(label) {
-			return contracts.ReviewRequest{}, execution.ExecutionReport{},
-				verification.VerificationReport{}, fmt.Errorf("%w: resource label", ErrInvalidRequest)
-		}
-	}
-	if err := fixedPolicy(request.Review.GetReviewPolicy()); err != nil {
+	if err := validateReviewRequestMetadata(request); err != nil {
 		return contracts.ReviewRequest{}, execution.ExecutionReport{},
 			verification.VerificationReport{}, err
 	}
@@ -138,43 +127,80 @@ func (s *Service) validateRequest(
 		return contracts.ReviewRequest{}, execution.ExecutionReport{},
 			verification.VerificationReport{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
+	executionReport, verificationReport, err := s.loadUpstreamReports(ctx, request)
+	if err != nil {
+		return contracts.ReviewRequest{}, execution.ExecutionReport{},
+			verification.VerificationReport{}, err
+	}
+	if err := validateUpstreamBindings(request, mapped, executionReport, verificationReport); err != nil {
+		return contracts.ReviewRequest{}, execution.ExecutionReport{},
+			verification.VerificationReport{}, err
+	}
+	return mapped, executionReport, verificationReport, nil
+}
+
+func validateReviewRequestMetadata(request Request) error {
+	if _, err := uuid.Parse(request.ReviewID); err != nil || request.ReviewTimestamp.IsZero() ||
+		request.Review == nil || request.ExpectedTaskRevision == 0 {
+		return ErrInvalidRequest
+	}
+	for _, label := range request.ExclusiveResourceLabels {
+		if !resourceLabelPattern.MatchString(label) {
+			return fmt.Errorf("%w: resource label", ErrInvalidRequest)
+		}
+	}
+	if err := fixedPolicy(request.Review.GetReviewPolicy()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) loadUpstreamReports(
+	ctx context.Context, request Request,
+) (execution.ExecutionReport, verification.VerificationReport, error) {
 	executionReport, err := loadJSON[execution.ExecutionReport](
 		ctx, s.artifacts, request.ExecutionArtifact,
 	)
 	if err != nil {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, err
+		return execution.ExecutionReport{}, verification.VerificationReport{}, err
 	}
 	verificationReport, err := loadJSON[verification.VerificationReport](
 		ctx, s.artifacts, request.VerificationArtifact,
 	)
 	if err != nil {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, err
+		return execution.ExecutionReport{}, verification.VerificationReport{}, err
 	}
+	return executionReport, verificationReport, nil
+}
+
+func validateUpstreamBindings(
+	request Request,
+	mapped contracts.ReviewRequest,
+	executionReport execution.ExecutionReport,
+	verificationReport verification.VerificationReport,
+) error {
 	if !executionMatches(executionReport, mapped, request.ExecutionArtifact) ||
 		!verificationMatches(verificationReport, mapped, request.ExecutionArtifact) ||
+		!request.ExecutionArtifact.Equal(request.ReviewArtifactInput(
+			request.ExecutionArtifact.Digest,
+		)) ||
 		!request.VerificationArtifact.Equal(request.ReviewArtifactInput(
 			request.VerificationArtifact.Digest,
 		)) {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, fmt.Errorf("%w: upstream evidence binding", ErrInvalidRequest)
+		return fmt.Errorf("%w: upstream evidence binding", ErrInvalidRequest)
 	}
 	if err := crossCheckDiff(request.Review, executionReport); err != nil {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, err
+		return err
 	}
 	if err := crossCheckEvidence(request.Review, verificationReport); err != nil {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, err
+		return err
 	}
 	if !envelopeContains(request.Review, request.ExecutionArtifact.Digest) ||
 		!envelopeContains(request.Review, request.VerificationArtifact.Digest) ||
 		!envelopeContains(request.Review, mapped.ImplementationProposalDigest) {
-		return contracts.ReviewRequest{}, execution.ExecutionReport{},
-			verification.VerificationReport{}, fmt.Errorf("%w: input artifact digest", ErrInvalidRequest)
+		return fmt.Errorf("%w: input artifact digest", ErrInvalidRequest)
 	}
-	return mapped, executionReport, verificationReport, nil
+	return nil
 }
 
 // ReviewArtifactInput returns the exact artifact reference represented by a
@@ -256,9 +282,20 @@ func crossCheckEvidence(
 		len(request.GetAcceptanceCoverage()) != len(report.Coverage) {
 		return fmt.Errorf("%w: verification evidence length", ErrInvalidRequest)
 	}
-	evidenceByCheck := make(map[string]string, len(report.Checks))
-	for index, check := range report.Checks {
-		evidence := request.GetIndependentEvidence()[index]
+	evidenceByCheck, err := crossCheckMeasurements(request.GetIndependentEvidence(), report.Checks)
+	if err != nil {
+		return err
+	}
+	return crossCheckCoverage(request.GetAcceptanceCoverage(), report.Coverage, evidenceByCheck)
+}
+
+func crossCheckMeasurements(
+	evidenceValues []*reasoningv1.IndependentEvidence,
+	checks []verification.CheckResult,
+) (map[string]string, error) {
+	evidenceByCheck := make(map[string]string, len(checks))
+	for index, check := range checks {
+		evidence := evidenceValues[index]
 		if evidence.GetCheckId() != check.CheckID ||
 			evidence.GetCandidateCommit() != check.CandidateCommit ||
 			evidence.GetExitCode() != int32(check.ExitCode) ||
@@ -266,12 +303,20 @@ func crossCheckEvidence(
 			evidence.GetArtifactUri() != check.Output.URI ||
 			evidence.GetStartedAt().AsTime().UTC().Format(time.RFC3339Nano) != check.StartedAt ||
 			evidence.GetCompletedAt().AsTime().UTC().Format(time.RFC3339Nano) != check.FinishedAt {
-			return fmt.Errorf("%w: verification evidence", ErrInvalidRequest)
+			return nil, fmt.Errorf("%w: verification evidence", ErrInvalidRequest)
 		}
 		evidenceByCheck[check.CheckID] = evidence.GetEvidenceId()
 	}
-	for index, coverage := range report.Coverage {
-		provided := request.GetAcceptanceCoverage()[index]
+	return evidenceByCheck, nil
+}
+
+func crossCheckCoverage(
+	providedCoverage []*reasoningv1.AcceptanceEvidence,
+	reportCoverage []verification.CriterionCoverage,
+	evidenceByCheck map[string]string,
+) error {
+	for index, coverage := range reportCoverage {
+		provided := providedCoverage[index]
 		if provided.GetAcceptanceCriterionId() != coverage.CriterionID ||
 			len(provided.GetEvidenceIds()) != len(coverage.CheckIDs) {
 			return fmt.Errorf("%w: acceptance coverage", ErrInvalidRequest)
