@@ -117,15 +117,6 @@ func TestRecordDraftPullRequestBindsPublicationWithoutLeavingMergeReady(t *testi
 		t.Fatalf("unexpected publication transition: %#v %#v", next, events)
 	}
 
-	repeated := command
-	repeated.Meta = envelope(ActorPublicationService, next.Revision)
-	before := next
-	got, gotEvents, gotErr := next.Apply(repeated)
-	if !errors.Is(gotErr, ErrInvalid) || !reflect.DeepEqual(next, before) ||
-		!reflect.DeepEqual(got, Run{}) || gotEvents != nil {
-		t.Fatalf("repeated publication leaked output: %#v %#v %v", got, gotEvents, gotErr)
-	}
-
 	for name, mutate := range map[string]func(*RecordDraftPullRequest){
 		"actor": func(value *RecordDraftPullRequest) {
 			value.Meta.Actor.Kind = ActorMergeService
@@ -147,6 +138,32 @@ func TestRecordDraftPullRequestBindsPublicationWithoutLeavingMergeReady(t *testi
 				t.Fatalf("invalid publication leaked output: %#v %#v %v", got, gotEvents, gotErr)
 			}
 		})
+	}
+}
+
+func TestRecordDraftPullRequestRejectsRepeatedPublication(t *testing.T) {
+	run := readyRun(t)
+	run.State = RunStateMergeReady
+	run.CandidateCommit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	approval := artifact("artifact://run-approvals/publication", 'a')
+	run.Approval = &approval
+	command := RecordDraftPullRequest{
+		Meta: envelope(ActorPublicationService, run.Revision), ID: run.ID,
+		CandidateCommit: run.CandidateCommit, Approval: approval,
+		Publication: artifact("artifact://publications/1", 'b'),
+	}
+	published, _, err := run.Apply(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repeated := command
+	repeated.Meta = envelope(ActorPublicationService, published.Revision)
+	before := published
+	got, gotEvents, gotErr := published.Apply(repeated)
+	if !errors.Is(gotErr, ErrInvalid) || !reflect.DeepEqual(published, before) ||
+		!reflect.DeepEqual(got, Run{}) || gotEvents != nil {
+		t.Fatalf("repeated publication leaked output: %#v %#v %v", got, gotEvents, gotErr)
 	}
 }
 
