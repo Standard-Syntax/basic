@@ -67,7 +67,7 @@ func (a *AnthropicReviewAdapter) ProposeReview(
 		},
 	}
 	message, attempts, err := a.runtime.sendWithRetry(
-		ctx, key, params,
+		ctx, key, &params,
 		request.GetEnvelope().GetBudget().GetMaximumProviderRequests(),
 		request.GetEnvelope().GetExpiresAt().AsTime(),
 	)
