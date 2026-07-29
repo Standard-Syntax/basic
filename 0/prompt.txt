@@ -1,0 +1,3 @@
+run gh stack init
+Read docs/plan-brief.md 
+Create a implementation plan with thin vertical slices.
