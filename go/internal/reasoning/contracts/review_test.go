@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -133,6 +134,50 @@ func TestReviewFindingReferencesAndBlockingPolicyAreEnforced(t *testing.T) {
 	proposal.Findings[0].Severity = reasoningv1.FindingSeverity_FINDING_SEVERITY_HIGH
 	if _, err := MapReviewProposal(proposal, request); err == nil {
 		t.Fatal("advisory accept with blocking finding accepted")
+	}
+}
+
+func TestReviewFindingFailuresUseTypedRejectionCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		code reasoningv1.RejectionCode
+		edit func(*reasoningv1.ReviewProposal)
+	}{
+		{
+			name: "invalid finding",
+			code: reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			edit: func(proposal *reasoningv1.ReviewProposal) {
+				proposal.Findings[0].Summary = ""
+			},
+		},
+		{
+			name: "duplicate finding",
+			code: reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			edit: func(proposal *reasoningv1.ReviewProposal) {
+				proposal.Findings = append(
+					proposal.Findings,
+					proto.Clone(proposal.Findings[0]).(*reasoningv1.ReviewFinding),
+				)
+			},
+		},
+		{
+			name: "unbound evidence",
+			code: reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+			edit: func(proposal *reasoningv1.ReviewProposal) {
+				proposal.Findings[0].EvidenceReferences = []string{"EVIDENCE-999"}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request, proposal := validReview(t)
+			test.edit(proposal)
+			_, err := MapReviewProposal(proposal, request)
+			var failure *ValidationFailure
+			if !errors.As(err, &failure) || failure.Code != test.code {
+				t.Fatalf("failure = %#v, err = %v", failure, err)
+			}
+		})
 	}
 }
 

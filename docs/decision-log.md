@@ -315,3 +315,45 @@ Only expired pre-evidence reservations are taken over; evidence-ready recovery
 retries the workflow command and completed replay returns the original result.
 ### Date
 2026-07-29
+
+## DEC-017: Elevated approval risk is deterministic
+
+### Decision
+Classify elevated work from both actual changed paths and kernel-supplied
+exclusive-resource labels using a closed policy in trusted Go.
+### Options considered
+Reviewer-assigned risk; caller boolean; deterministic trusted classification.
+### Pros
+The same evidence always requires the same role and model output cannot lower
+the required authority.
+### Cons
+Policy changes require a trusted release.
+### Why this option
+Approval authorization must not depend on advisory prose.
+### Consequences
+Protected dependencies, schemas, APIs, auth policy, deployment configuration,
+Dockerfiles, and workflows require `elevated_approver`.
+### Date
+2026-07-29
+
+## DEC-018: Human approvals are checkpointed before workflow mutation
+
+### Decision
+Persist approval IDs through `reserved`, `decision_ready`, and `completed`,
+checkpointing the immutable `task_approval.v1` artifact before the command.
+### Options considered
+Workflow first; one transaction across external stores; checkpoint then
+idempotent transition.
+### Pros
+Recovery cannot replace identity or evidence and ambiguous completion does not
+create a second logical decision.
+### Cons
+The ledger and workflow command both require deterministic identity.
+### Why this option
+Artifact storage, PostgreSQL, and workflow mutation are separate durability
+boundaries.
+### Consequences
+Exact replay returns the original decision, conflicts fail closed, and
+`decision_ready` recovery retries only the human workflow transition.
+### Date
+2026-07-29

@@ -25,6 +25,8 @@ verification ledger row per verification ID.
 | Verification memory | 1 GiB, 256 PIDs, bounded 512 MiB tmpfs, and 1 MiB combined output per check |
 | Verification disk | at most four clean workspaces; content-addressed logs and reports remain external |
 | Verification network | `--network none`; `go.sum`, `uv.lock`, and generation tools seed the image |
+| Review | one bounded fake-provider request plus content-addressed request, proposal, and report artifacts |
+| Approval | one small immutable row and one content-addressed decision artifact per approval ID |
 
 The integration suite uses disposable PostgreSQL 18.1 on
 `127.0.0.1:55433`, backed by tmpfs and removed after every run. Production
@@ -41,3 +43,9 @@ Verification permits at most 16 catalog checks, applies a ten-minute maximum
 to each, runs checks sequentially within a verification, and defaults to two
 concurrent verifications and four workspace slots. Operators must size the
 artifact backend for retained logs and reports.
+
+Phase 8 adds no worker container or external network load. Review requests and
+proposals retain the 1 MiB gateway defaults. Approval concurrency is serialized
+per deterministic approval ID; completed replay performs no artifact or
+workflow work. Operators must size retention for review/approval artifacts and
+vacuum the immutable reasoning and approval ledgers.

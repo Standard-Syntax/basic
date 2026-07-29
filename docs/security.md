@@ -89,6 +89,15 @@
   protects evidence-ready identity/evidence and completed rows from mutation
   or deletion.
 
-Phase 7 does not add credentials, secret scanning, review/approval,
-publication, merge, deployment, a listener, or network access. Those remain
-later authorization boundaries.
+Phase 8 adds no credential store, secret scanning, publication, merge,
+deployment, listener, or network access. Trusted callers supply authenticated
+principal claims. Review remains proposal-only: high/critical findings force
+rework and advisory acceptance stops at `AWAITING_APPROVAL`.
+
+Approval protects dependency manifests, Protobuf/schema and SQL migration
+paths, deployment configuration, Dockerfiles, GitHub workflows, and the six
+documented exclusive-resource labels. Elevated approval requires
+`elevated_approver`; rework accepts either approval role. Approval IDs bind
+exact deterministic request bytes. The artifact is checkpointed before the
+idempotent workflow command, and PostgreSQL rejects identity/evidence mutation
+plus updates or deletion after checkpoint.
