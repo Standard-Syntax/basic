@@ -435,82 +435,85 @@ func TestManifestMustResolveToExactImplementationPairing(t *testing.T) {
 	}
 }
 
-func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
-	t.Run("defaults", func(t *testing.T) {
-		limits := DefaultByteLimits()
-		if limits.Request != 1<<20 || limits.Proposal != 1<<20 ||
-			limits.ProviderResponse != 1<<20 {
-			t.Fatalf("default limits = %+v", limits)
-		}
+func TestGatewayDefaultByteLimits(t *testing.T) {
+	limits := DefaultByteLimits()
+	if limits.Request != 1<<20 || limits.Proposal != 1<<20 ||
+		limits.ProviderResponse != 1<<20 {
+		t.Fatalf("default limits = %+v", limits)
+	}
+}
+
+func TestGatewayRequestByteLimit(t *testing.T) {
+	service, resolver, adapter := gatewayService(t, gatewayProposal(t))
+	service.limits.Request = 1
+	outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Rejection.GetCode() !=
+		reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
+		t.Fatal("oversized request reached dependencies")
+	}
+}
+
+func TestGatewayProposalByteLimit(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	service.limits.Proposal = 1
+	outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Rejection.GetCode() !=
+		reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		outcome.ProposalArtifact != (ArtifactReference{}) ||
+		adapter.calls.Load() != 1 {
+		t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
+	}
+}
+
+func TestGatewayProviderResponseByteLimit(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	request := gatewayRequest(t)
+	service.limits.ProviderResponse = 1
+	if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+		t.Fatal("oversized provider response accepted")
+	}
+	service.limits.ProviderResponse = defaultMaximumBytes
+	outcome, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
+		t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
+	}
+}
+
+func TestFakeAdapterRejectsMultipleProviderRequests(t *testing.T) {
+	if _, err := NewFakeImplementationAdapter(
+		gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
+	); err == nil {
+		t.Fatal("multi-request fake adapter configuration accepted")
+	}
+}
+
+func TestGatewayAllowsMultipleProviderRequestsWithinBudget(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	request := gatewayRequest(t)
+	request.Envelope.Budget.MaximumProviderRequests = 2
+	original := adapter.inner
+	adapter.inner = implementationAdapterFunc(func(
+		ctx context.Context, value manifest.Manifest,
+		request *reasoningv1.ImplementationRequest,
+	) (AdapterResult, error) {
+		result, err := original.ProposeImplementation(ctx, value, request)
+		result.Usage.ProviderRequests = 2
+		return result, err
 	})
-	t.Run("request", func(t *testing.T) {
-		service, resolver, adapter := gatewayService(t, gatewayProposal(t))
-		service.limits.Request = 1
-		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if outcome.Rejection.GetCode() !=
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
-			t.Fatalf("outcome = %+v", outcome)
-		}
-		if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
-			t.Fatal("oversized request reached dependencies")
-		}
-	})
-	t.Run("proposal", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		service.limits.Proposal = 1
-		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if outcome.Rejection.GetCode() !=
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
-			outcome.ProposalArtifact != (ArtifactReference{}) ||
-			adapter.calls.Load() != 1 {
-			t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
-		}
-	})
-	t.Run("provider response", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		request := gatewayRequest(t)
-		service.limits.ProviderResponse = 1
-		if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
-			t.Fatal("oversized provider response accepted")
-		}
-		service.limits.ProviderResponse = defaultMaximumBytes
-		outcome, err := service.ProposeImplementation(t.Context(), request)
-		if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
-			t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
-		}
-	})
-	t.Run("fake request count", func(t *testing.T) {
-		if _, err := NewFakeImplementationAdapter(
-			gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
-		); err == nil {
-			t.Fatal("multi-request fake adapter configuration accepted")
-		}
-	})
-	t.Run("multiple requests within budget", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		request := gatewayRequest(t)
-		request.Envelope.Budget.MaximumProviderRequests = 2
-		original := adapter.inner
-		adapter.inner = implementationAdapterFunc(func(
-			ctx context.Context, value manifest.Manifest,
-			request *reasoningv1.ImplementationRequest,
-		) (AdapterResult, error) {
-			result, err := original.ProposeImplementation(ctx, value, request)
-			result.Usage.ProviderRequests = 2
-			return result, err
-		})
-		outcome, err := service.ProposeImplementation(t.Context(), request)
-		if err != nil || outcome.Proposal == nil ||
-			outcome.Invocation.Usage.ProviderRequests != 2 {
-			t.Fatalf("outcome=%+v err=%v", outcome, err)
-		}
-	})
+	outcome, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil || outcome.Proposal == nil ||
+		outcome.Invocation.Usage.ProviderRequests != 2 {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
 }
 
 func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
