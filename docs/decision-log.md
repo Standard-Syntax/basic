@@ -357,3 +357,28 @@ Exact replay returns the original decision, conflicts fail closed, and
 `decision_ready` recovery retries only the human workflow transition.
 ### Date
 2026-07-29
+
+## DEC-019: Publication checkpoints external identity before workflow mutation
+
+### Decision
+Publish only to deterministic `harness/<run-id>`, recover the exact remote ref
+and marked draft PR, and persist `reserved`, `branch_ready`, `pr_ready`, then
+`completed` before and after each durability boundary.
+### Options considered
+Uncheckpointed push/PR creation; mutable branch updates; immutable staged
+checkpointing with exact recovery.
+### Pros
+Ambiguous Git or API outcomes do not create a second logical branch or PR, and
+replay cannot replace reviewed evidence or human-edited completed PR content.
+### Cons
+Publication requires a ledger, deterministic identifiers, remote inspection,
+and an idempotent workflow command.
+### Why this option
+Git, GitHub, artifact storage, PostgreSQL, and workflow state cannot share one
+transaction.
+### Consequences
+Base drift and mismatched branches or PRs fail closed. Phase 9 creates drafts
+only and grants no ready, merge, branch-delete, deployment, or secret-storage
+authority.
+### Date
+2026-07-29

@@ -16,6 +16,7 @@ type Run struct {
 	Verification    *ArtifactRef `json:"verification,omitempty"`
 	Review          *ArtifactRef `json:"review,omitempty"`
 	Approval        *ArtifactRef `json:"approval,omitempty"`
+	Publication     *ArtifactRef `json:"publication,omitempty"`
 	Merge           *ArtifactRef `json:"merge,omitempty"`
 	CreatedAt       time.Time    `json:"created_at"`
 	UpdatedAt       time.Time    `json:"updated_at"`
@@ -42,7 +43,7 @@ func (r Run) Validate() error {
 		}
 	}
 	for _, binding := range []*ArtifactRef{
-		r.Execution, r.Verification, r.Review, r.Approval, r.Merge,
+		r.Execution, r.Verification, r.Review, r.Approval, r.Publication, r.Merge,
 	} {
 		if binding != nil {
 			if err := binding.Validate(); err != nil {
@@ -188,7 +189,7 @@ func (r Run) Apply(command RunCommand) (Run, []Event, error) {
 	case ApproveTaskGraph:
 		return Run{}, nil, fmt.Errorf("%w: task graph approval requires planning apply", ErrInvalid)
 	case StartRun, RecordRunExecution, RecordRunVerification, RecordRunReview,
-		ApproveRun, RejectRun, RecordMerge, FailRun, CancelRun:
+		ApproveRun, RejectRun, RecordDraftPullRequest, RecordMerge, FailRun, CancelRun:
 		return r.applyCompletion(command)
 	default:
 		return Run{}, nil, fmt.Errorf("%w: unsupported run command", ErrInvalid)

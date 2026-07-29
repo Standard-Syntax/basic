@@ -101,3 +101,16 @@ documented exclusive-resource labels. Elevated approval requires
 exact deterministic request bytes. The artifact is checkpointed before the
 idempotent workflow command, and PostgreSQL rejects identity/evidence mutation
 plus updates or deletion after checkpoint.
+
+Phase 9 credentials are read only for an individual REST request and are never
+stored in artifacts, PostgreSQL, Git configuration, or logs. Production API
+endpoints require HTTPS; test HTTP is limited to loopback. The client blocks
+redirects, sets an explicit API version, bounds request/response bodies, and
+rejects malformed, closed, non-draft, mismarked, or identity-mismatched PRs.
+
+Publication cannot force-update reviewed work. The remote base must still equal
+the reviewed base before branch publication and again before PR creation.
+The deterministic branch uses `--force-with-lease=<ref>:` only to assert that
+the ref is absent. A successful-but-uncheckpointed push is recovered only when
+the remote ref exactly equals the approved candidate. Checkpointed branch/PR
+facts and completed rows are protected by PostgreSQL triggers.

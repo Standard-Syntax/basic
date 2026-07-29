@@ -93,6 +93,7 @@ const (
 	ActorExecutionService    ActorKind = "EXECUTION_SERVICE"
 	ActorVerificationService ActorKind = "VERIFICATION_SERVICE"
 	ActorReviewService       ActorKind = "REVIEW_SERVICE"
+	ActorPublicationService  ActorKind = "PUBLICATION_SERVICE"
 	ActorMergeService        ActorKind = "MERGE_SERVICE"
 	ActorPython              ActorKind = "PYTHON"
 	ActorModel               ActorKind = "MODEL"
@@ -110,7 +111,7 @@ func (a Actor) Validate() error {
 	switch a.Kind {
 	case ActorHuman, ActorWorkflowService, ActorReasoningService,
 		ActorExecutionService, ActorVerificationService, ActorReviewService,
-		ActorMergeService, ActorPython, ActorModel:
+		ActorPublicationService, ActorMergeService, ActorPython, ActorModel:
 		return nil
 	default:
 		return fmt.Errorf("%w: actor kind %q", ErrInvalid, a.Kind)

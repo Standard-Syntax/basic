@@ -19,7 +19,7 @@ produce neither a partial snapshot nor events.
 | `VERIFYING` | `REVIEWING` |
 | `REVIEWING` | `AWAITING_APPROVAL` |
 | `AWAITING_APPROVAL` | `MERGE_READY` or `REJECTED` |
-| `MERGE_READY` | `MERGED` by recording an external merge fact |
+| `MERGE_READY` | remains `MERGE_READY` when a draft PR is recorded, or becomes `MERGED` by recording an external merge fact |
 
 An authorized service may fail any nonterminal run. A human may cancel any
 nonterminal run; cancellation atomically cancels its nonterminal tasks. Terminal
@@ -67,6 +67,11 @@ Only the approval application may translate an authenticated principal with an
 and immutable approval artifact before reaching `ACCEPTED`;
 `RequireTaskRework` binds the same candidate and review. A reviewer
 recommendation never satisfies either human command.
+
+`RecordDraftPullRequest` is emitted only by `ActorPublicationService`. It
+requires the exact approved candidate and run-approval artifact, stores the
+immutable publication artifact, appends `DRAFT_PULL_REQUEST_CREATED`, and
+increments the revision without granting merge or deployment authority.
 
 Task-graph approval validates uniqueness, references, attempt limits, and
 acyclicity, then atomically creates snapshots, dependency edges, creation or

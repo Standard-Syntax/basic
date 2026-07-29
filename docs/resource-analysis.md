@@ -27,6 +27,7 @@ verification ledger row per verification ID.
 | Verification network | `--network none`; `go.sum`, `uv.lock`, and generation tools seed the image |
 | Review | one bounded fake-provider request plus content-addressed request, proposal, and report artifacts |
 | Approval | one small immutable row and one content-addressed decision artifact per approval ID |
+| Publication | bounded Git/API subprocesses, one branch ref, one draft PR, one artifact, and one immutable ledger row |
 
 The integration suite uses disposable PostgreSQL 18.1 on
 `127.0.0.1:55433`, backed by tmpfs and removed after every run. Production
@@ -49,3 +50,9 @@ proposals retain the 1 MiB gateway defaults. Approval concurrency is serialized
 per deterministic approval ID; completed replay performs no artifact or
 workflow work. Operators must size retention for review/approval artifacts and
 vacuum the immutable reasoning and approval ledgers.
+
+Phase 9 admits no worker pool and performs at most one Git push and one GitHub
+PR creation for a publication ID. Git and HTTP calls default to a 30-second
+timeout; artifact and API bodies default to 1 MiB and 64 KiB respectively.
+Completed replay performs no Git or HTTP mutation. Operators must size remote
+branch, PR, artifact, and immutable publication-row retention.

@@ -1,6 +1,6 @@
 # Agent Harness
 
-This repository is the Phase 0–7 foundation for a kernel-driven agent harness.
+This repository is the Phase 0–9 foundation for a kernel-driven agent harness.
 Go is the trusted control-plane language; Python is limited to declarative agent
 configuration. Reasoning outputs are untrusted, provider-neutral proposals.
 
@@ -10,8 +10,9 @@ verification, review, approval, and merge values are immutable references.
 Phase 6 performs proposal-authorized complete-file application and
 candidate-commit creation. Phase 7 independently materializes that exact
 candidate, executes only kernel-approved checks, records bounded evidence, and
-calculates acceptance coverage. Publication, merge, and deployment remain
-external.
+calculates acceptance coverage. Phase 9 publishes the approved candidate to
+one immutable branch and creates one recoverable GitHub draft pull request.
+Merge and deployment remain external.
 
 The installed Python SDK compiles offline definitions for all four reasoning
 stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
@@ -37,6 +38,12 @@ The trusted review library reconstructs that diff and evidence, records
 blocking rework or advisory acceptance, and never approves work. The separate
 human approval library enforces standard/elevated roles, writes an immutable
 approval artifact, and alone may move a reviewed task to `ACCEPTED`.
+
+The in-process publication library revalidates the approved Phase 5–8 evidence,
+requires the reviewed base to equal the configured remote base, publishes the
+exact candidate to `harness/<run-id>` with an empty expected-value lease, and
+creates one marked draft PR through a bounded REST client. Migration `0013`
+checkpoints branch and PR identity so replay performs no Git or network write.
 
 ## Quick start
 
