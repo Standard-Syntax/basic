@@ -54,39 +54,57 @@ func materializeTree(ctx context.Context, repository, worktree, commit string) e
 		if len(record) == 0 {
 			continue
 		}
-		header, pathBytes, ok := bytes.Cut(record, []byte{'\t'})
-		fields := bytes.Fields(header)
-		if !ok || len(fields) != 3 {
-			return errors.New("invalid git tree record")
-		}
-		mode, objectType, objectID := string(fields[0]), string(fields[1]), string(fields[2])
-		path := string(pathBytes)
-		if _, err := normalizePath(path); err != nil {
-			return fmt.Errorf("%w: tracked path %q", ErrUnsafePath, path)
-		}
-		if objectType != "blob" || (mode != "100644" && mode != "100755" && mode != "120000") {
-			return fmt.Errorf("%w: unsupported tracked entry %q mode %s", ErrUnsafePath, path, mode)
-		}
-		body, err := gitOutput(ctx, repository, "cat-file", "blob", objectID)
+		mode, objectID, path, err := parseTreeRecord(record)
 		if err != nil {
-			return fmt.Errorf("read tracked blob %q: %w", path, err)
+			return err
 		}
-		parent := filepath.ToSlash(filepath.Dir(path))
-		if parent != "." {
-			if err := root.MkdirAll(parent, 0o750); err != nil {
-				return fmt.Errorf("create tracked parent %q: %w", parent, err)
-			}
+		if err := materializeEntry(ctx, repository, root, mode, objectID, path); err != nil {
+			return err
 		}
-		if mode == "120000" {
-			if err := root.Symlink(string(body), path); err != nil {
-				return fmt.Errorf("materialize symlink %q: %w", path, err)
-			}
-			continue
+	}
+	return nil
+}
+
+func parseTreeRecord(record []byte) (string, string, string, error) {
+	header, pathBytes, ok := bytes.Cut(record, []byte{'\t'})
+	fields := bytes.Fields(header)
+	if !ok || len(fields) != 3 {
+		return "", "", "", errors.New("invalid git tree record")
+	}
+	mode, objectType, objectID := string(fields[0]), string(fields[1]), string(fields[2])
+	path := string(pathBytes)
+	if _, err := normalizePath(path); err != nil {
+		return "", "", "", fmt.Errorf("%w: tracked path %q", ErrUnsafePath, path)
+	}
+	if objectType != "blob" || (mode != "100644" && mode != "100755" && mode != "120000") {
+		return "", "", "",
+			fmt.Errorf("%w: unsupported tracked entry %q mode %s", ErrUnsafePath, path, mode)
+	}
+	return mode, objectID, path, nil
+}
+
+func materializeEntry(
+	ctx context.Context, repository string, root *os.Root, mode, objectID, path string,
+) error {
+	body, err := gitOutput(ctx, repository, "cat-file", "blob", objectID)
+	if err != nil {
+		return fmt.Errorf("read tracked blob %q: %w", path, err)
+	}
+	parent := filepath.ToSlash(filepath.Dir(path))
+	if parent != "." {
+		if err := root.MkdirAll(parent, 0o750); err != nil {
+			return fmt.Errorf("create tracked parent %q: %w", parent, err)
 		}
-		permissions, _ := strconv.ParseUint(mode[3:], 8, 32)
-		if err := root.WriteFile(path, body, os.FileMode(permissions)); err != nil {
-			return fmt.Errorf("materialize blob %q: %w", path, err)
+	}
+	if mode == "120000" {
+		if err := root.Symlink(string(body), path); err != nil {
+			return fmt.Errorf("materialize symlink %q: %w", path, err)
 		}
+		return nil
+	}
+	permissions, _ := strconv.ParseUint(mode[3:], 8, 32)
+	if err := root.WriteFile(path, body, os.FileMode(permissions)); err != nil {
+		return fmt.Errorf("materialize blob %q: %w", path, err)
 	}
 	return nil
 }

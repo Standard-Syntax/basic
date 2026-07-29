@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -36,5 +38,39 @@ func TestValidateRequestEnforcesDecodedLimits(t *testing.T) {
 	limits.MaxFileBytes = 3
 	if err := validateRequest(changes[:1], limits); err == nil {
 		t.Fatal("per-file limit was not enforced")
+	}
+}
+
+func TestDecodeRequestUsesConfiguredEncodedLimit(t *testing.T) {
+	content := "a"
+	limits := execution.Limits{
+		MaxChangedFiles: 1,
+		MaxFileBytes:    1,
+		MaxTotalBytes:   1,
+		Timeout:         time.Minute,
+	}
+	valid, err := json.Marshal(workerInput{
+		Changes: []contracts.FileChange{{
+			Path: "file", Operation: contracts.FileCreate, ReplacementContent: &content,
+		}},
+		Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeRequest(bytes.NewReader(valid)); err != nil {
+		t.Fatalf("valid encoded request rejected: %v", err)
+	}
+	oversized, err := json.Marshal(workerInput{
+		Changes: []contracts.FileChange{{
+			Path: strings.Repeat("x", 1<<20), Operation: contracts.FileDelete,
+		}},
+		Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeRequest(bytes.NewReader(oversized)); err == nil {
+		t.Fatal("configured encoded-request limit was not enforced")
 	}
 }
