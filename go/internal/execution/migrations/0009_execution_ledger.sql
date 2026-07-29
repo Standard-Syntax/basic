@@ -5,12 +5,14 @@ CREATE TABLE execution_ledger (
     reserved_until timestamptz NOT NULL,
     state text NOT NULL CHECK (state IN ('reserved', 'completed')),
     execution_timestamp timestamptz NOT NULL,
+    final_transition_at timestamptz,
     result_json jsonb,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz,
     CHECK (
         (state = 'reserved' AND result_json IS NULL AND completed_at IS NULL)
-        OR (state = 'completed' AND result_json IS NOT NULL AND completed_at IS NOT NULL)
+        OR (state = 'completed' AND result_json IS NOT NULL
+            AND completed_at IS NOT NULL AND final_transition_at IS NOT NULL)
     )
 );
 
@@ -28,6 +30,10 @@ BEGIN
        OR NEW.execution_timestamp <> OLD.execution_timestamp
        OR NEW.created_at <> OLD.created_at THEN
         RAISE EXCEPTION 'execution reservation identity is immutable';
+    END IF;
+    IF OLD.final_transition_at IS NOT NULL
+       AND NEW.final_transition_at IS DISTINCT FROM OLD.final_transition_at THEN
+        RAISE EXCEPTION 'final execution transition timestamp is immutable';
     END IF;
     RETURN NEW;
 END;

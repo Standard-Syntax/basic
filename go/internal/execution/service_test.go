@@ -60,6 +60,18 @@ type localApplicator struct {
 	calls atomic.Int32
 }
 
+type cancelledApplicator struct {
+	started chan struct{}
+}
+
+func (c cancelledApplicator) Apply(
+	ctx context.Context, _ string, _ []contracts.FileChange, _ Limits,
+) error {
+	close(c.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (a *localApplicator) Apply(
 	_ context.Context, worktree string, changes []contracts.FileChange, _ Limits,
 ) error {
@@ -378,5 +390,49 @@ func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 	}
 	if resolved := runGit(t, repository, "rev-parse", ref); resolved != result.CandidateCommit {
 		t.Fatalf("pre-existing candidate ref was removed: got %q want %q", resolved, result.CandidateCommit)
+	}
+}
+
+func TestCancellationCleansDetachedWorktree(t *testing.T) {
+	request, proposal, proposalBody := executionFixture(t)
+	repository, worktrees, commit := fixtureRepository(t, request)
+	request.BaseCommit = commit
+	digest := sha256Hex(proposalBody)
+	artifact := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
+	now := request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)
+	started := make(chan struct{})
+	service, err := NewService(Config{
+		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
+		Limits: DefaultLimits(), ActorID: uuid.NewString(),
+		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
+	}, memoryArtifacts{digest: proposalBody}, cancelledApplicator{started: started},
+		&fakeWorkflow{}, NewMemoryExecutionLedger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	ctx, cancel := context.WithCancel(t.Context())
+	go func() {
+		<-started
+		cancel()
+	}()
+	_, err = service.Execute(ctx, Request{
+		ExecutionID: uuid.NewString(), ExecutionTimestamp: now,
+		Implementation: request, Proposal: proposal, ProposalArtifact: artifact,
+		Lease: workflow.LeaseRef{
+			ID: uuid.NewString(), OwnerID: uuid.NewString(),
+			ExpiresAt: now.Add(time.Hour), FencingToken: request.GetEnvelope().GetAttempt(),
+		},
+		ExpectedTaskRevision: 3,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	entries, readErr := os.ReadDir(worktrees)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("abandoned worktrees: %#v", entries)
 	}
 }

@@ -209,3 +209,63 @@ missing or corrupt artifacts fail replay rather than silently re-invoking the
 adapter.
 ### Date
 2026-07-28
+
+## DEC-012: Task attempts own monotonically increasing lease fences
+
+### Decision
+Persist a positive fencing token equal to the incremented task attempt and
+require the complete lease tuple on proposal acceptance and execution
+recording.
+### Options considered
+Revision-only checks; lease ID checks; attempt-bound full-tuple fencing.
+### Pros
+Expired and superseded workers cannot publish a candidate after a newer lease.
+### Cons
+Every execution transition and persisted lease carries one additional value.
+### Why this option
+Revision checks alone do not prove that a long-running worker still owns the
+attempt.
+### Consequences
+Migration `0008` backfills active leases from `current_attempt`; stale lease
+commands fail without snapshot, event, or command-result mutation.
+### Date
+2026-07-28
+
+## DEC-013: Complete-file application runs in a locked-down private container
+
+### Decision
+Run a static Go applicator as the host UID/GID with no network, capabilities,
+or privilege escalation and with fixed CPU, memory, and PID limits.
+### Options considered
+Host filesystem writes; shell-generated patches; a private static applicator.
+### Pros
+No model shell surface, bounded resources, and descriptor-relative path
+handling.
+### Cons
+Linux and Docker are runtime requirements for execution.
+### Why this option
+Proposal content is untrusted even after schema and scope validation.
+### Consequences
+Binary replacements and new executable files remain unsupported in v1.
+### Date
+2026-07-28
+
+## DEC-014: Candidate commits use hook/filter-free Git plumbing
+
+### Decision
+Materialize raw blobs and build candidates through a temporary index using
+`read-tree`, `hash-object`, `update-index`, `write-tree`, and `commit-tree`.
+### Options considered
+Normal checkout and commit; patch application; fixed plumbing.
+### Pros
+Exact deterministic trees without hooks, clean/smudge filters, textconv, or
+external diff drivers.
+### Cons
+The service must implement explicit mode and diff verification.
+### Why this option
+Repository-controlled Git configuration is not trusted execution policy.
+### Consequences
+Candidates remain reachable only under `refs/harness/candidates/...` until a
+later approved publication phase.
+### Date
+2026-07-28

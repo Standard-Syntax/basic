@@ -116,6 +116,25 @@ func (h *postgresExecutionHandle) Replay() (Result, bool) {
 	return cloneResult(*h.replay), true
 }
 
+func (h *postgresExecutionHandle) FinalTransitionTime(
+	ctx context.Context, value time.Time,
+) (time.Time, error) {
+	var stored time.Time
+	err := h.ledger.pool.QueryRow(ctx, `UPDATE execution_ledger
+		SET final_transition_at=COALESCE(final_transition_at,$4)
+		WHERE execution_id=$1 AND request_digest=$2 AND owner_id=$3 AND state='reserved'
+		RETURNING final_transition_at`,
+		h.executionID, h.digest, h.owner, value.UTC(),
+	).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, ErrExecutionConflict
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("record final transition time: %w", err)
+	}
+	return stored, nil
+}
+
 func (h *postgresExecutionHandle) Complete(ctx context.Context, result Result) error {
 	body, err := resultBytes(result)
 	if err != nil {

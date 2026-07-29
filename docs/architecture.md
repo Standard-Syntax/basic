@@ -34,6 +34,20 @@ reservation serializes each request ID; adapter and artifact work holds no
 database transaction or pooled connection. Exact concurrent replay returns the
 original outcome and different bytes fail with a conflict.
 
+Phase 6 adds `go/internal/execution`. Its in-process `Service.Execute` binds a
+request and proposal artifact to an active fenced lease, creates a deterministic
+detached worktree, and invokes a static Go applicator in a network-disabled,
+read-only-root Docker container. A temporary index and raw Git plumbing create
+the candidate tree and commit without checkout filters, hooks, textconv, or
+external diff drivers. The service verifies the complete candidate diff,
+retains it under `refs/harness/candidates/...`, stores a deterministic report,
+and only then records `TASK_EXECUTED`.
+
+Migration `0008` persists positive per-attempt lease fencing tokens. Migration
+`0009` reserves execution IDs, detects conflicting request digests, stores the
+completed result, and rejects mutation or deletion of completed rows. Artifact
+bodies remain behind the backend-neutral content-addressed port.
+
 The Python package has no provider or runtime agent, and no workflow, database,
 Git, shell, network, direct-file-mutation, credential, approval, publication,
 registration, or task-scope authority. Its only writes are the explicitly
@@ -53,6 +67,7 @@ Completed invocation rows reject update and deletion by database trigger. No
 production filesystem or object-store backend exists; tests use an
 integrity-checking in-memory artifact store.
 
-No HTTP/gRPC server, real provider, runtime Python agent, worktree, file mutation, command runner,
-verification runner, pull-request operation, merge operation, or deployment
-exists. `MERGED` records an already completed, approval-bound external fact.
+No HTTP/gRPC execution server, real provider, runtime Python agent, declared
+check runner, verification runner, pull-request operation, branch publication,
+merge operation, or deployment exists. `MERGED` records an already completed,
+approval-bound external fact.

@@ -46,6 +46,9 @@ func TestPostgresExecutionLedgerReplayConflictAndImmutability(t *testing.T) {
 	if _, replay := handle.Replay(); replay {
 		t.Fatal("new reservation replayed")
 	}
+	if _, err := handle.FinalTransitionTime(t.Context(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	result := Result{ExecutionID: start.ExecutionID, CandidateCommit: "0123456789012345678901234567890123456789"}
 	if err := handle.Complete(t.Context(), result); err != nil {
 		t.Fatal(err)
@@ -120,6 +123,9 @@ func TestPostgresExecutionReservationRecoveryAndConcurrentMigration(t *testing.T
 	}
 	if _, replay := recovered.Replay(); replay {
 		t.Fatal("expired reservation replayed instead of recovering")
+	}
+	if _, err := recovered.FinalTransitionTime(t.Context(), time.Now().UTC()); err != nil {
+		t.Fatal(err)
 	}
 	if err := recovered.Complete(t.Context(), Result{ExecutionID: start.ExecutionID}); err != nil {
 		t.Fatal(err)

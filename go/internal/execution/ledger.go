@@ -61,6 +61,7 @@ type memoryExecutionRecord struct {
 	digest        string
 	owner         string
 	reservedUntil time.Time
+	finalTime     *time.Time
 	result        *Result
 }
 
@@ -129,11 +130,29 @@ func (h *memoryExecutionHandle) Replay() (Result, bool) {
 	return cloneResult(*h.replay), true
 }
 
-func (h *memoryExecutionHandle) Complete(_ context.Context, result Result) error {
+func (h *memoryExecutionHandle) FinalTransitionTime(
+	_ context.Context, value time.Time,
+) (time.Time, error) {
 	h.ledger.mu.Lock()
 	defer h.ledger.mu.Unlock()
 	record, ok := h.ledger.records[h.executionID]
 	if !ok || record.digest != h.digest || record.owner != h.owner || record.result != nil {
+		return time.Time{}, ErrExecutionConflict
+	}
+	if record.finalTime == nil {
+		mapped := value.UTC()
+		record.finalTime = &mapped
+		h.ledger.records[h.executionID] = record
+	}
+	return *record.finalTime, nil
+}
+
+func (h *memoryExecutionHandle) Complete(_ context.Context, result Result) error {
+	h.ledger.mu.Lock()
+	defer h.ledger.mu.Unlock()
+	record, ok := h.ledger.records[h.executionID]
+	if !ok || record.digest != h.digest || record.owner != h.owner ||
+		record.result != nil || record.finalTime == nil {
 		return ErrExecutionConflict
 	}
 	stored := cloneResult(result)

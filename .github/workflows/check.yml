@@ -45,7 +45,7 @@ jobs:
         run: semgrep scan --config .semgrep.yml --error --metrics=off
 
   integration:
-    name: PostgreSQL transactional integration
+    name: PostgreSQL and isolated execution integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -54,5 +54,5 @@ jobs:
         with:
           go-version: "1.26.x"
           cache-dependency-path: go/go.sum
-      - name: Run disposable PostgreSQL integration suite
+      - name: Run disposable PostgreSQL and Docker worker integration suite
         run: make integration-test

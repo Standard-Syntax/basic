@@ -31,7 +31,7 @@ run states are `MERGED`, `REJECTED`, `FAILED`, and `CANCELLED`.
 |---|---|
 | new | `READY` without dependencies, otherwise `PENDING` |
 | `PENDING` | `READY` when all prerequisites are accepted |
-| `READY` | `LEASED`, incrementing the attempt |
+| `READY` | `LEASED`, incrementing the attempt and assigning the same positive fencing token |
 | `LEASED` | `REASONING`, or `READY` on release/expiry recording |
 | `REASONING` | `PROPOSAL_REJECTED` or `EXECUTING` |
 | `PROPOSAL_REJECTED` | `READY`, or `FAILED` when attempts are exhausted |
@@ -44,6 +44,11 @@ run states are `MERGED`, `REJECTED`, `FAILED`, and `CANCELLED`.
 An authorized operational service may record a non-retryable failure for any
 nonterminal task. Run cancellation may cancel any nonterminal task. Terminal
 task states are `ACCEPTED`, `FAILED`, and `CANCELLED`.
+
+`AcceptTaskProposal` and `RecordTaskExecution` carry the exact active lease
+tuple. The execution-service command timestamp must be before the stored expiry,
+and the token must match the current attempt. Mismatch, expiry, or supersession
+fails before snapshot, event, or command-result mutation.
 
 Task-graph approval validates uniqueness, references, attempt limits, and
 acyclicity, then atomically creates snapshots, dependency edges, creation or

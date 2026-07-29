@@ -249,7 +249,10 @@ func (s *Service) executeReserved(
 	if err != nil {
 		return Result{}, fmt.Errorf("store execution report: %w", err)
 	}
-	recordedAt := s.now().UTC()
+	recordedAt, err := handle.FinalTransitionTime(ctx, s.now().UTC())
+	if err != nil {
+		return Result{}, fmt.Errorf("reserve final transition timestamp: %w", err)
+	}
 	recorded, err := s.workflow.ExecuteTask(ctx, workflow.RecordTaskExecution{
 		Meta: s.commandEnvelope(
 			request.ExecutionID, "record", accepted.Revision, recordedAt,

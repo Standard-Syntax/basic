@@ -1,6 +1,6 @@
 # Security
 
-## Phase 0–5 boundaries
+## Phase 0–6 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
@@ -54,9 +54,21 @@
 - Events are append-only by database trigger. State, events, command result,
   task creation, dependency readiness, and cancellation cascade share one
   serializable transaction.
+- Execution acceptance and final recording require the exact lease ID, owner,
+  expiry, and positive per-attempt fencing token. Expired and superseded leases
+  produce no execution transition; a stale final check deletes the candidate
+  ref.
+- Execution paths reject absolute paths, traversal, control characters,
+  `.git`, duplicate normalized paths, gitlinks, special files, symlink leaves,
+  and symlink ancestors. The worker uses descriptor-relative operations and
+  rechecks inode identity after preflight.
+- The worker has no network, capabilities, or privilege escalation; its root is
+  read-only and it is limited to one CPU, 512 MiB, 64 PIDs, and the configured
+  non-root UID/GID. The worktree `.git` file is separately read-only.
+- Candidate commits use raw blobs and a temporary index. Repository hooks,
+  clean/smudge filters, textconv, and external diff drivers are not invoked.
+  Candidate refs are internal reachability records, not publication.
 
-Future side-effect execution must normalize paths, reject traversal and symlink escapes,
-deny network by default, use short-lived scoped credentials and fencing tokens,
-scan inputs and outputs for secrets, and bind independent evidence to exact
-candidate commits. Those controls are documented contracts, not current runtime
-claims.
+Phase 6 does not add credentials, declared-check execution, secret scanning,
+independent verification, publication, merge, deployment, or network access.
+Those remain later authorization boundaries.
