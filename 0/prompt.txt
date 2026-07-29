@@ -1,0 +1,114 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 4 Agent Registry
+
+## Summary
+
+Implement the authoritative Phase 4 agent registry as a PostgreSQL-backed Go application API. It will accept compiled manifest bytes, reuse `manifest.Read` for closed validation and RFC 8785 canonicalization, store immutable versions, and retrieve exact canonical manifests by `(name, version)` or digest.
+
+No gRPC/HTTP server, provider adapter, workflow integration, Python runtime, or new manifest wire format is included. The Phase 3 provider recommendation will be corrected to match the authoritative roadmap: Phase 4 is the registry, Phase 5 is the fake reasoning gateway, and a real provider remains Phase 10.
+
+The live baseline is clean: `make check` passes with 47 Python tests, and `make integration-test` passes against disposable PostgreSQL.
+
+## Stack Initialization
+
+Plan Mode deferred repository mutation. At implementation start:
+
+```bash
+git fetch origin
+git switch main
+git merge --ff-only origin/main
+gh stack init --base main \
+  phase04/registry-registration \
+  phase04/immutable-versions \
+  phase04/identity-lookup \
+  phase04/digest-lookup \
+  phase04/registry-hardening
+gh stack bottom
+gh stack view --json
+```
+
+This creates an independent Phase 4 stack from remote `main`, which now contains merged Phase 3.
+
+## Thin Vertical Slices
+
+1. `phase04/registry-registration`
+   - Add `go/internal/registry` with a PostgreSQL-backed registration application boundary.
+   - Extract the existing advisory-lock/digest-ledger migration mechanics into a small shared internal migration helper; retain workflow migration behavior and give the registry its own checked-in `0006` migration.
+   - Add `agent_registrations` with identity, digest, canonical manifest bytes, and registration timestamp.
+   - Validate and canonicalize input exclusively through `manifest.Read`; invalid manifests produce no database write.
+   - Persist a valid manifest and return the stored canonical record.
+
+2. `phase04/immutable-versions`
+   - Make `(agent_name, agent_version)` the immutable identity and the manifest digest unique.
+   - Make exact duplicate registration idempotent, returning the existing record with `Created=false`.
+   - Return `ErrVersionConflict` when the same identity is presented with different canonical content.
+   - Add database enforcement rejecting `UPDATE` and `DELETE`, so immutability does not depend only on application code.
+
+3. `phase04/identity-lookup`
+   - Add lookup by exact agent name and semantic version.
+   - Return `ErrNotFound` for an absent identity and `ErrInvalidArgument` for malformed lookup keys.
+   - Re-read stored canonical bytes through `manifest.Read` and verify that the calculated digest and embedded identity match the database columns before returning them.
+
+4. `phase04/digest-lookup`
+   - Add lookup by lowercase SHA-256 digest.
+   - Reject malformed digests before querying.
+   - Return the same canonical record shape as identity lookup, preserving exact registered bytes and registration metadata.
+
+5. `phase04/registry-hardening`
+   - Prove concurrent identical registration converges on one row and concurrent conflicting registration produces one winner plus deterministic conflicts.
+   - Prove migration replay, migration-digest protection, database immutability, failed-registration rollback, and lookup integrity.
+   - Extend `make integration-test` to run both workflow and registry suites against the disposable PostgreSQL instance without relying on package execution order.
+   - Update architecture, security, resource analysis, agent-manifest documentation, decision log, development instructions, and a Phase 4 completion report. Correct the stale Phase 3 next-phase recommendation.
+
+## Go Interfaces
+
+```go
+type Registry struct { /* PostgreSQL pool */ }
+
+func New(pool *pgxpool.Pool) *Registry
+func Migrate(ctx context.Context, connectionString string) error
+
+func (r *Registry) Register(
+    ctx context.Context,
+    rawManifest []byte,
+) (RegisterResult, error)
+
+func (r *Registry) Get(
+    ctx context.Context,
+    name string,
+    version string,
+) (Record, error)
+
+func (r *Registry) GetByDigest(
+    ctx context.Context,
+    digest string,
+) (Record, error)
+```
+
+`Record` contains the validated `manifest.Manifest`, a defensive copy of its exact canonical JSON, lowercase digest, and registration timestamp. `RegisterResult` contains the record plus `Created`. Stable sentinel errors distinguish invalid arguments/manifests, version conflicts, missing registrations, and corrupt persisted data.
+
+## Test and Acceptance Plan
+
+- Unit tests: invalid/unknown manifest fields, unsafe policies, malformed identities and digests, canonicalization drift, error classification, and defensive byte ownership.
+- PostgreSQL tests: first registration, exact replay, conflicting replacement, identity lookup, digest lookup, missing lookup, update/delete rejection, concurrent identical/conflicting calls, and migration replay/digest checks.
+- Every stack branch must pass `make check`; database-affecting branches must also pass `make integration-test`.
+- Final acceptance runs:
+
+```bash
+make generate-check
+make check
+make integration-test
+git diff --check
+gh stack view --json
+```
+
+Acceptance requires idempotent identical registration, rejection of conflicting version replacement, exact retrieval through both lookup paths, and database-enforced immutability.
+
+## Assumptions
+
+- `docs/plan-brief.md` is authoritative where it conflicts with the Phase 3 completion recommendation.
+- The existing parity-tested Go reader satisfies Phase 4 validation; no second JSON Schema runtime dependency is added.
+- Canonical manifests are small authoritative metadata and are stored as exact bytes in PostgreSQL; prompt bodies remain external digest-addressed artifacts.
+- The empty `go/cmd/agent-registry` remains a buildable skeleton. Network transport, authentication, service configuration, runtime startup, and provider behavior remain deferred.
+- Stack initialization, commits, pushes, and pull requests are not executed while Plan Mode remains active.
