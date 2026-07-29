@@ -7,7 +7,7 @@ ALTER TABLE workflow_commands
             'VERIFICATION_SERVICE','REVIEW_SERVICE','PUBLICATION_SERVICE',
             'MERGE_SERVICE','PYTHON','MODEL'
         )
-    );
+    ) NOT VALID;
 
 ALTER TABLE workflow_events
     DROP CONSTRAINT workflow_events_actor_kind_closed;
@@ -18,4 +18,4 @@ ALTER TABLE workflow_events
             'VERIFICATION_SERVICE','REVIEW_SERVICE','PUBLICATION_SERVICE',
             'MERGE_SERVICE','PYTHON','MODEL'
         )
-    );
+    ) NOT VALID;

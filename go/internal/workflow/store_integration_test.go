@@ -342,11 +342,11 @@ func TestMigrationsAreRepeatableAndDigestTracked(t *testing.T) {
 	var count, invalidDigests int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*),
 		count(*) FILTER (WHERE digest !~ '^[a-f0-9]{64}$')
-		FROM schema_migrations WHERE version IN (1,2,3,4,5,8,14)`,
+		FROM schema_migrations WHERE version IN (1,2,3,4,5,8,14,15)`,
 	).Scan(&count, &invalidDigests); err != nil {
 		t.Fatal(err)
 	}
-	if count != 7 || invalidDigests != 0 {
+	if count != 8 || invalidDigests != 0 {
 		t.Fatalf("migration rows=%d invalid digests=%d", count, invalidDigests)
 	}
 }

@@ -117,6 +117,15 @@ func TestRecordDraftPullRequestBindsPublicationWithoutLeavingMergeReady(t *testi
 		t.Fatalf("unexpected publication transition: %#v %#v", next, events)
 	}
 
+	repeated := command
+	repeated.Meta = envelope(ActorPublicationService, next.Revision)
+	before := next
+	got, gotEvents, gotErr := next.Apply(repeated)
+	if !errors.Is(gotErr, ErrInvalid) || !reflect.DeepEqual(next, before) ||
+		!reflect.DeepEqual(got, Run{}) || gotEvents != nil {
+		t.Fatalf("repeated publication leaked output: %#v %#v %v", got, gotEvents, gotErr)
+	}
+
 	for name, mutate := range map[string]func(*RecordDraftPullRequest){
 		"actor": func(value *RecordDraftPullRequest) {
 			value.Meta.Actor.Kind = ActorMergeService

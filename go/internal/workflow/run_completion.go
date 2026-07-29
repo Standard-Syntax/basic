@@ -162,7 +162,7 @@ func (r Run) recordDraftPullRequest(command RecordDraftPullRequest) (runTransiti
 	if err := command.Publication.Validate(); err != nil {
 		return runTransition{}, err
 	}
-	if r.Publication != nil && !r.Publication.Equal(command.Publication) {
+	if r.Publication != nil {
 		return runTransition{}, fmt.Errorf("%w: run publication binding", ErrInvalid)
 	}
 	next := r
