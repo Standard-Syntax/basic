@@ -222,14 +222,19 @@ func (s *Service) collectEvidence(
 	mapped contracts.ImplementationRequest,
 	executionReport execution.ExecutionReport,
 	plan ResolvedPlan,
-) (VerificationEvidence, error) {
+) (evidence VerificationEvidence, returnedErr error) {
 	workspace, cleanup, err := s.workspaces.Prepare(
 		ctx, request.VerificationID, request.CandidateCommit,
 	)
 	if err != nil {
 		return VerificationEvidence{}, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() {
+		if err := cleanup(); err != nil && returnedErr == nil {
+			evidence = VerificationEvidence{}
+			returnedErr = err
+		}
+	}()
 	imageID, err := s.executor.ImageID(ctx)
 	if err != nil {
 		return VerificationEvidence{}, fmt.Errorf("resolve verification image: %w", err)
@@ -307,6 +312,9 @@ func (s *Service) recordWorkflow(
 ) (Result, error) {
 	timestamp, err := handle.FinalTransitionTime(ctx, s.now().UTC())
 	if err != nil {
+		if replay, ok := s.completedReplay(ctx, request, err); ok {
+			return replay, nil
+		}
 		return Result{}, fmt.Errorf("reserve verification transition timestamp: %w", err)
 	}
 	recorded, err := s.workflow.ExecuteTask(ctx, workflow.RecordTaskVerification{
@@ -328,25 +336,36 @@ func (s *Service) recordWorkflow(
 		Passed:          evidence.Passed, Replay: recorded.Replay,
 	}
 	if err := handle.Complete(ctx, result); err != nil {
-		retry, beginErr := s.ledger.Begin(ctx, VerificationStart{
-			VerificationID: request.VerificationID,
-			RequestDigest:  mustRequestDigest(request),
-			Timestamp:      request.VerificationTimestamp, ReservationTTL: s.config.ReservationTTL,
-		})
-		if beginErr == nil {
-			if replay, ok := retry.Replay(); ok {
-				replay.Replay = true
-				return replay, nil
-			}
+		if replay, ok := s.completedReplay(ctx, request, err); ok {
+			return replay, nil
 		}
 		return Result{}, fmt.Errorf("finalize verification ledger: %w", err)
 	}
 	return result, nil
 }
 
-func mustRequestDigest(request Request) string {
-	digest, _ := verificationRequestDigest(request)
-	return digest
+func (s *Service) completedReplay(
+	ctx context.Context, request Request, cause error,
+) (Result, bool) {
+	if !errors.Is(cause, ErrVerificationConflict) {
+		return Result{}, false
+	}
+	digest, err := verificationRequestDigest(request)
+	if err != nil {
+		return Result{}, false
+	}
+	handle, err := s.ledger.Begin(ctx, VerificationStart{
+		VerificationID: request.VerificationID, RequestDigest: digest,
+		Timestamp: request.VerificationTimestamp, ReservationTTL: s.config.ReservationTTL,
+	})
+	if err != nil {
+		return Result{}, false
+	}
+	replay, ok := handle.Replay()
+	if ok {
+		replay.Replay = true
+	}
+	return replay, ok
 }
 
 func (s *Service) commandEnvelope(

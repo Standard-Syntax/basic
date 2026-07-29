@@ -21,12 +21,14 @@ type checks, Go and Python tests, all Go command builds, and a Python import
 smoke test. Generated Protobuf Python modules are excluded from the source type
 check because their runtime-defined attributes do not ship static type stubs.
 
-`make integration-test` builds the static scratch worker, starts
+`make integration-test` builds the static execution worker and the
+dependency-seeded verification image, starts
 `postgres:18.1-alpine` on
 `127.0.0.1:55433`, waits for health, applies embedded migrations, runs the
-tagged workflow, registry, reasoning-gateway, and execution suites against one
-shared database, exercises the live isolated worker, and removes the disposable
-resources even on test failure. The
+tagged workflow, registry, reasoning-gateway, execution, and verification
+suites against one shared database, exercises both live isolated workers,
+runs the repository's `make check` offline against a newly materialized exact
+commit, and removes the disposable resources even on test failure. The
 packages may migrate in any order. Success includes:
 
 ```text
@@ -34,6 +36,7 @@ ok github.com/Standard-Syntax/basic/go/internal/workflow
 ok github.com/Standard-Syntax/basic/go/internal/registry
 ok github.com/Standard-Syntax/basic/go/internal/reasoning/gateway
 ok github.com/Standard-Syntax/basic/go/internal/execution
+ok github.com/Standard-Syntax/basic/go/internal/verification
 ```
 
 If port 55433 is occupied, stop the conflicting process or change both the
@@ -119,6 +122,31 @@ The worker is not a network service. Interrupted runs may be inspected with
 refs/harness/candidates/`. Normal cancellation and failure paths remove
 abandoned worktrees; only successfully workflow-recorded candidates retain an
 internal ref.
+
+## Independent verification service
+
+`go/internal/verification.Service` is an in-process boundary. Supply the
+verification actor UUID, immutable catalog, content-addressed artifact store,
+workflow command store, clean-workspace preparer, check executor, and
+verification ledger. `Verify` accepts a stable verification UUID/timestamp,
+the validated v1 implementation request, exact Phase 6 report artifact and
+candidate commit, expected task revision, and kernel-selected
+criterion-to-check mappings.
+
+Build the dedicated image directly with:
+
+```bash
+docker build -f Dockerfile.verification-worker \
+  -t basic-verification-worker:integration .
+docker image inspect --format '{{.Id}}' \
+  basic-verification-worker:integration
+```
+
+The initial catalog entry is `make-check-v1`, which always resolves to
+`["make", "check"]`. The image contains dependencies locked by `go.sum` and
+`uv.lock` plus `protoc-gen-go@v1.36.10`; runtime execution is offline.
+`go/cmd/verification-service` and `go/cmd/verification-worker` open no
+listeners.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

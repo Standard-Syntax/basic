@@ -36,12 +36,16 @@ func run(input io.Reader, output io.Writer) error {
 		request.OutputBytes <= 0 || request.OutputBytes > verification.DefaultMaxOutputBytes {
 		return errors.New("unapproved verification command")
 	}
+	if err := prepareUVCache(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, request.Argv[0], request.Argv[1:]...)
 	command.Dir = "/workspace"
 	command.Env = []string{
 		"HOME=/tmp/home", "TMPDIR=/tmp", "GOCACHE=/tmp/go-build",
+		"GOMODCACHE=/go/pkg/mod", "GOPROXY=off", "GOSUMDB=off",
 		"UV_CACHE_DIR=/tmp/uv-cache", "UV_OFFLINE=1", "UV_NO_SYNC=1",
 		"UV_PROJECT_ENVIRONMENT=/opt/venv", "PYTHONPATH=/workspace/python/src",
 		"PATH=/opt/bin:/opt/venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
@@ -77,6 +81,18 @@ func run(input io.Reader, output io.Writer) error {
 		}
 	}
 	return json.NewEncoder(output).Encode(response)
+}
+
+func prepareUVCache() error {
+	if err := os.MkdirAll("/tmp/uv-cache", 0o700); err != nil {
+		return fmt.Errorf("create writable uv cache: %w", err)
+	}
+	command := exec.Command("/bin/cp", "-a", "/opt/uv-cache/.", "/tmp/uv-cache/")
+	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("seed writable uv cache: %w: %s", err, bytes.TrimSpace(output))
+	}
+	return nil
 }
 
 func decode(input io.Reader) (verification.WorkerRequest, error) {

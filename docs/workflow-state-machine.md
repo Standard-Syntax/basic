@@ -50,6 +50,12 @@ tuple. The execution-service command timestamp must be before the stored expiry,
 and the token must match the current attempt. Mismatch, expiry, or supersession
 fails before snapshot, event, or command-result mutation.
 
+`RecordTaskVerification` is emitted only by the verification-service actor
+after the report artifact is checkpointed. Its evidence and candidate commit
+are exact bindings. Passing complete coverage moves `VERIFYING` to
+`REVIEWING`; any failed or uncovered criterion records failed evidence and
+moves the task to `REWORK_REQUIRED`.
+
 Task-graph approval validates uniqueness, references, attempt limits, and
 acyclicity, then atomically creates snapshots, dependency edges, creation or
 readiness events, and the run transition. Models and Python have no authority.

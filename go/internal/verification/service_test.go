@@ -74,10 +74,11 @@ func (f *fakeWorkflow) ExecuteTask(
 }
 
 type fakePreparer struct {
-	root      string
-	prepared  atomic.Int32
-	cleaned   atomic.Int32
-	candidate string
+	root       string
+	prepared   atomic.Int32
+	cleaned    atomic.Int32
+	candidate  string
+	cleanupErr error
 }
 
 func (p *fakePreparer) Prepare(
@@ -91,7 +92,10 @@ func (p *fakePreparer) Prepare(
 	}
 	return workspace, func() error {
 		p.cleaned.Add(1)
-		return os.RemoveAll(workspace)
+		if err := os.RemoveAll(workspace); err != nil {
+			return err
+		}
+		return p.cleanupErr
 	}, nil
 }
 
@@ -168,6 +172,74 @@ func TestServiceFailsClosedForUncoveredCriterionWithoutTrustingModelText(t *test
 	if result.Passed || workflowStore.commands[0].Passed || len(executor.calls) != 1 {
 		t.Fatalf("uncovered criterion passed: %#v calls=%v", result, executor.calls)
 	}
+}
+
+func TestServiceRunsRemainingChecksAfterFailure(t *testing.T) {
+	service, request, workflowStore, executor, _ := serviceFixture(
+		t, []ExecutionMeasurement{failingMeasurement(), passingMeasurement()},
+	)
+	definition := func(id string) CheckDefinition {
+		value := DefaultCatalog().definitions[0]
+		value.ID = id
+		return value
+	}
+	catalog, err := NewCatalog([]CheckDefinition{
+		definition("first-check-v1"), definition("second-check-v1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.config.Catalog = catalog
+	request.Implementation.AvailableCheckIds = []string{"first-check-v1", "second-check-v1"}
+	for index := range request.Requirements {
+		request.Requirements[index].CheckIDs = []string{"first-check-v1", "second-check-v1"}
+	}
+	result, err := service.Verify(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Passed || len(executor.calls) != 2 || workflowStore.commands[0].Passed {
+		t.Fatalf("result=%#v calls=%v", result, executor.calls)
+	}
+}
+
+func TestServiceCleanupAndWorkerFailuresCannotMutateWorkflow(t *testing.T) {
+	t.Run("cleanup", func(t *testing.T) {
+		service, request, workflowStore, _, preparer := serviceFixture(
+			t, []ExecutionMeasurement{passingMeasurement()},
+		)
+		preparer.cleanupErr = errors.New("cleanup failed")
+		if _, err := service.Verify(t.Context(), request); err == nil {
+			t.Fatal("cleanup failure ignored")
+		}
+		if len(workflowStore.commands) != 0 {
+			t.Fatal("cleanup failure mutated workflow")
+		}
+	})
+	t.Run("malformed worker", func(t *testing.T) {
+		service, request, workflowStore, executor, preparer := serviceFixture(
+			t, []ExecutionMeasurement{passingMeasurement()},
+		)
+		executor.err = ErrWorkerResponse
+		if _, err := service.Verify(t.Context(), request); !errors.Is(err, ErrWorkerResponse) {
+			t.Fatalf("error = %v", err)
+		}
+		if len(workflowStore.commands) != 0 || preparer.cleaned.Load() != 1 {
+			t.Fatal("worker failure mutated workflow or leaked workspace")
+		}
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		service, request, workflowStore, executor, preparer := serviceFixture(
+			t, []ExecutionMeasurement{passingMeasurement()},
+		)
+		executor.err = context.Canceled
+		if _, err := service.Verify(t.Context(), request); !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v", err)
+		}
+		if len(workflowStore.commands) != 0 || preparer.cleaned.Load() != 1 {
+			t.Fatal("cancellation mutated workflow or leaked workspace")
+		}
+	})
 }
 
 func TestServiceRejectsArtifactAndCandidateMismatchesBeforeExecution(t *testing.T) {

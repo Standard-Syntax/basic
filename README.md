@@ -1,15 +1,17 @@
 # Agent Harness
 
-This repository is the Phase 0–6 foundation for a kernel-driven agent harness.
+This repository is the Phase 0–7 foundation for a kernel-driven agent harness.
 Go is the trusted control-plane language; Python is limited to declarative agent
 configuration. Reasoning outputs are untrusted, provider-neutral proposals.
 
 The trusted Go kernel now makes transactional run and task lifecycle decisions
 with append-only PostgreSQL events. Leases and artifact, execution,
 verification, review, approval, and merge values are immutable references.
-Phase 6 performs only proposal-authorized complete-file application and
-candidate-commit creation; verification, publication, merge, and deployment
-remain external.
+Phase 6 performs proposal-authorized complete-file application and
+candidate-commit creation. Phase 7 independently materializes that exact
+candidate, executes only kernel-approved checks, records bounded evidence, and
+calculates acceptance coverage. Publication, merge, and deployment remain
+external.
 
 The installed Python SDK compiles offline definitions for all four reasoning
 stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
@@ -25,6 +27,11 @@ The Go execution library revalidates accepted proposals, fences them to the
 active lease, applies them in a network-disabled unprivileged container, creates
 a verified candidate commit with hook/filter-free Git plumbing, and records a
 content-addressed execution report through an immutable PostgreSQL ledger.
+
+The in-process verification library validates the execution report and exact
+candidate binding, resolves `make-check-v1` from an immutable Go catalog, runs
+`make check` offline in a separate locked-down image, and records a
+content-addressed verification report through a recoverable immutable ledger.
 
 ## Quick start
 

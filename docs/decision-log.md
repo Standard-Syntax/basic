@@ -269,3 +269,49 @@ Candidates remain reachable only under `refs/harness/candidates/...` until a
 later approved publication phase.
 ### Date
 2026-07-28
+
+## DEC-015: Independent checks resolve from a fixed offline catalog
+
+### Decision
+Resolve verification commands only from an ordered immutable Go catalog and
+run the selected checks against a newly raw-object-materialized candidate in a
+dedicated network-disabled image.
+### Options considered
+Model-supplied commands; repository-defined commands; kernel catalog entries
+executed by a static verification worker.
+### Pros
+Model completion claims cannot become evidence, argv is reviewable, and every
+log and coverage decision binds an exact commit and immutable image.
+### Cons
+New checks require a kernel release and the dependency-seeded image is larger
+than the execution-worker scratch image.
+### Why this option
+Independent verification must not delegate command authority to the proposal
+or repository it is evaluating.
+### Consequences
+The first entry is `make-check-v1`; checks run offline, in catalog order, and
+all mapped checks must pass for a criterion.
+### Date
+2026-07-29
+
+## DEC-016: Verification evidence is checkpointed before workflow mutation
+
+### Decision
+Persist verification IDs through `reserved`, `evidence_ready`, and `completed`
+states, with database-protected identity and evidence fields.
+### Options considered
+Rerun checks after transition failure; one-step completion; evidence checkpoint
+followed by an idempotent workflow command.
+### Pros
+Concurrent replay runs checks once, recovery cannot replace evidence, and an
+ambiguous workflow response does not require repeating expensive checks.
+### Cons
+The ledger requires a recovery state and a deterministic transition command.
+### Why this option
+Evidence production and workflow mutation cross separate durability
+boundaries.
+### Consequences
+Only expired pre-evidence reservations are taken over; evidence-ready recovery
+retries the workflow command and completed replay returns the original result.
+### Date
+2026-07-29

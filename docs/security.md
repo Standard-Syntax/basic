@@ -1,6 +1,6 @@
 # Security
 
-## Phase 0–6 boundaries
+## Phase 0–7 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
@@ -68,7 +68,27 @@
 - Candidate commits use raw blobs and a temporary index. Repository hooks,
   clean/smudge filters, textconv, and external diff drivers are not invoked.
   Candidate refs are internal reachability records, not publication.
+- Verification rejects unknown, unavailable, duplicated, or criterion-mismatched
+  check bindings before workspace creation, container launch, artifact writes,
+  or workflow mutation. Model prose and repository content cannot introduce an
+  argv.
+- The verification worker runs the fixed `make check` argv as a non-root
+  UID/GID with no network, capabilities, privilege escalation, inherited
+  secrets, Git credentials, or writable root. It is limited to one CPU, 1 GiB,
+  256 PIDs, bounded tmpfs, ten minutes, and 1 MiB combined output per check.
+- Verification resolves and records the immutable Docker image ID before
+  execution. Every log, report, coverage row, and workflow command binds the
+  exact candidate commit and Phase 6 report.
+- At most two verifications and four verification workspaces are admitted.
+  Timeouts, output overflow, cancellation, malformed worker output, cleanup
+  failure, corrupt artifacts, stale revisions, and candidate mismatches cannot
+  advance a task.
+- Verification IDs bind deterministic request digests. Exact replay never
+  reruns checks, expired pre-evidence reservations may be recovered, and
+  evidence-ready retries perform only the workflow transition. PostgreSQL
+  protects evidence-ready identity/evidence and completed rows from mutation
+  or deletion.
 
-Phase 6 does not add credentials, declared-check execution, secret scanning,
-independent verification, publication, merge, deployment, or network access.
-Those remain later authorization boundaries.
+Phase 7 does not add credentials, secret scanning, review/approval,
+publication, merge, deployment, a listener, or network access. Those remain
+later authorization boundaries.

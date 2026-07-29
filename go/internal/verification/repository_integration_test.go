@@ -57,6 +57,17 @@ func TestPostgresVerificationLedgerRecoveryReplayConflictAndImmutability(t *test
 	if err := handle.SaveEvidence(t.Context(), evidence); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := pool.Exec(t.Context(), `UPDATE verification_ledger
+		SET evidence_json='{}'::jsonb WHERE verification_id=$1`, start.VerificationID); err == nil {
+		t.Fatal("evidence-ready verification evidence was mutable")
+	}
+	if _, err := pool.Exec(t.Context(), `UPDATE verification_ledger
+		SET request_digest=$2 WHERE verification_id=$1`,
+		start.VerificationID,
+		"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	); err == nil {
+		t.Fatal("evidence-ready verification identity was mutable")
+	}
 	recovered, err := ledger.Begin(t.Context(), start)
 	if err != nil {
 		t.Fatal(err)
