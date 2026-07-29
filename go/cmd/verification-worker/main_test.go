@@ -88,7 +88,7 @@ func TestWorkerBoundedBuffer(t *testing.T) {
 func TestSecureRuntimeCacheUsesLeastPrivilegeModes(t *testing.T) {
 	root := t.TempDir()
 	directory := filepath.Join(root, "nested")
-	if err := os.Mkdir(directory, 0o755); err != nil {
+	if err := os.Mkdir(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(directory, "cache-entry")
