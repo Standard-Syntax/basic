@@ -226,10 +226,49 @@ func TestServiceReplayAndEvidenceReadyRecoveryDoNotRerunChecks(t *testing.T) {
 		t.Fatalf("recovery reran checks: %v", executor.calls)
 	}
 	conflict := request
-	conflict.CandidateCommit = "d" + conflict.CandidateCommit[1:]
-	if _, err := service.Verify(t.Context(), conflict); !errors.Is(err, ErrInvalidRequest) &&
-		!errors.Is(err, ErrVerificationConflict) {
+	conflict.Requirements = append([]AcceptanceRequirement(nil), request.Requirements...)
+	conflict.Requirements[0].CheckIDs = nil
+	if _, err := service.Verify(t.Context(), conflict); !errors.Is(err, ErrVerificationConflict) {
 		t.Fatalf("conflict error = %v", err)
+	}
+}
+
+func TestConcurrentIdenticalVerificationRunsChecksOnce(t *testing.T) {
+	service, request, _, executor, _ := serviceFixture(
+		t, []ExecutionMeasurement{passingMeasurement()},
+	)
+	const callers = 8
+	results := make(chan Result, callers)
+	failures := make(chan error, callers)
+	var wait sync.WaitGroup
+	for range callers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			result, err := service.Verify(context.Background(), request)
+			results <- result
+			failures <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var artifact workflow.ArtifactRef
+	for result := range results {
+		if artifact.URI == "" {
+			artifact = result.ReportArtifact
+		}
+		if !result.ReportArtifact.Equal(artifact) {
+			t.Fatalf("concurrent result mismatch: %#v", result)
+		}
+	}
+	if len(executor.calls) != 1 {
+		t.Fatalf("concurrent verification ran %d checks", len(executor.calls))
 	}
 }
 
