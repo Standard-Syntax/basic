@@ -23,13 +23,14 @@ check because their runtime-defined attributes do not ship static type stubs.
 
 `make integration-test` starts `postgres:18.1-alpine` on
 `127.0.0.1:55433`, waits for health, applies embedded migrations, runs the
-tagged workflow and registry suites against one shared database, and removes
-the disposable resources even on test failure. The packages may migrate in
-either order. Success includes:
+tagged workflow, registry, and reasoning-gateway suites against one shared
+database, and removes the disposable resources even on test failure. The
+packages may migrate in any order. Success includes:
 
 ```text
 ok github.com/Standard-Syntax/basic/go/internal/workflow
 ok github.com/Standard-Syntax/basic/go/internal/registry
+ok github.com/Standard-Syntax/basic/go/internal/reasoning/gateway
 ```
 
 If port 55433 is occupied, stop the conflicting process or change both the
@@ -79,6 +80,20 @@ use an unpinned system `protoc`.
 Generated transport types live under `go/gen` and
 `python/src/harness_agents/_generated`. Handwritten domain validation must not
 be added to those directories.
+
+## In-process fake reasoning gateway
+
+`go/internal/reasoning/gateway` is a library boundary, not a daemon. Construct
+it with an exact manifest resolver, deterministic fake adapter,
+content-addressed artifact store, invocation repository, and clock, then call
+`Service.ProposeImplementation`. `NewService` applies 1 MiB request/proposal
+defaults; pass one `ByteLimits` value to configure smaller or larger positive
+limits.
+
+There is intentionally no production artifact-store implementation in Phase 5.
+The integration tests use an integrity-checking in-memory store while
+PostgreSQL persists only artifact references and invocation metadata. The
+`go/cmd/reasoning-gateway` package builds but starts no listener.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

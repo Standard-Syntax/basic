@@ -1,6 +1,6 @@
 # Security
 
-## Phase 0–4 boundaries
+## Phase 0–5 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
@@ -13,6 +13,21 @@
 - Registry reads revalidate stored manifest bytes and verify their canonical
   form, digest, and embedded identity against the indexed columns. Corrupt
   persisted data is never returned as a valid record.
+- The reasoning gateway accepts only the implementation stage and exact
+  `implementation_proposal.v1` manifest output. Registry lookup, adapter,
+  artifact, cancellation, and database failures cannot be recast as policy
+  rejections.
+- Request IDs bind to deterministic request bytes. A committed in-progress
+  reservation makes concurrent identical calls converge on one immutable
+  result without holding a database connection during adapter work; different
+  bytes under the same ID fail closed.
+- Request and proposal bodies are content-addressed and verified on write and
+  replay. PostgreSQL stores only URIs, digests, identity, fake-adapter metadata,
+  usage, status, and rejection metadata. Completed rows cannot be updated or
+  deleted.
+- Request and proposal transports default to a 1 MiB limit. The fake adapter
+  consumes exactly one permitted provider request and has no shell, network,
+  filesystem-write, workflow, approval, or execution capability.
 - The installed compiler always applies its packaged v1 schema; an override can
   only add restrictions. Python and Go enforce the same closed stage/output
   mapping.
@@ -26,6 +41,9 @@
 - Review recommendations are advisory and cannot encode approval.
 - The registry has no HTTP/gRPC transport, authentication surface, provider,
   runtime agent, production secrets, automatic merge, or deployment.
+- The reasoning gateway command remains non-networked. There is no production
+  artifact backend, provider credential path, model invocation, or runtime
+  listener.
 - Humans alone approve or reject specifications, task graphs, reviewed tasks,
   and runs, and humans alone cancel runs.
 - Service actors record only stage-specific operational facts. Python, model,

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"google.golang.org/protobuf/proto"
@@ -32,19 +33,37 @@ func validImplementation(
 	t *testing.T,
 ) (ImplementationRequest, *reasoningv1.ImplementationProposal) {
 	t.Helper()
-	var requestPB reasoningv1.ImplementationRequest
-	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &requestPB); err != nil {
+	requestPB, proposal := validImplementationTransport(t)
+	request, err := MapImplementationRequest(requestPB)
+	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := MapImplementationRequest(&requestPB)
-	if err != nil {
+	return request, proposal
+}
+
+func validImplementationTransport(
+	t *testing.T,
+) (*reasoningv1.ImplementationRequest, *reasoningv1.ImplementationProposal) {
+	t.Helper()
+	var requestPB reasoningv1.ImplementationRequest
+	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &requestPB); err != nil {
 		t.Fatal(err)
 	}
 	var proposal reasoningv1.ImplementationProposal
 	if err := proto.Unmarshal(implementationFixture(t, "proposal.bin"), &proposal); err != nil {
 		t.Fatal(err)
 	}
-	return request, &proposal
+	return &requestPB, &proposal
+}
+
+func requireValidationCode(
+	t *testing.T, err error, want reasoningv1.RejectionCode,
+) {
+	t.Helper()
+	code, ok := ValidationCode(err)
+	if !ok || code != want {
+		t.Fatalf("validation code = %v, %t; want %v; error=%v", code, ok, want, err)
+	}
 }
 
 func TestImplementationOperationsMapAndRoundTrip(t *testing.T) {
@@ -180,4 +199,107 @@ func TestImplementationRequestRejectsUntrustedRepositoryContext(t *testing.T) {
 	if _, err := MapImplementationRequest(&request); err == nil {
 		t.Fatal("repository context without envelope artifact binding accepted")
 	}
+}
+
+func TestImplementationValidationReturnsEveryStableCode(t *testing.T) {
+	t.Run("schema invalid", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Summary = ""
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+		)
+	})
+	t.Run("request mismatch", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Identity.RequestId = "stale"
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+		)
+	})
+	t.Run("authority violation", func(t *testing.T) {
+		request, _ := validImplementationTransport(t)
+		request.Envelope.Authority.MayApproveWork = true
+		_, err := MapImplementationRequest(request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION,
+		)
+	})
+	t.Run("scope violation", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Changes[0].Path = "docs/outside.go"
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+		)
+	})
+	t.Run("required coverage missing", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Changes = proposal.Changes[:2]
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err,
+			reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
+		)
+	})
+}
+
+func TestImplementationValidationFirstApplicableFailureWins(t *testing.T) {
+	t.Run("schema before identity and scope", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Summary = ""
+		proposal.Identity.RequestId = "stale"
+		proposal.Changes[0].Path = "docs/outside.go"
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+		)
+	})
+	t.Run("identity before scope", func(t *testing.T) {
+		request, proposal := validImplementation(t)
+		proposal.Identity.Attempt++
+		proposal.Changes[0].Path = "docs/outside.go"
+		_, err := MapImplementationProposal(proposal, request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+		)
+	})
+	t.Run("bindings before authority", func(t *testing.T) {
+		request, _ := validImplementationTransport(t)
+		request.Envelope.AgentManifestDigest = "bad"
+		request.Envelope.Authority.MayApproveWork = true
+		_, err := MapImplementationRequest(request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+		)
+	})
+	t.Run("authority before scope and coverage", func(t *testing.T) {
+		request, _ := validImplementationTransport(t)
+		request.Envelope.Authority.MayModifyFiles = true
+		request.RepositoryContext[0].Path = "docs/outside.go"
+		request.AcceptanceCriterionIds = nil
+		_, err := MapImplementationRequest(request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_AUTHORITY_VIOLATION,
+		)
+	})
+	t.Run("scope before coverage", func(t *testing.T) {
+		request, _ := validImplementationTransport(t)
+		request.RepositoryContext[0].Path = "docs/outside.go"
+		request.AcceptanceCriterionIds = nil
+		_, err := MapImplementationRequest(request)
+		requireValidationCode(
+			t, err, reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
+		)
+	})
+}
+
+func TestImplementationRequestExpiryUsesProvidedClock(t *testing.T) {
+	request, _ := validImplementationTransport(t)
+	now := request.Envelope.ExpiresAt.AsTime().Add(time.Nanosecond)
+	_, err := MapImplementationRequestAt(request, now)
+	requireValidationCode(
+		t, err, reasoningv1.RejectionCode_REJECTION_CODE_REQUEST_MISMATCH,
+	)
 }

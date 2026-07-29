@@ -124,7 +124,8 @@ No merge or deployment field exists in reasoning contracts.
 ## DEC-008: Fake reasoning precedes a real provider
 
 ### Decision
-Prove kernel boundaries with a future fake adapter before adding a provider.
+Prove kernel boundaries with a deterministic fake adapter before adding a
+provider.
 ### Options considered
 Provider first; fake adapter first.
 ### Pros
@@ -134,7 +135,11 @@ Provider behavior is not exercised initially.
 ### Why this option
 Authority and validation must be provider-independent.
 ### Consequences
-Phase 0–1 contains no fake adapter or real provider runtime.
+Phase 5 implements one in-process fake implementation adapter with no real
+provider, credentials, network transport, command execution, or repository
+mutation.
+### Date
+2026-07-28
 
 ## DEC-009: Commands are idempotent transactional decisions
 
@@ -152,8 +157,6 @@ Retries must not repeat a transition or accept different content silently.
 ### Consequences
 Exact replay returns the recorded result; conflicting reuse fails closed, and
 pre-commit errors leave no command, event, or state change.
-### Date
-2026-07-27
 ### Date
 2026-07-27
 
@@ -178,5 +181,31 @@ workflow request.
 Registration is serialized per identity, exact replay is idempotent, update
 and deletion are rejected by trigger, and every lookup revalidates persisted
 bytes before returning.
+### Date
+2026-07-28
+
+## DEC-011: Reasoning replay binds immutable metadata to external payloads
+
+### Decision
+Store complete reasoning request and proposal bodies through a
+content-addressed artifact port while PostgreSQL stores immutable identity,
+artifact references, adapter metadata, usage, final status, and rejection
+metadata.
+### Options considered
+Payloads in PostgreSQL; application-only replay; external artifacts plus an
+immutable invocation ledger.
+### Pros
+Exact replay, bounded database rows, integrity verification, and no duplicate
+adapter call under concurrency.
+### Cons
+Replay depends on artifact availability and requires a request-scoped
+reservation row while the adapter is running.
+### Why this option
+Reasoning payloads are immutable evidence but are not authoritative workflow
+state and should not expand the metadata database.
+### Consequences
+Request IDs bind to deterministic bytes, completed rows reject mutation, and
+missing or corrupt artifacts fail replay rather than silently re-invoking the
+adapter.
 ### Date
 2026-07-28

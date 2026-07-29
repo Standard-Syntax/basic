@@ -23,6 +23,17 @@ by immutable `(agent_name, agent_version)` identity or lowercase SHA-256
 digest. Per-identity transaction advisory locks make concurrent registration
 deterministic.
 
+Phase 5 adds `go/internal/reasoning/gateway`, an in-process application API for
+implementation proposals only. A request is deterministically serialized,
+stored by SHA-256 through an `ArtifactStore`, and bound to an immutable
+invocation row. The gateway resolves the exact registered manifest digest,
+requires `implementation` with `implementation_proposal.v1`, calls one
+deterministic fake adapter, validates the proposal, stores its artifact, and
+commits either an accepted proposal or a typed rejection. A short committed
+reservation serializes each request ID; adapter and artifact work holds no
+database transaction or pooled connection. Exact concurrent replay returns the
+original outcome and different bytes fail with a conflict.
+
 The Python package has no provider or runtime agent, and no workflow, database,
 Git, shell, network, direct-file-mutation, credential, approval, publication,
 registration, or task-scope authority. Its only writes are the explicitly
@@ -35,6 +46,13 @@ PostgreSQL advisory lock. Artifact bodies remain external; rows contain URIs,
 lowercase SHA-256 digests, canonical manifest metadata, commit identifiers,
 and small event payloads.
 
-No HTTP/gRPC server, provider, runtime Python agent, worktree, file mutation, command runner,
+Migration `0007` stores reasoning identity, request/proposal artifact
+references, fake-adapter metadata, usage counters, timestamps, final status,
+and rejection metadata. It never stores complete request or proposal bodies.
+Completed invocation rows reject update and deletion by database trigger. No
+production filesystem or object-store backend exists; tests use an
+integrity-checking in-memory artifact store.
+
+No HTTP/gRPC server, real provider, runtime Python agent, worktree, file mutation, command runner,
 verification runner, pull-request operation, merge operation, or deployment
 exists. `MERGED` records an already completed, approval-bound external fact.
