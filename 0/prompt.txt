@@ -1,0 +1,86 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 0–1 Thin Vertical-Slice Implementation Plan
+
+## Summary
+
+Build only the repository foundation and shared contracts required by `docs/plan-brief.md`. Each stacked branch must compile and pass its focused tests independently. Workflow execution, databases, worktrees, providers, runtime services, and PR publication remain deferred.
+
+Initialize the local stack from `main` with:
+
+```bash
+gh stack init --base main \
+  phase01/foundation \
+  phase01/agent-manifest \
+  phase01/specification-contract \
+  phase01/planning-contract \
+  phase01/implementation-contract \
+  phase01/review-and-integration
+```
+
+Then move to `phase01/foundation` with `gh stack bottom` and implement upward. Do not submit or publish the stack during this task.
+
+## Implementation Slices
+
+1. **`phase01/foundation` — reproducible monorepo baseline**
+   - Create the Go workspace, Python 3.14 `uv` project, initial service command skeletons, pinned Protobuf generation tooling, lint/test commands, and CI.
+   - Provide `make generate`, `make generate-check`, `make lint`, `make test`, and the single aggregate gate `make check`.
+   - Check generated Go and Python Protobuf bindings into source control and fail `generate-check` when regeneration changes them.
+   - Add development, architecture, security, resource-analysis, and decision-log documentation. Record the eight decisions required by the brief.
+   - Gate: skeleton binaries build, Python package imports, empty test suites execute, generation is reproducible, and `make check` passes.
+
+2. **`phase01/agent-manifest` — declarative configuration to immutable manifest**
+   - Add `agent-manifest-v1.schema.json` with closed objects, stable stage/tool enums, safe model/context policies, and explicit rejection of shell, network, write, credential, workflow-authority, and task-scope fields.
+   - Implement typed Python `AgentDefinition`, prompt, model, context, tool-request, and output-contract APIs plus a manifest compiler CLI.
+   - Hash the prompt’s exact UTF-8 bytes, reference it as `artifact://sha256/<digest>`, canonicalize the manifest using RFC 8785 JSON, and emit a lowercase SHA-256 digest over those canonical bytes.
+   - Add a Go contract reader that validates the same golden manifest and digest without introducing registry or persistence behavior.
+   - Gate: identical definitions produce byte-identical output; unsafe permissions, unsupported stages, invalid URIs, non-finite numbers, and missing fields fail deterministically.
+
+3. **`phase01/specification-contract` — first provider-neutral reasoning round trip**
+   - Add `common.proto` with request identity, authority, budgets, artifact digests, manifest digest, timestamps, stage, and attempt metadata.
+   - Define the fixed `proposal_only` authority contract and Go domain mappings that fail closed on any elevated authority flag.
+   - Add specification request/proposal messages covering the approved brief fields and stable acceptance-criterion identifiers with verification methods.
+   - Gate: Python-generated fixtures deserialize and map correctly in Go; Go-generated fixtures deserialize in Python; malformed envelopes and authority elevation are rejected.
+
+4. **`phase01/planning-contract` — bounded task-graph proposal**
+   - Add planning request/proposal contracts for approved-specification identity, repository map, readable/writable/prohibited paths, task limits, dependencies, exclusive resources, checks, stop conditions, and acceptance assignments.
+   - Enforce in domain validation that writable paths are readable, task IDs and dependencies are valid, assigned acceptance criteria exist, limits are positive, and the graph is acyclic.
+   - Gate: valid one-task and multi-task graphs round-trip across languages; cycles, unknown dependencies, invalid scope relationships, and missing criterion assignments fail without partial results.
+
+5. **`phase01/implementation-contract` — structured changes and rejection vocabulary**
+   - Add implementation request/proposal contracts using complete-file `create`, `update`, and `delete` operations with path, expected digest, replacement content, rationale, and acceptance mapping.
+   - Add the five stable rejection codes and complete rejection record: `SCHEMA_INVALID`, `REQUEST_MISMATCH`, `AUTHORITY_VIOLATION`, `SCOPE_VIOLATION`, and `REQUIRED_COVERAGE_MISSING`.
+   - Validate structure only: request identity, operation invariants, normalized repository-relative paths, digest syntax, declared checks, and criterion coverage. Do not mutate files or execute checks.
+   - Gate: every operation and rejection code round-trips across languages; absolute paths, `..`, malformed digests, mismatched request identity, and incomplete coverage fail deterministically.
+
+6. **`phase01/review-and-integration` — complete shared-contract matrix**
+   - Add review contracts for candidate identity, actual diff, scope report, independent evidence, findings, required actions, unrequested changes, recommendation, and residual risks.
+   - Keep recommendation explicitly advisory; no field or mapping may represent kernel or human approval.
+   - Complete cross-language fixture tests for all four reasoning stages, schema compatibility, canonical manifest hashing, unknown-field behavior, and generated-code reproducibility.
+   - Finalize contract, manifest, development, security, resource, architecture, and decision documentation; include exact commands and observed results in the completion report.
+   - Gate: fresh `uv sync --frozen` followed by `make check` passes locally and in CI with no generated diff.
+
+## Public Interfaces and Contracts
+
+- Protobuf package: `harness.reasoning.v1`, containing common envelopes, authority, specification, planning, implementation, review, and rejection messages. No gRPC service definitions are added yet.
+- Python package: typed declarative agent configuration and a `harness-agents compile` CLI that emits canonical manifest JSON and a digest sidecar.
+- Manifest schema identifier: `urn:agent-harness:schema:agent-manifest:v1`; schema version and Protobuf field numbers become compatibility-stable once merged.
+- Canonical digest rule: RFC 8785 UTF-8 JSON bytes hashed with SHA-256 and rendered as lowercase hexadecimal.
+- Generated bindings remain transport-only; validation and domain invariants live in handwritten Go and Python packages.
+
+## Test and Acceptance Plan
+
+- Run focused Go and Python tests on every branch, followed by `make check`.
+- Exercise deterministic compilation across repeated runs and differently ordered equivalent inputs.
+- Verify schema rejection of unsafe permissions, unrestricted URLs, executable content, secrets, writable paths, and task-specific authority.
+- Round-trip representative request/proposal fixtures in both Go-to-Python and Python-to-Go directions for all four stages.
+- Test all five rejection codes, identity mismatches, authority elevation, invalid task graphs, invalid paths, missing coverage, and advisory-only review recommendations.
+- Run generation twice and require a clean `git diff`; CI repeats the same frozen, aggregate validation.
+- Record exact commands, exit results, assumptions, deviations, and unresolved issues in the final completion report.
+
+## Assumptions and Boundaries
+
+- Use the currently available Go 1.26, Python 3.14, and `uv`; all third-party tools and dependencies are pinned in committed manifests and lockfiles.
+- The repository starts clean at `main` commit `3640ec3`, with `origin` as its only remote and `main` as the trunk.
+- `gh stack init` has not been executed during Plan Mode because it creates and checks out branches; the exact non-interactive command above is the first execution step.
+- No PostgreSQL runtime, migrations, workflow state machine, agent registry service, reasoning provider, file mutation, verification runner, approval runtime, Git publication, or pull-request creation is included.
