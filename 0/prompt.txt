@@ -1,0 +1,50 @@
+# AGENTS.md instructions
+
+<INSTRUCTIONS>
+## Code search policy
+
+Choose the search tool according to the question:
+
+1. Use Probe MCP first for conceptual repository exploration:
+   - locating implementations by behavior or purpose;
+   - finding complete functions, classes, structs, or related symbols;
+   - understanding relationships across multiple files;
+   - retrieving context under a token budget.
+
+2. Use `ast-grep` for syntax-aware structural questions:
+   - locating a specific call, declaration, expression, or control-flow shape;
+   - finding structurally equivalent code despite formatting differences;
+   - validating the scope of a proposed codemod;
+   - performing structural rewrites.
+
+3. Use `rg` for literal text, filenames, configuration values, comments,
+   documentation, generated text, and exact identifiers.
+
+Search before reading large files. Begin with focused queries and broaden only
+when the initial search is insufficient.
+
+### ast-grep requirements
+
+- Invoke the executable as `ast-grep`, never `sg`.
+- Put patterns containing `$` inside single quotes.
+- Specify `--lang` when language inference could be ambiguous.
+- Run a search without rewriting before proposing a rewrite.
+- Use `--interactive` for exploratory rewrites.
+- Do not apply broad rewrites without reviewing matches and running tests.
+
+Examples:
+
+```bash
+ast-grep -p '$FUNC($$$ARGS)' --lang python src
+ast-grep -p 'if err != nil { $$$BODY }' --lang go .
+ast-grep -p 'console.log($$$ARGS)' --lang ts src
+```
+</INSTRUCTIONS>
+
+<environment_context>
+  <cwd>/home/dscv/Repo/basic</cwd>
+  <shell>bash</shell>
+  <current_date>2026-07-27</current_date>
+  <timezone>US/Central</timezone>
+  <filesystem><workspace_roots><root>/home/dscv/Repo/basic</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>
