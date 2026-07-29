@@ -48,6 +48,23 @@ Migration `0008` persists positive per-attempt lease fencing tokens. Migration
 completed result, and rejects mutation or deletion of completed rows. Artifact
 bodies remain behind the backend-neutral content-addressed port.
 
+Phase 7 adds `go/internal/verification`. `Service.Verify` revalidates the
+implementation request and content-addressed Phase 6 report, requires their
+run, task, attempt, base commit, and candidate commit to agree, and resolves
+checks only from an ordered immutable Go catalog. The exact candidate tree is
+materialized into a new directory from raw Git objects and never reuses the
+execution worktree. A static verification worker runs the fixed `make check`
+argv in a dedicated immutable image with no network, capabilities, privilege
+escalation, inherited environment, Git metadata, or host credentials.
+
+Each bounded combined log and the deterministic aggregate report is stored by
+digest. Criterion coverage passes only when it has mapped evidence and every
+mapped check passes; all selected checks run in catalog order after failures.
+Migration `0010` checkpoints `reserved`, `evidence_ready`, and `completed`
+verification states. Evidence-ready recovery retries only the idempotent
+workflow transition, while database triggers protect identity, evidence, and
+completed rows.
+
 The Python package has no provider or runtime agent, and no workflow, database,
 Git, shell, network, direct-file-mutation, credential, approval, publication,
 registration, or task-scope authority. Its only writes are the explicitly
@@ -67,7 +84,7 @@ Completed invocation rows reject update and deletion by database trigger. No
 production filesystem or object-store backend exists; tests use an
 integrity-checking in-memory artifact store.
 
-No HTTP/gRPC execution server, real provider, runtime Python agent, declared
-check runner, verification runner, pull-request operation, branch publication,
-merge operation, or deployment exists. `MERGED` records an already completed,
-approval-bound external fact.
+No HTTP/gRPC execution or verification server, real provider, runtime Python
+agent, pull-request operation, branch publication, merge operation, or
+deployment exists. `MERGED` records an already completed, approval-bound
+external fact.

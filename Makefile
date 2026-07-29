@@ -12,7 +12,13 @@ build:
 
 tools:
 	mkdir -p .tools/bin
-	cd go && GOBIN="$(CURDIR)/.tools/bin" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+	@if command -v protoc-gen-go >/dev/null 2>&1 && \
+		test "$$(protoc-gen-go --version)" = "protoc-gen-go v1.36.10"; then \
+		cp "$$(command -v protoc-gen-go)" .tools/bin/protoc-gen-go; \
+	else \
+		cd go && GOBIN="$(CURDIR)/.tools/bin" \
+			go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10; \
+	fi
 
 generate: tools
 	uv run --frozen python scripts/generate_proto.py
@@ -40,12 +46,13 @@ check: generate-check lint type-check test build
 
 integration-test:
 	docker build -f Dockerfile.execution-worker -t basic-execution-worker:integration .
+	docker build -f Dockerfile.verification-worker -t basic-verification-worker:integration .
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		go test -tags=integration -count=1 \
 			./internal/workflow ./internal/registry ./internal/reasoning/gateway \
-			./internal/execution || status=$$?; \
+			./internal/execution ./internal/verification || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
 

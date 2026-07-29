@@ -1,4 +1,9 @@
 *
 !go/
 !go/**
+!python/
+!python/**
 !Dockerfile.execution-worker
+!pyproject.toml
+!uv.lock
+!Dockerfile.verification-worker
