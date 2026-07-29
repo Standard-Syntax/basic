@@ -37,24 +37,68 @@ func NewService(
 	workflowStore WorkflowStore,
 	ledger ExecutionLedger,
 ) (*Service, error) {
+	if err := validateServiceDependencies(
+		artifacts, applicator, workflowStore, ledger,
+	); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeServiceConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return &Service{
+		config: normalized, artifacts: artifacts, applicator: applicator,
+		workflow: workflowStore, ledger: ledger, now: time.Now,
+		executions: make(chan struct{}, normalized.MaxConcurrent),
+		worktrees:  make(chan struct{}, normalized.MaxWorktrees),
+	}, nil
+}
+
+func validateServiceDependencies(
+	artifacts ArtifactStore,
+	applicator Applicator,
+	workflowStore WorkflowStore,
+	ledger ExecutionLedger,
+) error {
 	if artifacts == nil || applicator == nil || workflowStore == nil || ledger == nil {
-		return nil, errors.New(
+		return errors.New(
 			"artifact store, applicator, workflow store, and execution ledger are required",
 		)
 	}
+	return nil
+}
+
+func normalizeServiceConfig(config Config) (Config, error) {
+	if err := normalizeServicePaths(&config); err != nil {
+		return Config{}, err
+	}
+	if err := normalizeServiceLimits(&config); err != nil {
+		return Config{}, err
+	}
+	if err := validateServiceIdentity(config); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func normalizeServicePaths(config *Config) error {
 	if config.RepositoryRoot == "" || config.WorktreeRoot == "" || config.WorkerImage == "" {
-		return nil, errors.New("repository, worktree root, and worker image are required")
+		return errors.New("repository, worktree root, and worker image are required")
 	}
 	config.RepositoryRoot = filepath.Clean(config.RepositoryRoot)
 	config.WorktreeRoot = filepath.Clean(config.WorktreeRoot)
 	if !filepath.IsAbs(config.RepositoryRoot) || !filepath.IsAbs(config.WorktreeRoot) {
-		return nil, errors.New("repository and worktree roots must be absolute")
+		return errors.New("repository and worktree roots must be absolute")
 	}
+	return nil
+}
+
+func normalizeServiceLimits(config *Config) error {
 	if config.Limits == (Limits{}) {
 		config.Limits = DefaultLimits()
 	}
 	if err := validateLimits(config.Limits); err != nil {
-		return nil, err
+		return err
 	}
 	if config.MaxConcurrent == 0 {
 		config.MaxConcurrent = DefaultMaxConcurrent
@@ -63,18 +107,17 @@ func NewService(
 		config.MaxWorktrees = DefaultMaxWorktrees
 	}
 	if config.MaxConcurrent < 1 || config.MaxWorktrees < 1 {
-		return nil, errors.New("positive execution and worktree concurrency limits are required")
+		return errors.New("positive execution and worktree concurrency limits are required")
 	}
+	return nil
+}
+
+func validateServiceIdentity(config Config) error {
 	if _, err := uuid.Parse(config.ActorID); err != nil ||
 		strings.TrimSpace(config.AuthorName) == "" || strings.TrimSpace(config.AuthorEmail) == "" {
-		return nil, errors.New("execution actor and author metadata are required")
+		return errors.New("execution actor and author metadata are required")
 	}
-	return &Service{
-		config: config, artifacts: artifacts, applicator: applicator,
-		workflow: workflowStore, ledger: ledger, now: time.Now,
-		executions: make(chan struct{}, config.MaxConcurrent),
-		worktrees:  make(chan struct{}, config.MaxWorktrees),
-	}, nil
+	return nil
 }
 
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
