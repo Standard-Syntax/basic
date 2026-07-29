@@ -141,14 +141,35 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		replay.Replay = true
 		return replay, nil
 	}
+	releaseCapacity, err := s.acquireCapacity(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	defer releaseCapacity()
+	return s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
+}
+
+func (s *Service) acquireCapacity(ctx context.Context) (func(), error) {
 	if err := acquire(ctx, s.executions); err != nil {
-		return Result{}, err
+		return nil, err
 	}
-	defer release(s.executions)
 	if err := acquire(ctx, s.worktrees); err != nil {
-		return Result{}, err
+		release(s.executions)
+		return nil, err
 	}
-	defer release(s.worktrees)
+	return func() {
+		release(s.worktrees)
+		release(s.executions)
+	}, nil
+}
+
+func (s *Service) executeReserved(
+	ctx context.Context,
+	request Request,
+	mappedRequest contracts.ImplementationRequest,
+	mappedProposal contracts.ImplementationProposal,
+	handle ExecutionHandle,
+) (Result, error) {
 	worktree, err := createWorktree(
 		ctx, s.config, request.ExecutionID, mappedRequest.BaseCommit,
 	)
