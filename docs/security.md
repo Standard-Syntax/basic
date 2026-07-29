@@ -17,8 +17,9 @@
   `implementation_proposal.v1` manifest output. Registry lookup, adapter,
   artifact, cancellation, and database failures cannot be recast as policy
   rejections.
-- Request IDs bind to deterministic request bytes. PostgreSQL advisory locks
-  make concurrent identical calls converge on one immutable result; different
+- Request IDs bind to deterministic request bytes. A committed in-progress
+  reservation makes concurrent identical calls converge on one immutable
+  result without holding a database connection during adapter work; different
   bytes under the same ID fail closed.
 - Request and proposal bodies are content-addressed and verified on write and
   replay. PostgreSQL stores only URIs, digests, identity, fake-adapter metadata,

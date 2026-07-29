@@ -17,7 +17,7 @@ external work.
 | Database | workflow metadata, one immutable row per registered agent version, and one immutable reasoning row per request ID |
 | Artifacts | request and proposal bodies flow through an external content-addressed port; PostgreSQL stores only URIs and SHA-256 digests |
 | Model tokens | zero real-provider tokens; fake usage counters are deterministic metadata |
-| Concurrency | workflow row locks plus advisory locks per agent identity and reasoning request ID; task execution remains deferred |
+| Concurrency | workflow row locks, advisory locks per agent identity, and short reasoning reservation/finalization operations; task execution remains deferred |
 
 The integration suite uses disposable PostgreSQL 18.1 on
 `127.0.0.1:55433`, backed by tmpfs and removed after every run. Production

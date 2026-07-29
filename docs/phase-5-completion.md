@@ -31,6 +31,10 @@ manifest digest, fake-adapter metadata, timestamps, usage, final status, and
 rejection metadata. It never stores complete payload bodies. Exact request
 replay returns the original immutable outcome without another adapter call;
 different bytes under the same request ID return `ErrInvocationConflict`.
+The repository commits a narrow in-progress reservation before adapter work
+and finalizes it in a separate transaction, so model or artifact latency does
+not pin a pooled connection. Failed infrastructure work removes only the
+unfinished reservation; completed outcomes remain immutable.
 
 ## Boundaries preserved
 

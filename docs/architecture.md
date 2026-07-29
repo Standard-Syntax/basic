@@ -29,8 +29,9 @@ stored by SHA-256 through an `ArtifactStore`, and bound to an immutable
 invocation row. The gateway resolves the exact registered manifest digest,
 requires `implementation` with `implementation_proposal.v1`, calls one
 deterministic fake adapter, validates the proposal, stores its artifact, and
-commits either an accepted proposal or a typed rejection. A transaction
-advisory lock serializes each request ID so exact concurrent replay returns the
+commits either an accepted proposal or a typed rejection. A short committed
+reservation serializes each request ID; adapter and artifact work holds no
+database transaction or pooled connection. Exact concurrent replay returns the
 original outcome and different bytes fail with a conflict.
 
 The Python package has no provider or runtime agent, and no workflow, database,

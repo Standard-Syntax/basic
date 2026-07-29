@@ -199,7 +199,7 @@ Exact replay, bounded database rows, integrity verification, and no duplicate
 adapter call under concurrency.
 ### Cons
 Replay depends on artifact availability and requires a request-scoped
-transaction lock.
+reservation row while the adapter is running.
 ### Why this option
 Reasoning payloads are immutable evidence but are not authoritative workflow
 state and should not expand the metadata database.
