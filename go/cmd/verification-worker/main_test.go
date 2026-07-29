@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,6 +14,52 @@ func TestWorkerRejectsUnapprovedCommand(t *testing.T) {
 	var output bytes.Buffer
 	if err := run(strings.NewReader(input), &output); err == nil {
 		t.Fatal("unapproved command executed")
+	}
+}
+
+func TestSecureRuntimeCacheUsesLeastPrivilegeModes(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "nested")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(directory, "cache-entry")
+	if err := os.WriteFile(file, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("nested/cache-entry", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureRuntimeCache(root); err != nil {
+		t.Fatal(err)
+	}
+	assertMode(t, root, 0o700)
+	assertMode(t, directory, 0o700)
+	assertMode(t, file, 0o600)
+}
+
+func TestSecureRuntimeCacheRejectsSymbolicLinks(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("cache"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureRuntimeCache(root); err == nil {
+		t.Fatal("symbolic link accepted in runtime cache")
+	}
+}
+
+func assertMode(t *testing.T, path string, expected os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != expected {
+		t.Fatalf("%s mode = %04o, want %04o", path, mode, expected)
 	}
 }
 

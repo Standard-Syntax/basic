@@ -36,6 +36,20 @@ the request; neither the fake adapter nor a recommendation carries approval
 authority. The trusted review service separately fixes `HIGH` and `CRITICAL`
 as blocking and requires unexpected changed paths to be reported.
 
+Phase 10 leaves every published Protobuf and manifest-v1 field unchanged.
+Anthropic-specific implementation and review JSON schemas are internal, closed
+projections containing only model-owned proposal fields. The adapter injects
+`ProposalIdentity`, approved task/specification bindings, manifest digest, and
+input-artifact digests from the trusted request. Valid projections must still
+pass the same `MapImplementationProposal` or `MapReviewProposal` validators.
+
+Malformed complete provider responses are typed adapter results that only the
+gateway translates to `SCHEMA_INVALID` and persists with the exact raw
+response. Credential, transport, provider, cancellation, timeout, and refusal
+failures remain Go errors and release the unfinished reservation. Exact replay
+returns the immutable outcome without resolving a manifest, credential, or
+model and without another network attempt.
+
 ## Compatibility
 
 The package and schema major version are `v1`. Published field numbers and enum

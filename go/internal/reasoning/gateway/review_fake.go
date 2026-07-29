@@ -50,7 +50,12 @@ func (a *FakeReviewAdapter) ProposeReview(
 		AgentManifestDigest:  envelope.GetAgentManifestDigest(),
 		InputArtifactDigests: artifactDigests(envelope.GetInputArtifacts()),
 	}
+	response, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
+	if err != nil {
+		return ReviewAdapterResult{}, err
+	}
 	return ReviewAdapterResult{
-		Proposal: proposal, Provider: FakeProvider, Model: a.model, Usage: a.usage,
+		Proposal: proposal, ProviderResponse: response,
+		Provider: FakeProvider, Model: a.model, Usage: a.usage,
 	}, nil
 }

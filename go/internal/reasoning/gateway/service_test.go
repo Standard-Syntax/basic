@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -83,6 +84,16 @@ type countingAdapter struct {
 	inner ImplementationAdapter
 	err   error
 	calls atomic.Int32
+}
+
+type implementationAdapterFunc func(
+	context.Context, manifest.Manifest, *reasoningv1.ImplementationRequest,
+) (AdapterResult, error)
+
+func (f implementationAdapterFunc) ProposeImplementation(
+	ctx context.Context, value manifest.Manifest, request *reasoningv1.ImplementationRequest,
+) (AdapterResult, error) {
+	return f(ctx, value, request)
 }
 
 type memoryArtifactStore struct {
@@ -424,49 +435,123 @@ func TestManifestMustResolveToExactImplementationPairing(t *testing.T) {
 	}
 }
 
-func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
-	t.Run("defaults", func(t *testing.T) {
-		limits := DefaultByteLimits()
-		if limits.Request != 1<<20 || limits.Proposal != 1<<20 {
-			t.Fatalf("default limits = %+v", limits)
-		}
+func TestGatewayDefaultByteLimits(t *testing.T) {
+	limits := DefaultByteLimits()
+	if limits.Request != 1<<20 || limits.Proposal != 1<<20 ||
+		limits.ProviderResponse != 1<<20 {
+		t.Fatalf("default limits = %+v", limits)
+	}
+}
+
+func TestGatewayRequestByteLimit(t *testing.T) {
+	service, resolver, adapter := gatewayService(t, gatewayProposal(t))
+	service.limits.Request = 1
+	outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Rejection.GetCode() !=
+		reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
+		t.Fatal("oversized request reached dependencies")
+	}
+}
+
+func TestGatewayProposalByteLimit(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	service.limits.Proposal = 1
+	outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Rejection.GetCode() !=
+		reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		outcome.ProposalArtifact != (ArtifactReference{}) ||
+		adapter.calls.Load() != 1 {
+		t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
+	}
+}
+
+func TestGatewayProviderResponseByteLimit(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	request := gatewayRequest(t)
+	service.limits.ProviderResponse = 1
+	if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+		t.Fatal("oversized provider response accepted")
+	}
+	service.limits.ProviderResponse = defaultMaximumBytes
+	outcome, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
+		t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
+	}
+}
+
+func TestFakeAdapterRejectsMultipleProviderRequests(t *testing.T) {
+	if _, err := NewFakeImplementationAdapter(
+		gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
+	); err == nil {
+		t.Fatal("multi-request fake adapter configuration accepted")
+	}
+}
+
+func TestGatewayAllowsMultipleProviderRequestsWithinBudget(t *testing.T) {
+	service, _, adapter := gatewayService(t, gatewayProposal(t))
+	request := gatewayRequest(t)
+	request.Envelope.Budget.MaximumProviderRequests = 2
+	original := adapter.inner
+	adapter.inner = implementationAdapterFunc(func(
+		ctx context.Context, value manifest.Manifest,
+		request *reasoningv1.ImplementationRequest,
+	) (AdapterResult, error) {
+		result, err := original.ProposeImplementation(ctx, value, request)
+		result.Usage.ProviderRequests = 2
+		return result, err
 	})
-	t.Run("request", func(t *testing.T) {
-		service, resolver, adapter := gatewayService(t, gatewayProposal(t))
-		service.limits.Request = 1
-		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if outcome.Rejection.GetCode() !=
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID {
-			t.Fatalf("outcome = %+v", outcome)
-		}
-		if resolver.calls.Load() != 0 || adapter.calls.Load() != 0 {
-			t.Fatal("oversized request reached dependencies")
-		}
+	outcome, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil || outcome.Proposal == nil ||
+		outcome.Invocation.Usage.ProviderRequests != 2 {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
+	service, resolver, adapter := gatewayService(t, gatewayProposal(t))
+	response := []byte(`{"unexpected":true}`)
+	adapter.inner = implementationAdapterFunc(func(
+		context.Context, manifest.Manifest, *reasoningv1.ImplementationRequest,
+	) (AdapterResult, error) {
+		return AdapterResult{
+			ProviderResponse: response,
+			MalformedOutput:  &MalformedOutput{Message: "unknown field unexpected"},
+			Provider:         "provider", Model: "model",
+			ProviderRequestID: "req_123", Usage: Usage{ProviderRequests: 1},
+		}, nil
 	})
-	t.Run("proposal", func(t *testing.T) {
-		service, _, adapter := gatewayService(t, gatewayProposal(t))
-		service.limits.Proposal = 1
-		outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if outcome.Rejection.GetCode() !=
-			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
-			outcome.ProposalArtifact != (ArtifactReference{}) ||
-			adapter.calls.Load() != 1 {
-			t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
-		}
-	})
-	t.Run("fake request count", func(t *testing.T) {
-		if _, err := NewFakeImplementationAdapter(
-			gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
-		); err == nil {
-			t.Fatal("multi-request fake adapter configuration accepted")
-		}
-	})
+	request := gatewayRequest(t)
+	first, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Rejection.GetCode() != reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		first.ProviderResponseArtifact == (ArtifactReference{}) ||
+		first.Invocation.ProviderRequestID != "req_123" || !second.Replay ||
+		adapter.calls.Load() != 1 || resolver.calls.Load() != 1 {
+		t.Fatalf(
+			"first=%+v second=%+v adapter=%d resolver=%d",
+			first, second, adapter.calls.Load(), resolver.calls.Load(),
+		)
+	}
+	store := service.artifacts.(*memoryArtifactStore)
+	stored, err := store.Get(t.Context(), first.ProviderResponseArtifact)
+	if err != nil || !bytes.Equal(stored, response) {
+		t.Fatalf("stored=%q err=%v", stored, err)
+	}
 }
 
 func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
@@ -538,6 +623,24 @@ func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
 			}
 		})
 	}
+	t.Run("replay corrupt provider response", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		request := gatewayRequest(t)
+		first, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := service.artifacts.(*memoryArtifactStore)
+		store.mu.Lock()
+		store.values[first.ProviderResponseArtifact.SHA256] = []byte("corrupt")
+		store.mu.Unlock()
+		if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+			t.Fatal("corrupt provider response replay artifact accepted")
+		}
+		if adapter.calls.Load() != 1 {
+			t.Fatal("corrupt provider response replay invoked adapter")
+		}
+	})
 }
 
 func TestGatewayConcurrentIdenticalRequestsReplay(t *testing.T) {

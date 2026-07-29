@@ -25,11 +25,18 @@ func TestDockerApplicatorRemovesNamedContainerOnCancellation(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("RUN_LOG", runLog)
 	t.Setenv("REMOVE_LOG", removeLog)
-	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	err := (DockerApplicator{Image: "worker", UID: os.Getuid(), GID: os.Getgid()}).
-		Apply(ctx, t.TempDir(), nil, DefaultLimits())
-	if !errors.Is(err, context.DeadlineExceeded) {
+	result := make(chan error, 1)
+	worktree := t.TempDir()
+	go func() {
+		result <- (DockerApplicator{Image: "worker", UID: os.Getuid(), GID: os.Getgid()}).
+			Apply(ctx, worktree, nil, DefaultLimits())
+	}()
+	waitForFile(t, runLog)
+	cancel()
+	err := <-result
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected cancellation error: %v", err)
 	}
 	runBody, readErr := os.ReadFile(runLog)
@@ -47,6 +54,26 @@ func TestDockerApplicatorRemovesNamedContainerOnCancellation(t *testing.T) {
 	}
 	if string(removeBody) != "rm -f "+name {
 		t.Fatalf("unexpected cleanup arguments: %q", removeBody)
+	}
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s", path)
+		case <-ticker.C:
+		}
 	}
 }
 

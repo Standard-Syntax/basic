@@ -19,15 +19,16 @@ verification ledger row per verification ID.
 | Network | applicator containers use `--network none`; dependency installation remains a development concern |
 | Database | workflow, registry, reasoning, and immutable execution metadata |
 | Artifacts | request, proposal, and report bodies flow through an external content-addressed port |
-| Model tokens | zero real-provider tokens; fake usage counters are deterministic metadata |
+| Model tokens | request/manifest bounded for Anthropic; fake usage counters remain deterministic |
 | Concurrency | four executions, eight worktrees, and one logical owner per execution ID by default |
 | Verification CPU | one CPU per check container; at most two concurrent verifications |
-| Verification memory | 1 GiB, 256 PIDs, bounded 512 MiB tmpfs, and 1 MiB combined output per check |
+| Verification memory | 2 GiB, 256 PIDs, bounded 1 GiB tmpfs, and 1 MiB combined output per check |
 | Verification disk | at most four clean workspaces; content-addressed logs and reports remain external |
-| Verification network | `--network none`; `go.sum`, `uv.lock`, and generation tools seed the image |
-| Review | one bounded fake-provider request plus content-addressed request, proposal, and report artifacts |
+| Verification network | `--network none`; `go.sum`, `uv.lock`, writable runtime copy of seeded Go build/vet caches, and generation tools seed the image |
+| Review | constructor-selected fake or bounded Anthropic request plus content-addressed request, raw response, proposal, and report artifacts |
 | Approval | one small immutable row and one content-addressed decision artifact per approval ID |
 | Publication | bounded Git/API subprocesses, one branch ref, one draft PR, one artifact, and one immutable ledger row |
+| Anthropic | at most three non-streaming Messages attempts per implementation or review request |
 
 The integration suite uses disposable PostgreSQL 18.1 on
 `127.0.0.1:55433`, backed by tmpfs and removed after every run. Production
@@ -56,3 +57,14 @@ PR creation for a publication ID. Git and HTTP calls default to a 30-second
 timeout; artifact and API bodies default to 1 MiB and 64 KiB respectively.
 Completed replay performs no Git or HTTP mutation. Operators must size remote
 branch, PR, artifact, and immutable publication-row retention.
+
+Phase 10 permits at most 20,000 output tokens and the lower of manifest and
+request input/output budgets. Provider calls use a five-minute maximum timeout,
+three attempts, bounded `Retry-After` (at most 30 seconds), and deterministic
+250/500 ms fallback delays. Raw provider responses add one content-addressed
+artifact per completed invocation; PostgreSQL adds only references, request ID,
+model, token counters, and attempt count. Prompt caching policy, streaming,
+tools, fallback models, and multi-turn continuation remain out of scope.
+The pinned SDK increases offline Go compile/vet working data; the verification
+image seeds those caches and the isolated worker limit is therefore 2 GiB
+memory with 1 GiB tmpfs.

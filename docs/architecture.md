@@ -116,6 +116,24 @@ the idempotent `RecordDraftPullRequest` command. Migration `0014` extends only
 the closed workflow actor constraint for `PUBLICATION_SERVICE`. The run remains
 `MERGE_READY`.
 
+Phase 10 adds constructor-selected Anthropic Messages adapters behind the
+existing implementation and review gateway seams. The official Go SDK is
+pinned at `v1.61.0` with SDK retries disabled. Trusted capability
+configuration selects models; request-local credential sources supply API
+keys. The adapter SHA-256 verifies the manifest prompt and every selected input
+artifact, rejects secret-bearing content, and sends one non-streaming,
+tool-free request with a closed provider projection schema. Trusted Go injects
+all request, manifest, artifact, task, and specification identity fields after
+strict projection decoding.
+
+The adapter owns at most three network attempts, further bounded by request
+budget, expiry, caller cancellation, and a five-minute provider timeout.
+Migration `0016` adds the exact raw provider-response artifact, provider
+request ID, model, aggregate tokens, and actual network-attempt count to the
+immutable invocation outcome. Malformed complete responses become replayable
+`SCHEMA_INVALID`; provider, transport, credential, refusal, and timeout errors
+roll back the unfinished reservation.
+
 No HTTP/gRPC execution, verification, review, approval, or publication server,
-real provider, runtime Python agent, merge operation, or deployment exists.
+runtime Python agent, merge operation, or deployment exists.
 `MERGED` still records an already completed, approval-bound external fact.

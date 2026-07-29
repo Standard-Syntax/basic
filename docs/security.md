@@ -74,8 +74,8 @@
   argv.
 - The verification worker runs the fixed `make check` argv as a non-root
   UID/GID with no network, capabilities, privilege escalation, inherited
-  secrets, Git credentials, or writable root. It is limited to one CPU, 1 GiB,
-  256 PIDs, bounded tmpfs, ten minutes, and 1 MiB combined output per check.
+  secrets, Git credentials, or writable root. It is limited to one CPU, 2 GiB,
+  256 PIDs, 1 GiB tmpfs, ten minutes, and 1 MiB combined output per check.
 - Verification resolves and records the immutable Docker image ID before
   execution. Every log, report, coverage row, and workflow command binds the
   exact candidate commit and Phase 6 report.
@@ -114,3 +114,29 @@ The deterministic branch uses `--force-with-lease=<ref>:` only to assert that
 the ref is absent. A successful-but-uncheckpointed push is recovered only when
 the remote ref exactly equals the approved candidate. Checkpointed branch/PR
 facts and completed rows are protected by PostgreSQL triggers.
+
+## Phase 10 provider boundary
+
+- API keys are fetched per invocation and passed only as SDK request options.
+  Credential-source errors are replaced with a redacted sentinel; keys are
+  never written to artifacts, PostgreSQL, model context, errors, or logs.
+- Model IDs come only from trusted capability-class configuration. Manifests
+  and model output cannot choose a provider destination, fallback, or model.
+- Prompt and input bodies are SHA-256 verified before use. Inline repository
+  files must equal their bound artifacts and appear once in rendered context.
+- A conservative content guard rejects API-key, authorization, password,
+  private-key, secret, and token assignments before network access.
+- Messages requests are non-streaming and tool-free. They grant no shell,
+  filesystem write, arbitrary destination, workflow, approval, execution,
+  publication, or model-selection authority.
+- SDK retries are disabled. Trusted Go retries only connection failures and
+  HTTP `408`, `409`, `429`, and `5xx`, at most three attempts and within
+  request budget, expiry, cancellation, and the five-minute timeout.
+- Authentication, permission, billing, timeout, exhausted rate limit, refusal,
+  transport, and other provider failures are typed and redacted. They cannot
+  advance workflow state.
+- Truncation, context exhaustion, empty/multiple/non-text content, malformed
+  JSON, unknown projection fields, and over-budget usage persist as exact,
+  deterministic `SCHEMA_INVALID` outcomes.
+- Exact replay verifies the stored provider response and performs no credential
+  lookup or provider request.

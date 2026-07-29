@@ -382,3 +382,47 @@ only and grants no ready, merge, branch-delete, deployment, or secret-storage
 authority.
 ### Date
 2026-07-29
+
+## DEC-020: Provider projections are internal and identity-free
+
+### Decision
+Use closed Anthropic structured-output schemas containing only model-owned
+implementation or review fields, then inject all identity and authority
+bindings from the trusted request.
+### Options considered
+Expose Protobuf JSON directly; let the model echo identity; use an internal
+closed projection with trusted injection.
+### Pros
+Provider output cannot replace request, task, specification, manifest, or
+artifact identity, and published v1 contracts remain unchanged.
+### Cons
+Each supported stage needs a provider projection and explicit conversion.
+### Why this option
+Model output is advisory content, not an authority or identity source.
+### Consequences
+Valid output still passes unchanged kernel validators; unknown provider fields
+become deterministic malformed-output outcomes.
+### Date
+2026-07-29
+
+## DEC-021: Trusted Go owns bounded provider reliability
+
+### Decision
+Disable SDK retries and perform at most three explicit attempts, bounded by
+request budget, expiry, cancellation, and a five-minute timeout.
+### Options considered
+SDK defaults; unbounded provider retry; trusted bounded retry with immutable
+attempt accounting.
+### Pros
+Every actual network attempt is observable and enforceable against kernel
+budget, while transient classifications remain testable.
+### Cons
+The adapter owns retry classification, `Retry-After`, and backoff behavior.
+### Why this option
+Hidden SDK attempts would make provider-request budgets and replay evidence
+unreliable.
+### Consequences
+Only connection failures and HTTP `408`, `409`, `429`, and `5xx` retry.
+Provider failures roll back; completed malformed responses persist and replay.
+### Date
+2026-07-29
