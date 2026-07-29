@@ -25,12 +25,16 @@ const (
 )
 
 type ByteLimits struct {
-	Request  int
-	Proposal int
+	Request          int
+	Proposal         int
+	ProviderResponse int
 }
 
 func DefaultByteLimits() ByteLimits {
-	return ByteLimits{Request: defaultMaximumBytes, Proposal: defaultMaximumBytes}
+	return ByteLimits{
+		Request: defaultMaximumBytes, Proposal: defaultMaximumBytes,
+		ProviderResponse: defaultMaximumBytes,
+	}
 }
 
 type Clock interface {
@@ -129,8 +133,10 @@ func NewService(
 	if len(configuredLimits) == 1 {
 		limits = configuredLimits[0]
 	}
-	if limits.Request < 1 || limits.Proposal < 1 {
-		return nil, errors.New("positive request and proposal byte limits are required")
+	if limits.Request < 1 || limits.Proposal < 1 || limits.ProviderResponse < 1 {
+		return nil, errors.New(
+			"positive request, proposal, and provider-response byte limits are required",
+		)
 	}
 	return &Service{
 		manifests: manifests, adapter: adapter, artifacts: artifacts,
@@ -294,6 +300,9 @@ func (s *Service) finalizeProposal(
 	result AdapterResult,
 ) (Outcome, error) {
 	completed := s.clock.Now().UTC()
+	if len(result.ProviderResponse) > s.limits.ProviderResponse {
+		return Outcome{}, errors.New("provider response exceeds byte limit")
+	}
 	responseArtifact, err := s.putArtifact(ctx, result.ProviderResponse)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("store provider response: %w", err)

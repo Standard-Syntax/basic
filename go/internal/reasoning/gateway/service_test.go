@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -437,7 +438,8 @@ func TestManifestMustResolveToExactImplementationPairing(t *testing.T) {
 func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
 	t.Run("defaults", func(t *testing.T) {
 		limits := DefaultByteLimits()
-		if limits.Request != 1<<20 || limits.Proposal != 1<<20 {
+		if limits.Request != 1<<20 || limits.Proposal != 1<<20 ||
+			limits.ProviderResponse != 1<<20 {
 			t.Fatalf("default limits = %+v", limits)
 		}
 	})
@@ -468,6 +470,19 @@ func TestGatewayByteLimitsAndProviderBudget(t *testing.T) {
 			outcome.ProposalArtifact != (ArtifactReference{}) ||
 			adapter.calls.Load() != 1 {
 			t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
+		}
+	})
+	t.Run("provider response", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		request := gatewayRequest(t)
+		service.limits.ProviderResponse = 1
+		if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+			t.Fatal("oversized provider response accepted")
+		}
+		service.limits.ProviderResponse = defaultMaximumBytes
+		outcome, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
+			t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
 		}
 	})
 	t.Run("fake request count", func(t *testing.T) {
@@ -531,7 +546,7 @@ func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
 	}
 	store := service.artifacts.(*memoryArtifactStore)
 	stored, err := store.Get(t.Context(), first.ProviderResponseArtifact)
-	if err != nil || string(stored) != string(response) {
+	if err != nil || !bytes.Equal(stored, response) {
 		t.Fatalf("stored=%q err=%v", stored, err)
 	}
 }

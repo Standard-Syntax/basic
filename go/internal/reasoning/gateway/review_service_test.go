@@ -130,6 +130,20 @@ func TestFakeReviewPreservesBlockingRework(t *testing.T) {
 	}
 }
 
+func TestReviewProviderResponseLimitRollsBackReservation(t *testing.T) {
+	service, adapter := reviewGatewayService(t, reviewProposalFixture(t))
+	request := reviewRequestFixture(t)
+	service.limits.ProviderResponse = 1
+	if _, err := service.ProposeReview(t.Context(), request); err == nil {
+		t.Fatal("oversized review provider response accepted")
+	}
+	service.limits.ProviderResponse = defaultMaximumBytes
+	outcome, err := service.ProposeReview(t.Context(), request)
+	if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
+		t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
+	}
+}
+
 func TestReviewGatewayReturnsAllStableRejectionCodes(t *testing.T) {
 	tests := []struct {
 		name string

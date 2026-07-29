@@ -9,4 +9,5 @@ ALTER TABLE reasoning_invocations
     CHECK (
         (provider_response_artifact_uri IS NULL) =
         (provider_response_digest IS NULL)
-    );
+    )
+    NOT VALID;

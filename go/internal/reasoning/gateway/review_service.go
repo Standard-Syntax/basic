@@ -74,8 +74,10 @@ func NewReviewService(
 	if len(configuredLimits) == 1 {
 		limits = configuredLimits[0]
 	}
-	if limits.Request < 1 || limits.Proposal < 1 {
-		return nil, errors.New("positive request and proposal byte limits are required")
+	if limits.Request < 1 || limits.Proposal < 1 || limits.ProviderResponse < 1 {
+		return nil, errors.New(
+			"positive request, proposal, and provider-response byte limits are required",
+		)
 	}
 	return &ReviewService{
 		manifests: manifests, adapter: adapter, artifacts: artifacts,
@@ -238,6 +240,9 @@ func (s *ReviewService) finalizeReview(
 	result ReviewAdapterResult,
 ) (ReviewOutcome, error) {
 	completed := s.clock.Now().UTC()
+	if len(result.ProviderResponse) > s.limits.ProviderResponse {
+		return ReviewOutcome{}, errors.New("review provider response exceeds byte limit")
+	}
 	responseArtifact, err := s.putArtifact(ctx, result.ProviderResponse)
 	if err != nil {
 		return ReviewOutcome{}, fmt.Errorf("store review provider response: %w", err)
