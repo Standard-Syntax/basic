@@ -30,18 +30,17 @@ type Service struct {
 	worktrees  chan struct{}
 }
 
-// skipcq: GO-R1005 -- configuration complexity is analyzed in the delegated helpers.
-func NewService(
+func NewService( // skipcq: GO-R1005
 	config Config,
 	artifacts ArtifactStore,
 	applicator Applicator,
 	workflowStore WorkflowStore,
 	ledger ExecutionLedger,
 ) (*Service, error) {
-	return newService(config, artifacts, applicator, workflowStore, ledger)
+	return constructService(config, artifacts, applicator, workflowStore, ledger)
 }
 
-func newService(
+func constructService(
 	config Config,
 	artifacts ArtifactStore,
 	applicator Applicator,
@@ -131,12 +130,13 @@ func validateServiceIdentity(config Config) error {
 	return nil
 }
 
-// skipcq: GO-R1005 -- execution complexity is analyzed in the delegated stages.
-func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
-	return s.execute(ctx, request)
+func (s *Service) Execute( // skipcq: GO-R1005
+	ctx context.Context, request Request,
+) (Result, error) {
+	return s.runExecution(ctx, request)
 }
 
-func (s *Service) execute(ctx context.Context, request Request) (Result, error) {
+func (s *Service) runExecution(ctx context.Context, request Request) (Result, error) {
 	mappedRequest, mappedProposal, err := s.validateRequest(ctx, request)
 	if err != nil {
 		return Result{}, err
