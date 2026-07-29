@@ -50,7 +50,7 @@ func TestDockerApplicatorRemovesNamedContainerOnCancellation(t *testing.T) {
 	}
 }
 
-func TestGitOutputDoesNotMixDiagnosticsIntoStdout(t *testing.T) {
+func TestGitHelpersDoNotMixDiagnosticsIntoStdout(t *testing.T) {
 	bin := t.TempDir()
 	script := filepath.Join(bin, "git")
 	body := "#!/bin/sh\nprintf diagnostic >&2\nprintf payload\n"
@@ -64,6 +64,15 @@ func TestGitOutputDoesNotMixDiagnosticsIntoStdout(t *testing.T) {
 	}
 	if string(output) != "payload" {
 		t.Fatalf("git stdout was corrupted: %q", output)
+	}
+	output, err = gitIndexOutput(
+		t.Context(), t.TempDir(), filepath.Join(t.TempDir(), "index"), nil, "hash-object",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != "payload" {
+		t.Fatalf("indexed git stdout was corrupted: %q", output)
 	}
 }
 

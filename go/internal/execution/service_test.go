@@ -39,6 +39,7 @@ func (m memoryArtifacts) Put(_ context.Context, body []byte) (workflow.ArtifactR
 type fakeWorkflow struct {
 	commands []workflow.TaskCommand
 	failLast error
+	replay   bool
 }
 
 func (f *fakeWorkflow) ExecuteTask(
@@ -48,7 +49,9 @@ func (f *fakeWorkflow) ExecuteTask(
 	if _, final := command.(workflow.RecordTaskExecution); final && f.failLast != nil {
 		return workflow.CommandResult{}, f.failLast
 	}
-	return workflow.CommandResult{Revision: command.Envelope().ExpectedRevision + 1}, nil
+	return workflow.CommandResult{
+		Revision: command.Envelope().ExpectedRevision + 1, Replay: f.replay,
+	}, nil
 }
 
 type localApplicator struct {
@@ -202,12 +205,13 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 	if resolved := runGit(t, repository, "rev-parse", result.CandidateRef); resolved != result.CandidateCommit {
 		t.Fatalf("candidate ref = %s, want %s", resolved, result.CandidateCommit)
 	}
+	workflowStore.replay = true
 	repeated, err := service.Execute(t.Context(), executionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if repeated.CandidateCommit != result.CandidateCommit ||
-		!repeated.ReportArtifact.Equal(result.ReportArtifact) {
+		!repeated.ReportArtifact.Equal(result.ReportArtifact) || !repeated.Replay {
 		t.Fatalf("execution was not deterministic: %#v %#v", result, repeated)
 	}
 	if status := runGit(t, repository, "status", "--short"); status != "" {
@@ -280,11 +284,12 @@ func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now }
-	_, err = service.Execute(t.Context(), Request{
+	executionRequest := Request{
 		ExecutionID: uuid.NewString(), ExecutionTimestamp: now,
 		Implementation: request, Proposal: proposal, ProposalArtifact: artifact,
 		Lease: lease, ExpectedTaskRevision: 3,
-	})
+	}
+	_, err = service.Execute(t.Context(), executionRequest)
 	if !errors.Is(err, workflow.ErrRevisionConflict) {
 		t.Fatalf("final workflow error = %v", err)
 	}
@@ -293,5 +298,19 @@ func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 	command := exec.Command("git", "-C", repository, "show-ref", "--verify", "--quiet", ref)
 	if command.Run() == nil {
 		t.Fatalf("stale candidate ref %q remains", ref)
+	}
+	workflowStore.failLast = nil
+	result, err := service.Execute(t.Context(), executionRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowStore.failLast = workflow.ErrRevisionConflict
+	if _, err := service.Execute(t.Context(), executionRequest); !errors.Is(
+		err, workflow.ErrRevisionConflict,
+	) {
+		t.Fatalf("replayed final workflow error = %v", err)
+	}
+	if resolved := runGit(t, repository, "rev-parse", ref); resolved != result.CandidateCommit {
+		t.Fatalf("pre-existing candidate ref was removed: got %q want %q", resolved, result.CandidateCommit)
 	}
 }

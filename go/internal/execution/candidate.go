@@ -35,23 +35,23 @@ func buildCandidate(
 	request Request,
 	mappedRequest contracts.ImplementationRequest,
 	proposal contracts.ImplementationProposal,
-) (string, string, []DiffEntry, error) {
+) (string, string, []DiffEntry, bool, error) {
 	index, err := os.CreateTemp(config.WorktreeRoot, ".candidate-index-*")
 	if err != nil {
-		return "", "", nil, fmt.Errorf("create candidate index: %w", err)
+		return "", "", nil, false, fmt.Errorf("create candidate index: %w", err)
 	}
 	indexPath := index.Name()
 	if err := index.Close(); err != nil {
-		return "", "", nil, fmt.Errorf("close candidate index: %w", err)
+		return "", "", nil, false, fmt.Errorf("close candidate index: %w", err)
 	}
 	if err := os.Remove(indexPath); err != nil {
-		return "", "", nil, fmt.Errorf("prepare candidate index: %w", err)
+		return "", "", nil, false, fmt.Errorf("prepare candidate index: %w", err)
 	}
 	defer os.Remove(indexPath)
 	if _, err := gitIndexOutput(
 		ctx, config.RepositoryRoot, indexPath, nil, "read-tree", mappedRequest.BaseCommit,
 	); err != nil {
-		return "", "", nil, fmt.Errorf("read candidate base tree: %w", err)
+		return "", "", nil, false, fmt.Errorf("read candidate base tree: %w", err)
 	}
 	for _, change := range proposal.Changes {
 		switch change.Operation {
@@ -60,23 +60,27 @@ func buildCandidate(
 				ctx, config.RepositoryRoot, indexPath, nil,
 				"update-index", "--force-remove", "--", change.Path,
 			); err != nil {
-				return "", "", nil, fmt.Errorf("remove candidate path %q: %w", change.Path, err)
+				return "", "", nil, false,
+					fmt.Errorf("remove candidate path %q: %w", change.Path, err)
 			}
 		case contracts.FileCreate, contracts.FileUpdate:
 			body, err := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(change.Path)))
 			if err != nil {
-				return "", "", nil, fmt.Errorf("read applied path %q: %w", change.Path, err)
+				return "", "", nil, false,
+					fmt.Errorf("read applied path %q: %w", change.Path, err)
 			}
 			sum := sha256.Sum256(body)
 			if change.ReplacementContent == nil ||
 				hex.EncodeToString(sum[:]) != sha256Hex([]byte(*change.ReplacementContent)) {
-				return "", "", nil, fmt.Errorf("%w: applied content %q", ErrArtifactIntegrity, change.Path)
+				return "", "", nil, false,
+					fmt.Errorf("%w: applied content %q", ErrArtifactIntegrity, change.Path)
 			}
 			objectID, err := gitIndexOutput(
 				ctx, config.RepositoryRoot, indexPath, body, "hash-object", "-w", "--stdin",
 			)
 			if err != nil {
-				return "", "", nil, fmt.Errorf("hash candidate path %q: %w", change.Path, err)
+				return "", "", nil, false,
+					fmt.Errorf("hash candidate path %q: %w", change.Path, err)
 			}
 			mode := "100644"
 			if change.Operation == contracts.FileUpdate {
@@ -84,7 +88,7 @@ func buildCandidate(
 					ctx, config.RepositoryRoot, mappedRequest.BaseCommit, change.Path,
 				)
 				if err != nil {
-					return "", "", nil, err
+					return "", "", nil, false, err
 				}
 				mode = base.mode
 			}
@@ -93,17 +97,19 @@ func buildCandidate(
 				ctx, config.RepositoryRoot, indexPath, nil,
 				"update-index", "--add", "--cacheinfo", cacheInfo,
 			); err != nil {
-				return "", "", nil, fmt.Errorf("index candidate path %q: %w", change.Path, err)
+				return "", "", nil, false,
+					fmt.Errorf("index candidate path %q: %w", change.Path, err)
 			}
 		default:
-			return "", "", nil, fmt.Errorf("%w: unsupported operation", ErrInvalidRequest)
+			return "", "", nil, false,
+				fmt.Errorf("%w: unsupported operation", ErrInvalidRequest)
 		}
 	}
 	tree, err := gitIndexOutput(
 		ctx, config.RepositoryRoot, indexPath, nil, "write-tree",
 	)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("write candidate tree: %w", err)
+		return "", "", nil, false, fmt.Errorf("write candidate tree: %w", err)
 	}
 	message := fmt.Sprintf(
 		"harness: apply task %s attempt %d\n",
@@ -122,33 +128,37 @@ func buildCandidate(
 		"commit-tree", strings.TrimSpace(string(tree)), "-p", mappedRequest.BaseCommit,
 	)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("create candidate commit: %w", err)
+		return "", "", nil, false, fmt.Errorf("create candidate commit: %w", err)
 	}
 	candidate := strings.TrimSpace(string(commit))
 	actual, err := verifyCandidateDiff(
 		ctx, config.RepositoryRoot, mappedRequest.BaseCommit, candidate, proposal.Changes,
 	)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, false, err
 	}
 	ref, err := candidateRef(mappedRequest, request.Lease.FencingToken)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, false, err
 	}
+	created := false
 	existing, resolveErr := gitOutput(
 		ctx, config.RepositoryRoot, "rev-parse", "--verify", "--end-of-options", ref,
 	)
 	if resolveErr == nil {
 		if strings.TrimSpace(string(existing)) != candidate {
-			return "", "", nil, fmt.Errorf("%w: candidate ref conflict", ErrArtifactIntegrity)
+			return "", "", nil, false,
+				fmt.Errorf("%w: candidate ref conflict", ErrArtifactIntegrity)
 		}
 	} else if _, err := gitIndexOutput(
 		ctx, config.RepositoryRoot, indexPath, nil,
 		"update-ref", ref, candidate, strings.Repeat("0", 40),
 	); err != nil {
-		return "", "", nil, fmt.Errorf("retain candidate ref: %w", err)
+		return "", "", nil, false, fmt.Errorf("retain candidate ref: %w", err)
+	} else {
+		created = true
 	}
-	return candidate, ref, actual, nil
+	return candidate, ref, actual, created, nil
 }
 
 func verifyCandidateDiff(
@@ -272,13 +282,15 @@ func gitIndexOutputEnv(
 	)
 	command.Env = append(command.Env, extraEnvironment...)
 	command.Stdin = bytes.NewReader(input)
-	output, err := command.CombinedOutput()
-	if err != nil {
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
 		return nil, fmt.Errorf(
-			"git %s: %w: %s", arguments[0], err, strings.TrimSpace(string(output)),
+			"git %s: %w: %s", arguments[0], err, strings.TrimSpace(stderr.String()),
 		)
 	}
-	return output, nil
+	return stdout.Bytes(), nil
 }
 
 func candidateRef(request contracts.ImplementationRequest, fence uint32) (string, error) {

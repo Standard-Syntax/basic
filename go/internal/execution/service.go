@@ -94,13 +94,13 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	); err != nil {
 		return Result{}, fmt.Errorf("apply implementation proposal: %w", err)
 	}
-	candidate, candidateRef, actualDiff, err := buildCandidate(
+	candidate, candidateRef, actualDiff, createdRef, err := buildCandidate(
 		ctx, s.config, worktree, request, mappedRequest, mappedProposal,
 	)
 	if err != nil {
 		return Result{}, err
 	}
-	keepRef := false
+	keepRef := !createdRef
 	defer func() {
 		if !keepRef {
 			_ = deleteCandidateRef(
@@ -126,7 +126,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		return Result{}, fmt.Errorf("store execution report: %w", err)
 	}
 	recordedAt := s.now().UTC()
-	_, err = s.workflow.ExecuteTask(ctx, workflow.RecordTaskExecution{
+	recorded, err := s.workflow.ExecuteTask(ctx, workflow.RecordTaskExecution{
 		Meta: s.commandEnvelope(
 			request.ExecutionID, "record", accepted.Revision, recordedAt,
 		),
@@ -142,7 +142,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		ExecutionID: request.ExecutionID, BaseCommit: mappedRequest.BaseCommit,
 		CandidateCommit: candidate, CandidateRef: candidateRef,
 		ReportArtifact: reportArtifact, Lease: request.Lease,
-		Limits: s.config.Limits, ActualDiff: actualDiff,
+		Limits: s.config.Limits, ActualDiff: actualDiff, Replay: recorded.Replay,
 	}, nil
 }
 
