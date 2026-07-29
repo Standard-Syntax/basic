@@ -41,6 +41,9 @@ func (*fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error)
 func (*fakeWorkflow) ListEvents(context.Context, string, string) ([]workflow.Event, error) {
 	return nil, nil
 }
+func (f *fakeWorkflow) ListPendingApprovals(context.Context) ([]workflow.PendingApproval, error) {
+	return nil, nil
+}
 
 type fakeRuntime struct {
 	begins    int

@@ -1,6 +1,6 @@
 # Security
 
-## Phase 0–7 boundaries
+## Phase 0–11 boundaries
 
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
@@ -140,3 +140,19 @@ facts and completed rows are protected by PostgreSQL triggers.
   deterministic `SCHEMA_INVALID` outcomes.
 - Exact replay verifies the stored provider response and performs no credential
   lookup or provider request.
+
+## Phase 11 runtime boundary
+
+- API bearer tokens are represented only by configured SHA-256 digests and are
+  compared in constant time. Raw tokens are neither persisted nor logged.
+- Mutations require a UUID idempotency key bound to method, target, principal,
+  and request digest, plus an exact revision precondition.
+- The API binds to loopback and rejects non-loopback listeners.
+- The filesystem CAS verifies every digest, bounds access, rejects symlinks and
+  non-regular objects, and publishes durable objects atomically.
+- Runtime claims use expiry and monotonically increasing fencing tokens.
+  Terminal jobs are immutable and stale owners cannot checkpoint.
+- GitHub credentials are loaded for each REST request from a clean absolute,
+  regular, owner-only `0600` file.
+- Phase 11 adds no automatic merge, deployment, arbitrary shell, unrestricted
+  network, provider fallback, or cross-repository authority.

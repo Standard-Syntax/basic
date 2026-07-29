@@ -34,6 +34,7 @@ func main() {
 }
 
 func mainExit() int {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	configPath := flag.String("config", "", "absolute path to strict JSON configuration")
 	flag.Parse()
 	if *configPath == "" {
@@ -102,6 +103,7 @@ func run(ctx context.Context, value config) error {
 	if err != nil {
 		return err
 	}
+	defer artifacts.Close()
 	handlers := make(map[string]orchestration.Handler)
 	for _, stage := range []string{
 		orchestration.StageStart, orchestration.StageImplementationRequest,

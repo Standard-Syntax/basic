@@ -294,6 +294,27 @@ all mapped checks must pass for a criterion.
 ### Date
 2026-07-29
 
+## DEC-022: First runtime slice is durable, local, and single-task
+
+### Decision
+Run the authenticated API and workflow reconciler as separate Go processes
+over PostgreSQL, with a one-node filesystem CAS and exactly one
+dependency-free task per run.
+### Options considered
+In-memory orchestration; shared object storage; multi-task scheduling.
+### Pros
+Restarts are observable and recoverable without distributed scheduling.
+### Cons
+The filesystem CAS is one-node and multi-task scope conflicts remain deferred.
+### Why this option
+PostgreSQL jobs, immutable bindings, idempotency, and fencing complete the
+first durable slice without broadening authority.
+### Consequences
+A composite approval binds one human decision to the candidate and upstream
+evidence. Draft publication is optional and never implies merge.
+### Date
+2026-07-29
+
 ## DEC-016: Verification evidence is checkpointed before workflow mutation
 
 ### Decision

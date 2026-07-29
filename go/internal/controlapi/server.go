@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
@@ -45,6 +46,7 @@ type WorkflowStore interface {
 	GetTask(context.Context, string, string) (workflow.Task, error)
 	ListTasks(context.Context, string) ([]workflow.Task, error)
 	ListEvents(context.Context, string, string) ([]workflow.Event, error)
+	ListPendingApprovals(context.Context) ([]workflow.PendingApproval, error)
 }
 
 type IdempotencyLedger interface {
@@ -71,6 +73,9 @@ type Server struct {
 	artifacts  ArtifactStore
 	principals []principalDigest
 	logger     *slog.Logger
+	requests   atomic.Uint64
+	failures   atomic.Uint64
+	elapsedNS  atomic.Uint64
 }
 
 type principalDigest struct {
@@ -130,8 +135,40 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "valid bearer token required")
 		return
 	}
+	counted := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	started := time.Now()
+	defer func() {
+		elapsed := time.Since(started)
+		s.requests.Add(1)
+		s.elapsedNS.Add(uint64(elapsed))
+		if counted.status >= http.StatusBadRequest {
+			s.failures.Add(1)
+		}
+		attributes := []any{
+			"method", request.Method, "path", request.URL.Path,
+			"status", counted.status, "elapsed_nanoseconds", elapsed.Nanoseconds(),
+			"principal_id", principal.ID,
+			"idempotency_key", request.Header.Get("Idempotency-Key"),
+		}
+		if runID, _, ok := parseRunPath(request.URL.Path); ok {
+			attributes = append(attributes, "run_id", runID)
+		}
+		if taskID, _, ok := parseTaskPath(request.URL.Path); ok {
+			attributes = append(attributes, "task_id", taskID)
+		}
+		s.logger.Info("control API request", attributes...)
+	}()
+	w = counted
 	if request.URL.Path == "/readyz" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return
+	}
+	if request.URL.Path == "/metrics" {
+		writeJSON(w, http.StatusOK, map[string]uint64{
+			"requests_total":                    s.requests.Load(),
+			"failures_total":                    s.failures.Load(),
+			"request_elapsed_nanoseconds_total": s.elapsedNS.Load(),
+		})
 		return
 	}
 	if request.Method == http.MethodGet {
@@ -139,6 +176,16 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	s.handleMutation(w, request, principal)
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
 }
 
 func (s *Server) authenticate(request *http.Request) (Principal, bool) {
@@ -165,7 +212,12 @@ func (s *Server) handleGet(w http.ResponseWriter, request *http.Request, princip
 			writeError(w, http.StatusBadRequest, "invalid_request", "status must be pending")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"approvals": []any{}})
+		approvals, err := s.workflow.ListPendingApprovals(request.Context())
+		if err != nil {
+			s.writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"approvals": approvals})
 		return
 	}
 	runID, suffix, ok := parseRunPath(request.URL.Path)
@@ -238,7 +290,19 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	}
 	status, response, err := s.applyMutation(request, principal, key, body)
 	if err != nil {
-		s.writeDomainError(w, err)
+		status, response = s.domainError(err)
+		encoded, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			writeError(w, http.StatusInternalServerError, "internal", "encode response")
+			return
+		}
+		if completeErr := s.runtime.CompleteIdempotency(
+			request.Context(), key, status, encoded,
+		); completeErr != nil {
+			s.writeDomainError(w, completeErr)
+			return
+		}
+		writeRawJSON(w, status, encoded)
 		return
 	}
 	encoded, err := json.Marshal(response)
@@ -411,7 +475,13 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 			return 0, nil, workflow.ErrUnauthorized
 		}
 		result, err := s.compositeApprove(ctx, principal, key, body.DecisionTime, run)
-		return http.StatusOK, result, err
+		return http.StatusOK, map[string]any{
+			"result": result,
+			"publication": map[string]string{
+				"status": "configuration_blocked",
+				"reason": "publication is not configured",
+			},
+		}, err
 	case "/reject":
 		if !hasApprovalRole(principal, false) || run.Review == nil {
 			return 0, nil, workflow.ErrUnauthorized
@@ -627,23 +697,29 @@ func decodeStrict(request *http.Request, limit int64, destination any) ([]byte, 
 }
 
 func (s *Server) writeDomainError(w http.ResponseWriter, err error) {
+	status, response := s.domainError(err)
+	writeJSON(w, status, response)
+}
+
+func (s *Server) domainError(err error) (int, any) {
+	code, message, status := "internal", "request failed", http.StatusInternalServerError
 	switch {
 	case errors.Is(err, workflow.ErrUnauthorized):
-		writeError(w, http.StatusForbidden, "forbidden", "principal lacks required role")
+		code, message, status = "forbidden", "principal lacks required role", http.StatusForbidden
 	case errors.Is(err, workflow.ErrNotFound), errors.Is(err, runtime.ErrNotFound):
-		writeError(w, http.StatusNotFound, "not_found", "resource not found")
+		code, message, status = "not_found", "resource not found", http.StatusNotFound
 	case errors.Is(err, workflow.ErrRevisionConflict):
-		writeError(w, http.StatusPreconditionFailed, "revision_conflict", "ETag revision conflict")
+		code, message, status = "revision_conflict", "ETag revision conflict", http.StatusPreconditionFailed
 	case errors.Is(err, runtime.ErrInProgress):
-		writeError(w, http.StatusConflict, "idempotency_in_progress", "request is still processing")
+		code, message, status = "idempotency_in_progress", "request is still processing", http.StatusConflict
 	case errors.Is(err, workflow.ErrCommandConflict), errors.Is(err, runtime.ErrConflict):
-		writeError(w, http.StatusConflict, "idempotency_conflict", "idempotency identity conflict")
+		code, message, status = "idempotency_conflict", "idempotency identity conflict", http.StatusConflict
 	case errors.Is(err, workflow.ErrInvalid), errors.Is(err, workflow.ErrInvalidTransition):
-		writeError(w, http.StatusUnprocessableEntity, "invalid_transition", err.Error())
+		code, message, status = "invalid_transition", err.Error(), http.StatusUnprocessableEntity
 	default:
 		s.logger.Error("control API request failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "internal", "request failed")
 	}
+	return status, map[string]any{"error": map[string]string{"code": code, "message": message}}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
+	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,7 +32,7 @@ var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 const DefaultMaxBytes int64 = 1 << 20
 
 type Store struct {
-	root     string
+	root     *os.File
 	maxBytes int64
 }
 
@@ -49,8 +50,14 @@ func NewStore(root string, maxBytes int64) (*Store, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrInvalidRoot
 	}
-	return &Store{root: root, maxBytes: maxBytes}, nil
+	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, ErrInvalidRoot
+	}
+	return &Store{root: os.NewFile(uintptr(fd), root), maxBytes: maxBytes}, nil
 }
+
+func (s *Store) Close() error { return s.root.Close() }
 
 func (s *Store) Put(ctx context.Context, body []byte) (workflow.ArtifactRef, error) {
 	if err := ctx.Err(); err != nil {
@@ -62,38 +69,31 @@ func (s *Store) Put(ctx context.Context, body []byte) (workflow.ArtifactRef, err
 	sum := sha256.Sum256(body)
 	digest := hex.EncodeToString(sum[:])
 	ref := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
-	dir := filepath.Join(s.root, digest[:2])
-	if err := ensureShard(dir); err != nil {
+	shard, err := s.openShard(digest[:2], true)
+	if err != nil {
 		return workflow.ArtifactRef{}, err
 	}
-	target := filepath.Join(dir, digest)
-	if exists, err := s.matchesExisting(ctx, target, digest, body); err != nil {
+	defer shard.Close()
+	if exists, err := matchesAt(ctx, int(shard.Fd()), digest, body, s.maxBytes); err != nil {
 		return workflow.ArtifactRef{}, err
 	} else if exists {
 		return ref, nil
 	}
-	tmpName, err := writeTemporary(dir, body)
+	tmpName, err := writeTemporaryAt(int(shard.Fd()), body)
 	if err != nil {
 		return workflow.ArtifactRef{}, err
 	}
-	defer func() { _ = os.Remove(tmpName) }()
-	if err := s.publish(ctx, dir, tmpName, target, digest, body); err != nil {
+	defer func() { _ = unix.Unlinkat(int(shard.Fd()), tmpName, 0) }()
+	if err := publishAt(ctx, shard, tmpName, digest, body, s.maxBytes); err != nil {
 		return workflow.ArtifactRef{}, err
 	}
 	return ref, nil
 }
 
-func ensureShard(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create artifact shard: %w", err)
-	}
-	return rejectLink(dir)
-}
-
-func (s *Store) matchesExisting(
-	ctx context.Context, target, digest string, body []byte,
+func matchesAt(
+	ctx context.Context, directory int, digest string, body []byte, limit int64,
 ) (bool, error) {
-	existing, err := s.readPath(ctx, target, digest, s.maxBytes)
+	existing, err := readAt(ctx, directory, digest, digest, limit)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
@@ -106,52 +106,48 @@ func (s *Store) matchesExisting(
 	return true, nil
 }
 
-func writeTemporary(dir string, body []byte) (string, error) {
-	tmp, err := os.CreateTemp(dir, ".tmp-")
+func writeTemporaryAt(directory int, body []byte) (string, error) {
+	tmpName := ".tmp-" + uuid.NewString()
+	tmpFD, err := unix.Openat(
+		directory, tmpName,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0o600,
+	)
 	if err != nil {
 		return "", fmt.Errorf("create artifact temporary file: %w", err)
 	}
-	tmpName := tmp.Name()
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return "", err
-	}
+	tmp := os.NewFile(uintptr(tmpFD), tmpName)
+	cleanup := func() { _ = unix.Unlinkat(directory, tmpName, 0) }
 	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		cleanup()
 		return "", fmt.Errorf("write artifact: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		cleanup()
 		return "", fmt.Errorf("sync artifact: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
+		cleanup()
 		return "", err
 	}
 	return tmpName, nil
 }
 
-func (s *Store) publish(
-	ctx context.Context, dir, tmpName, target, digest string, body []byte,
+func publishAt(
+	ctx context.Context, shard *os.File, tmpName, digest string, body []byte, limit int64,
 ) error {
-	if err := os.Link(tmpName, target); err != nil {
-		if !errors.Is(err, os.ErrExist) {
+	if err := unix.Linkat(int(shard.Fd()), tmpName, int(shard.Fd()), digest, 0); err != nil {
+		if !errors.Is(err, unix.EEXIST) {
 			return fmt.Errorf("publish artifact: %w", err)
 		}
-		existing, readErr := s.readPath(ctx, target, digest, s.maxBytes)
+		existing, readErr := readAt(ctx, int(shard.Fd()), digest, digest, limit)
 		if readErr != nil || !bytes.Equal(existing, body) {
 			return ErrIntegrity
 		}
 	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
+	if err := shard.Sync(); err != nil {
 		return fmt.Errorf("sync artifact directory: %w", err)
 	}
 	return nil
@@ -168,23 +164,49 @@ func (s *Store) GetLimit(ctx context.Context, ref workflow.ArtifactRef, limit in
 	if limit <= 0 || limit > s.maxBytes {
 		return nil, ErrTooLarge
 	}
-	return s.readPath(ctx, filepath.Join(s.root, ref.Digest[:2], ref.Digest), ref.Digest, limit)
+	shard, err := s.openShard(ref.Digest[:2], false)
+	if err != nil {
+		return nil, err
+	}
+	defer shard.Close()
+	return readAt(ctx, int(shard.Fd()), ref.Digest, ref.Digest, limit)
 }
 
-func (*Store) readPath(ctx context.Context, path, digest string, limit int64) ([]byte, error) {
+func (s *Store) openShard(name string, create bool) (*os.File, error) {
+	if create {
+		err := unix.Mkdirat(int(s.root.Fd()), name, 0o700)
+		if err != nil && !errors.Is(err, unix.EEXIST) {
+			return nil, fmt.Errorf("create artifact shard: %w", err)
+		}
+	}
+	fd, err := unix.Openat(
+		int(s.root.Fd()), name,
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) {
+			return nil, ErrUnsafe
+		}
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), name), nil
+}
+
+func readAt(ctx context.Context, directory int, name, digest string, limit int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := rejectLink(filepath.Dir(path)); err != nil {
-		return nil, err
-	}
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Openat(
+		directory, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0,
+	)
 	if err != nil {
 		if errors.Is(err, unix.ELOOP) {
 			return nil, ErrUnsafe
 		}
 		return nil, err
 	}
+	file := os.NewFile(uintptr(fd), name)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
@@ -205,17 +227,6 @@ func (*Store) readPath(ctx context.Context, path, digest string, limit int64) ([
 		return nil, ErrIntegrity
 	}
 	return body, nil
-}
-
-func rejectLink(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return ErrUnsafe
-	}
-	return nil
 }
 
 // Publication adapts Store to publication's caller-selected read limit.

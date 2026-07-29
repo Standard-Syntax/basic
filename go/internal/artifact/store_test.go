@@ -17,6 +17,7 @@ func TestStoreConcurrentIdempotentPutAndBoundedGet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	body := []byte("durable")
 	var wg sync.WaitGroup
 	refs := make(chan workflow.ArtifactRef, 16)
@@ -61,6 +62,7 @@ func TestStoreRejectsCorruptionSymlinkAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = store.Close() })
 	ref, err := store.Put(context.Background(), []byte("original"))
 	if err != nil {
 		t.Fatal(err)

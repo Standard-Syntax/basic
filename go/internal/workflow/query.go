@@ -9,6 +9,15 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+type PendingApproval struct {
+	Kind            string       `json:"kind"`
+	RunID           string       `json:"run_id"`
+	TaskID          string       `json:"task_id,omitempty"`
+	Revision        uint64       `json:"revision"`
+	CandidateCommit string       `json:"candidate_commit,omitempty"`
+	Artifact        *ArtifactRef `json:"artifact,omitempty"`
+}
+
 func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -104,6 +113,77 @@ func (s *Store) ListEvents(ctx context.Context, aggregateType, aggregateID strin
 		return nil, err
 	}
 	return events, nil
+}
+
+func (s *Store) ListPendingApprovals(ctx context.Context) ([]PendingApproval, error) {
+	rows, err := s.pool.Query(ctx, `SELECT run_id::text,state FROM workflow_runs
+		WHERE state IN ('SPECIFICATION_REVIEW','TASK_PLAN_REVIEW','AWAITING_APPROVAL')
+		ORDER BY created_at,run_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list pending run approvals: %w", err)
+	}
+	type runIdentity struct {
+		id    string
+		state RunState
+	}
+	var runs []runIdentity
+	for rows.Next() {
+		var value runIdentity
+		if err := rows.Scan(&value.id, &value.state); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		runs = append(runs, value)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	pending := make([]PendingApproval, 0, len(runs))
+	for _, identity := range runs {
+		run, err := s.GetRun(ctx, identity.id)
+		if err != nil {
+			return nil, err
+		}
+		item := PendingApproval{
+			Kind: string(identity.state), RunID: run.ID, Revision: run.Revision,
+			CandidateCommit: run.CandidateCommit,
+		}
+		switch identity.state {
+		case RunStateSpecificationReview:
+			item.Artifact = run.Specification
+		case RunStateTaskPlanReview:
+			item.Artifact = run.TaskGraph
+		case RunStateAwaitingApproval:
+			item.Artifact = run.Review
+		}
+		pending = append(pending, item)
+	}
+	taskRows, err := s.pool.Query(ctx, `SELECT run_id::text,task_id::text
+		FROM workflow_tasks WHERE state='AWAITING_APPROVAL' ORDER BY created_at,task_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list pending task approvals: %w", err)
+	}
+	defer taskRows.Close()
+	for taskRows.Next() {
+		var runID, taskID string
+		if err := taskRows.Scan(&runID, &taskID); err != nil {
+			return nil, err
+		}
+		task, err := s.GetTask(ctx, runID, taskID)
+		if err != nil {
+			return nil, err
+		}
+		pending = append(pending, PendingApproval{
+			Kind: "TASK", RunID: runID, TaskID: taskID, Revision: task.Revision,
+			CandidateCommit: task.CandidateCommit, Artifact: task.Review,
+		})
+	}
+	if err := taskRows.Err(); err != nil {
+		return nil, err
+	}
+	return pending, nil
 }
 
 func cloneRun(value Run) Run {
