@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"syscall"
 	"time"
@@ -36,7 +38,7 @@ func run(input io.Reader, output io.Writer) error {
 		request.OutputBytes <= 0 || request.OutputBytes > verification.DefaultMaxOutputBytes {
 		return errors.New("unapproved verification command")
 	}
-	if err := prepareUVCache(); err != nil {
+	if err := prepareRuntimeCaches(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -83,16 +85,61 @@ func run(input io.Reader, output io.Writer) error {
 	return json.NewEncoder(output).Encode(response)
 }
 
-func prepareUVCache() error {
+func prepareRuntimeCaches() error {
 	if err := os.MkdirAll("/tmp/uv-cache", 0o700); err != nil {
 		return fmt.Errorf("create writable uv cache: %w", err)
 	}
-	command := exec.Command("/bin/cp", "-a", "/opt/uv-cache/.", "/tmp/uv-cache/")
-	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
-	if output, err := command.CombinedOutput(); err != nil {
+	uvCopy := exec.Command("/bin/cp", "-a", "/opt/uv-cache/.", "/tmp/uv-cache/")
+	uvCopy.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	if output, err := uvCopy.CombinedOutput(); err != nil {
 		return fmt.Errorf("seed writable uv cache: %w: %s", err, bytes.TrimSpace(output))
 	}
+	if err := secureRuntimeCache("/tmp/uv-cache"); err != nil {
+		return fmt.Errorf("secure writable uv cache: %w", err)
+	}
+	if err := os.MkdirAll("/tmp/go-build", 0o700); err != nil {
+		return fmt.Errorf("create writable Go cache: %w", err)
+	}
+	command := exec.Command("/bin/cp", "-a", "/opt/go-build-cache/.", "/tmp/go-build/")
+	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("seed writable Go cache: %w: %s", err, bytes.TrimSpace(output))
+	}
+	if err := secureRuntimeCache("/tmp/go-build"); err != nil {
+		return fmt.Errorf("secure writable Go cache: %w", err)
+	}
 	return nil
+}
+
+func secureRuntimeCache(root string) error {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve cache root: %w", err)
+	}
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			target, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
+				return fmt.Errorf("resolve cache symbolic link %q: %w", path, resolveErr)
+			}
+			relative, relativeErr := filepath.Rel(resolvedRoot, target)
+			if relativeErr != nil || !filepath.IsLocal(relative) {
+				return fmt.Errorf("cache symbolic link escapes root %q", path)
+			}
+			return nil
+		}
+		mode := os.FileMode(0o600)
+		if entry.IsDir() {
+			mode |= 0o100
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			return fmt.Errorf("set cache path permissions: %w", err)
+		}
+		return nil
+	})
 }
 
 func decode(input io.Reader) (verification.WorkerRequest, error) {

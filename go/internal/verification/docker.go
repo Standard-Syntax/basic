@@ -60,8 +60,8 @@ func (d DockerCheckExecutor) Run(
 	arguments := []string{
 		"run", "--rm", "-i", "--name", name, "--network", "none", "--read-only",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--cpus", "1", "--memory", "1g", "--pids-limit", "256", "--user", user,
-		"--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=512m,mode=1777",
+		"--cpus", "1", "--memory", "2g", "--pids-limit", "256", "--user", user,
+		"--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=1g,mode=1777",
 		"--env", "HOME=/tmp/home", "--env", "TMPDIR=/tmp",
 		"--env", "GOCACHE=/tmp/go-build", "--env", "UV_CACHE_DIR=/tmp/uv-cache",
 		"--env", "UV_OFFLINE=1", "--env", "UV_NO_SYNC=1",

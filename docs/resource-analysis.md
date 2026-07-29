@@ -22,9 +22,9 @@ verification ledger row per verification ID.
 | Model tokens | zero real-provider tokens; fake usage counters are deterministic metadata |
 | Concurrency | four executions, eight worktrees, and one logical owner per execution ID by default |
 | Verification CPU | one CPU per check container; at most two concurrent verifications |
-| Verification memory | 1 GiB, 256 PIDs, bounded 512 MiB tmpfs, and 1 MiB combined output per check |
+| Verification memory | 2 GiB, 256 PIDs, bounded 1 GiB tmpfs, and 1 MiB combined output per check |
 | Verification disk | at most four clean workspaces; content-addressed logs and reports remain external |
-| Verification network | `--network none`; `go.sum`, `uv.lock`, and generation tools seed the image |
+| Verification network | `--network none`; `go.sum`, `uv.lock`, writable runtime copy of seeded Go build/vet caches, and generation tools seed the image |
 | Review | one bounded fake-provider request plus content-addressed request, proposal, and report artifacts |
 | Approval | one small immutable row and one content-addressed decision artifact per approval ID |
 | Publication | bounded Git/API subprocesses, one branch ref, one draft PR, one artifact, and one immutable ledger row |
@@ -44,6 +44,9 @@ Verification permits at most 16 catalog checks, applies a ten-minute maximum
 to each, runs checks sequentially within a verification, and defaults to two
 concurrent verifications and four workspace slots. Operators must size the
 artifact backend for retained logs and reports.
+The pinned Anthropic SDK increases offline Go compile/vet working data; the
+verification image seeds those caches and the isolated worker limit is
+therefore 2 GiB memory with 1 GiB tmpfs.
 
 Phase 8 adds no worker container or external network load. Review requests and
 proposals retain the 1 MiB gateway defaults. Approval concurrency is serialized

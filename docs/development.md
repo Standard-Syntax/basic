@@ -144,7 +144,8 @@ docker image inspect --format '{{.Id}}' \
 
 The initial catalog entry is `make-check-v1`, which always resolves to
 `["make", "check"]`. The image contains dependencies locked by `go.sum` and
-`uv.lock` plus `protoc-gen-go@v1.36.10`; runtime execution is offline.
+`uv.lock`, seeded Go build and vet caches copied into bounded runtime scratch,
+and `protoc-gen-go@v1.36.10`; runtime execution is offline.
 `go/cmd/verification-service` and `go/cmd/verification-worker` open no
 listeners.
 
