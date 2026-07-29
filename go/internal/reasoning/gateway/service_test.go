@@ -131,14 +131,29 @@ func TestFakeImplementationReturnsOneDeterministicValidatedProposal(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	requireProposalOutcomes(t, first, second)
+	requireDeterministicProposal(t, first.Proposal, second.Proposal, request)
+	requireFakeInvocationMetadata(t, first, resolver, adapter)
+}
+
+func requireProposalOutcomes(t *testing.T, first, second Outcome) {
+	t.Helper()
 	if first.Proposal == nil || first.Rejection != nil ||
 		second.Proposal == nil || second.Rejection != nil {
 		t.Fatalf("outcomes are not proposal-only: first=%+v second=%+v", first, second)
 	}
-	if !proto.Equal(first.Proposal, second.Proposal) {
+}
+
+func requireDeterministicProposal(
+	t *testing.T,
+	first, second *reasoningv1.ImplementationProposal,
+	request *reasoningv1.ImplementationRequest,
+) {
+	t.Helper()
+	if !proto.Equal(first, second) {
 		t.Fatal("fake adapter output is not deterministic")
 	}
-	identity := first.Proposal.GetIdentity()
+	identity := first.GetIdentity()
 	envelope := request.GetEnvelope()
 	if identity.GetRequestId() != envelope.GetRequestId() ||
 		identity.GetTaskId() != envelope.GetTaskId() ||
@@ -146,12 +161,18 @@ func TestFakeImplementationReturnsOneDeterministicValidatedProposal(t *testing.T
 		identity.GetAgentManifestDigest() != envelope.GetAgentManifestDigest() {
 		t.Fatal("fake proposal identities were not bound to the request")
 	}
-	if first.Invocation.Provider != FakeProvider ||
-		first.Invocation.Usage.ProviderRequests != 1 ||
+}
+
+func requireFakeInvocationMetadata(
+	t *testing.T, outcome Outcome, resolver *fakeResolver, adapter *countingAdapter,
+) {
+	t.Helper()
+	if outcome.Invocation.Provider != FakeProvider ||
+		outcome.Invocation.Usage.ProviderRequests != 1 ||
 		resolver.calls != 2 || adapter.calls != 2 {
 		t.Fatalf(
 			"metadata or calls differ: invocation=%+v resolver=%d adapter=%d",
-			first.Invocation, resolver.calls, adapter.calls,
+			outcome.Invocation, resolver.calls, adapter.calls,
 		)
 	}
 }
