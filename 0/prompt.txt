@@ -1,0 +1,3 @@
+run gh stack init
+Read docs/plan-brief.md and files in docs. Research the codebase then
+Create a implementation plan with thin vertical slices for phase 5
