@@ -53,6 +53,7 @@ make type-check
 make test
 make build
 make integration-test
+make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
 ## Installed manifest compiler
@@ -101,6 +102,32 @@ The integration tests use an integrity-checking in-memory store while
 PostgreSQL persists only artifact references and invocation metadata. The
 `go/cmd/reasoning-gateway` package builds but starts no listener.
 
+## Anthropic implementation and review adapters
+
+Construct `NewAnthropicImplementationAdapter` or
+`NewAnthropicReviewAdapter` with a request-local `CredentialSource`, trusted
+`CapabilityModelResolver`, and the same backend-neutral `ArtifactStore` used by
+the gateway. Select either fake or Anthropic at construction; gateway, kernel,
+workflow, Protobuf, and manifest contracts do not change.
+
+The official SDK is pinned at `v1.61.0`. SDK retries are disabled; the adapter
+owns the bounded retry policy and five-minute timeout. Production callers must
+provide a real content-addressed artifact backend and credential source. Do not
+put API keys in manifests, artifacts, command arguments, logs, or database
+configuration.
+
+The local suite uses loopback HTTP and no provider credential. Run the explicit
+live smoke separately:
+
+```bash
+ANTHROPIC_API_KEY='...' ANTHROPIC_MODEL='...' make provider-smoke
+```
+
+This performs exactly one real implementation invocation and one real review
+invocation and validates both against the unchanged kernel mappings. It never
+silently skips: missing variables or either provider failure make the target
+fail. The live smoke is not part of `make check` or `make integration-test`.
+
 ## Isolated execution service
 
 `go/internal/execution.Service` is an in-process boundary. Configure absolute
@@ -144,8 +171,8 @@ docker image inspect --format '{{.Id}}' \
 
 The initial catalog entry is `make-check-v1`, which always resolves to
 `["make", "check"]`. The image contains dependencies locked by `go.sum` and
-`uv.lock`, seeded Go build and vet caches copied into bounded runtime scratch,
-and `protoc-gen-go@v1.36.10`; runtime execution is offline.
+`uv.lock`, seeded Go build and vet caches copied into bounded runtime scratch, and
+`protoc-gen-go@v1.36.10`; runtime execution is offline.
 `go/cmd/verification-service` and `go/cmd/verification-worker` open no
 listeners.
 

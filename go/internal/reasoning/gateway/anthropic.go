@@ -428,6 +428,9 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 func (r *anthropicRuntime) invocationConfiguration(
 	ctx context.Context, capability string,
 ) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	key, err := r.credentials.Credential(ctx)
 	if err != nil || strings.TrimSpace(key) == "" {
 		clearString(&key)

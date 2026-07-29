@@ -623,6 +623,24 @@ func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
 			}
 		})
 	}
+	t.Run("replay corrupt provider response", func(t *testing.T) {
+		service, _, adapter := gatewayService(t, gatewayProposal(t))
+		request := gatewayRequest(t)
+		first, err := service.ProposeImplementation(t.Context(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := service.artifacts.(*memoryArtifactStore)
+		store.mu.Lock()
+		store.values[first.ProviderResponseArtifact.SHA256] = []byte("corrupt")
+		store.mu.Unlock()
+		if _, err := service.ProposeImplementation(t.Context(), request); err == nil {
+			t.Fatal("corrupt provider response replay artifact accepted")
+		}
+		if adapter.calls.Load() != 1 {
+			t.Fatal("corrupt provider response replay invoked adapter")
+		}
+	})
 }
 
 func TestGatewayConcurrentIdenticalRequestsReplay(t *testing.T) {

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -372,5 +375,101 @@ func TestAnthropicImplementationHonorsCallerCancellation(t *testing.T) {
 	_, err := adapter.ProposeImplementation(ctx, agentManifest, request)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestAnthropicLoopbackRequestHeadersShapeAndRetry(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		bodies  [][]byte
+		headers []http.Header
+	)
+	reply := anthropicMessage(t, validImplementationProjection(t))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, body)
+		headers = append(headers, request.Header.Clone())
+		call := len(bodies)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if call == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"bounded"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(reply.RawJSON()))
+	}))
+	defer server.Close()
+
+	adapter, agentManifest, request := anthropicImplementationFixture(t, nil)
+	request.Envelope.Budget.MaximumProviderRequests = 2
+	adapter.runtime.sender = &sdkMessageSender{
+		baseURL: server.URL, timeout: time.Minute, httpClient: server.Client(),
+	}
+	adapter.runtime.sleep = func(context.Context, time.Duration) error { return nil }
+	result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 || result.Usage.ProviderRequests != 2 {
+		t.Fatalf("requests=%d usage=%+v", len(bodies), result.Usage)
+	}
+	for _, header := range headers {
+		if header.Get("X-Api-Key") != "test-credential" ||
+			header.Get("Anthropic-Version") == "" {
+			t.Fatalf("Anthropic headers missing: %+v", header)
+		}
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bodies[0], &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["model"] != "claude-test" || body["tools"] != nil ||
+		body["output_config"] == nil || len(body["messages"].([]any)) != 1 {
+		t.Fatalf("unexpected Anthropic request body: %+v", body)
+	}
+}
+
+func TestAnthropicGatewayExactReplaySkipsCredentialAndNetwork(t *testing.T) {
+	sender := &captureMessageSender{reply: anthropicMessage(t, validImplementationProjection(t))}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	var credentialCalls atomic.Int32
+	adapter.runtime.credentials = credentialSourceFunc(func(context.Context) (string, error) {
+		credentialCalls.Add(1)
+		return "replay-test-credential", nil
+	})
+	resolver := &fakeResolver{resolved: ResolvedManifest{
+		Digest: request.GetEnvelope().GetAgentManifestDigest(), Manifest: agentManifest,
+	}}
+	service, err := NewService(
+		resolver, adapter, adapter.runtime.artifacts, newMemoryInvocationRepository(),
+		fixedClock{now: time.Now()},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.ProposeImplementation(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Replay || !second.Replay || credentialCalls.Load() != 1 ||
+		sender.calls.Load() != 1 || resolver.calls.Load() != 1 ||
+		first.ProviderResponseArtifact != second.ProviderResponseArtifact {
+		t.Fatalf(
+			"first=%+v second=%+v credential=%d network=%d resolver=%d",
+			first, second, credentialCalls.Load(), sender.calls.Load(), resolver.calls.Load(),
+		)
 	}
 }

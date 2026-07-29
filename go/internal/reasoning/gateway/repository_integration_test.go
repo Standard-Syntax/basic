@@ -84,14 +84,22 @@ func TestPostgresInvocationReplayConflictAndImmutability(t *testing.T) {
 			first.Replay, replay.Replay, adapter.calls.Load(),
 		)
 	}
-	var requestURI, requestDigest, proposalURI, proposalDigest, status string
+	var (
+		requestURI, requestDigest, proposalURI, proposalDigest string
+		responseURI, responseDigest, status, model             string
+		inputTokens, outputTokens                              uint64
+		providerRequests                                       uint32
+	)
 	if err := pool.QueryRow(t.Context(), `SELECT
 		request_artifact_uri,request_digest,proposal_artifact_uri,proposal_digest,
-		final_status
+		provider_response_artifact_uri,provider_response_digest,final_status,model,
+		input_tokens,output_tokens,provider_requests
 		FROM reasoning_invocations WHERE request_id=$1`,
 		request.GetEnvelope().GetRequestId(),
 	).Scan(
-		&requestURI, &requestDigest, &proposalURI, &proposalDigest, &status,
+		&requestURI, &requestDigest, &proposalURI, &proposalDigest,
+		&responseURI, &responseDigest, &status, &model,
+		&inputTokens, &outputTokens, &providerRequests,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +107,12 @@ func TestPostgresInvocationReplayConflictAndImmutability(t *testing.T) {
 		requestDigest != first.RequestArtifact.SHA256 ||
 		proposalURI != first.ProposalArtifact.URI ||
 		proposalDigest != first.ProposalArtifact.SHA256 ||
-		status != string(StatusAccepted) {
+		responseURI != first.ProviderResponseArtifact.URI ||
+		responseDigest != first.ProviderResponseArtifact.SHA256 ||
+		status != string(StatusAccepted) || model != first.Invocation.Model ||
+		inputTokens != first.Invocation.Usage.InputTokens ||
+		outputTokens != first.Invocation.Usage.OutputTokens ||
+		providerRequests != first.Invocation.Usage.ProviderRequests {
 		t.Fatal("persisted invocation metadata differs from outcome")
 	}
 
@@ -203,6 +216,15 @@ func TestReasoningMigrationReplays(t *testing.T) {
 	sum := sha256.Sum256(body)
 	if original != fmt.Sprintf("%x", sum) {
 		t.Fatal("reasoning migration ledger digest differs from embedded SQL")
+	}
+	var providerOutcomeMigration int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM schema_migrations WHERE version=16`,
+	).Scan(&providerOutcomeMigration); err != nil {
+		t.Fatal(err)
+	}
+	if providerOutcomeMigration != 1 {
+		t.Fatal("provider outcome migration was not recorded exactly once")
 	}
 }
 

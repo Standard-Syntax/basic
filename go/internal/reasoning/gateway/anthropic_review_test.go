@@ -3,6 +3,9 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +128,43 @@ func TestAnthropicReviewMalformedOutputIsTypedResult(t *testing.T) {
 	if result.MalformedOutput == nil || result.Proposal != nil ||
 		len(result.ProviderResponse) == 0 {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAnthropicReviewLoopbackUsesReviewSchema(t *testing.T) {
+	var requestBody []byte
+	reply := anthropicMessage(t, validReviewProjection(t))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var err error
+		requestBody, err = io.ReadAll(request.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if request.Header.Get("X-Api-Key") != "test-review-credential" {
+			t.Error("review credential header missing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(reply.RawJSON()))
+	}))
+	defer server.Close()
+	adapter, agentManifest, request := anthropicReviewFixture(t, nil)
+	adapter.runtime.sender = &sdkMessageSender{
+		baseURL: server.URL, timeout: time.Minute, httpClient: server.Client(),
+	}
+	result, err := adapter.ProposeReview(t.Context(), agentManifest, request)
+	if err != nil || result.Proposal == nil {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(requestBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	output := body["output_config"].(map[string]any)
+	format := output["format"].(map[string]any)
+	schema := format["schema"].(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	if properties["recommendation"] == nil || properties["findings"] == nil {
+		t.Fatalf("review schema missing from request: %+v", schema)
 	}
 }

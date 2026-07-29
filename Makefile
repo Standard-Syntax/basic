@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check format-check lint type-check test check integration-test clean
+.PHONY: build tools generate generate-check format-check lint type-check test check integration-test provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -56,6 +56,12 @@ integration-test:
 			./internal/publication || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
+
+provider-smoke:
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
+	@test -n "$$ANTHROPIC_MODEL" || { echo "ANTHROPIC_MODEL is required" >&2; exit 2; }
+	cd go && go test -tags=provider_smoke -count=1 \
+		-run '^TestProviderSmoke$$' ./internal/reasoning/gateway
 
 clean:
 	rm -rf .cache .pytest_cache .ruff_cache .tools .venv
