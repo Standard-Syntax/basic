@@ -30,13 +30,16 @@ func newMemoryArtifacts() *memoryArtifacts {
 }
 
 func (m *memoryArtifacts) Get(
-	_ context.Context, ref workflow.ArtifactRef,
+	_ context.Context, ref workflow.ArtifactRef, limit int64,
 ) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	value, ok := m.values[ref.URI]
 	if !ok {
 		return nil, errors.New("not found")
+	}
+	if int64(len(value)) > limit {
+		return nil, ErrResponseLimit
 	}
 	return append([]byte(nil), value...), nil
 }
