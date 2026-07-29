@@ -41,11 +41,10 @@ func (d DockerCheckExecutor) ImageID(ctx context.Context) (string, error) {
 }
 
 func (d DockerCheckExecutor) Run(
-	ctx context.Context, workspace string, definition CheckDefinition,
+	ctx context.Context, workspace, imageID string, definition CheckDefinition,
 ) (ExecutionMeasurement, error) {
-	imageID, err := d.ImageID(ctx)
-	if err != nil {
-		return ExecutionMeasurement{}, err
+	if !imageIDPattern.MatchString(imageID) {
+		return ExecutionMeasurement{}, fmt.Errorf("%w: image identity", ErrWorkerResponse)
 	}
 	payload, err := json.Marshal(WorkerRequest{
 		CommandReference: definition.CommandReference,

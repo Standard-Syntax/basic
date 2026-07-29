@@ -127,7 +127,7 @@ type WorkspacePreparer interface {
 
 type CheckExecutor interface {
 	ImageID(context.Context) (string, error)
-	Run(context.Context, string, CheckDefinition) (ExecutionMeasurement, error)
+	Run(context.Context, string, string, CheckDefinition) (ExecutionMeasurement, error)
 }
 
 type ExecutionMeasurement struct {

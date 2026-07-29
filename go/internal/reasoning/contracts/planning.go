@@ -12,7 +12,9 @@ import (
 )
 
 var taskIDPattern = regexp.MustCompile(`^TASK-[0-9]{3}$`)
-var checkIDPattern = regexp.MustCompile(`^CHECK-[A-Z0-9][A-Z0-9-]*$`)
+var checkIDPattern = regexp.MustCompile(
+	`^(CHECK-[A-Z0-9][A-Z0-9-]*|[a-z][a-z0-9-]*-v[0-9]+)$`,
+)
 var resourcePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 type TaskPlanningRequest struct {
