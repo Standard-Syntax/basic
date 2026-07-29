@@ -24,14 +24,23 @@ type Service struct {
 	artifacts  ArtifactStore
 	applicator Applicator
 	workflow   WorkflowStore
+	ledger     ExecutionLedger
 	now        func() time.Time
+	executions chan struct{}
+	worktrees  chan struct{}
 }
 
 func NewService(
-	config Config, artifacts ArtifactStore, applicator Applicator, workflowStore WorkflowStore,
+	config Config,
+	artifacts ArtifactStore,
+	applicator Applicator,
+	workflowStore WorkflowStore,
+	ledger ExecutionLedger,
 ) (*Service, error) {
-	if artifacts == nil || applicator == nil || workflowStore == nil {
-		return nil, errors.New("artifact store, applicator, and workflow store are required")
+	if artifacts == nil || applicator == nil || workflowStore == nil || ledger == nil {
+		return nil, errors.New(
+			"artifact store, applicator, workflow store, and execution ledger are required",
+		)
 	}
 	if config.RepositoryRoot == "" || config.WorktreeRoot == "" || config.WorkerImage == "" {
 		return nil, errors.New("repository, worktree root, and worker image are required")
@@ -47,13 +56,24 @@ func NewService(
 	if err := validateLimits(config.Limits); err != nil {
 		return nil, err
 	}
+	if config.MaxConcurrent == 0 {
+		config.MaxConcurrent = DefaultMaxConcurrent
+	}
+	if config.MaxWorktrees == 0 {
+		config.MaxWorktrees = DefaultMaxWorktrees
+	}
+	if config.MaxConcurrent < 1 || config.MaxWorktrees < 1 {
+		return nil, errors.New("positive execution and worktree concurrency limits are required")
+	}
 	if _, err := uuid.Parse(config.ActorID); err != nil ||
 		strings.TrimSpace(config.AuthorName) == "" || strings.TrimSpace(config.AuthorEmail) == "" {
 		return nil, errors.New("execution actor and author metadata are required")
 	}
 	return &Service{
 		config: config, artifacts: artifacts, applicator: applicator,
-		workflow: workflowStore, now: time.Now,
+		workflow: workflowStore, ledger: ledger, now: time.Now,
+		executions: make(chan struct{}, config.MaxConcurrent),
+		worktrees:  make(chan struct{}, config.MaxWorktrees),
 	}, nil
 }
 
@@ -62,6 +82,30 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
+	requestDigest, err := executionRequestDigest(request)
+	if err != nil {
+		return Result{}, err
+	}
+	handle, err := s.ledger.Begin(ctx, ExecutionStart{
+		ExecutionID: request.ExecutionID, RequestDigest: requestDigest,
+		Timestamp:      request.ExecutionTimestamp,
+		ReservationTTL: s.config.Limits.Timeout + time.Minute,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	if replay, ok := handle.Replay(); ok {
+		replay.Replay = true
+		return replay, nil
+	}
+	if err := acquire(ctx, s.executions); err != nil {
+		return Result{}, err
+	}
+	defer release(s.executions)
+	if err := acquire(ctx, s.worktrees); err != nil {
+		return Result{}, err
+	}
+	defer release(s.worktrees)
 	worktree, err := createWorktree(
 		ctx, s.config, request.ExecutionID, mappedRequest.BaseCommit,
 	)
@@ -138,12 +182,16 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		return Result{}, fmt.Errorf("record task execution: %w", err)
 	}
 	keepRef = true
-	return Result{
+	result := Result{
 		ExecutionID: request.ExecutionID, BaseCommit: mappedRequest.BaseCommit,
 		CandidateCommit: candidate, CandidateRef: candidateRef,
 		ReportArtifact: reportArtifact, Lease: request.Lease,
 		Limits: s.config.Limits, ActualDiff: actualDiff, Replay: recorded.Replay,
-	}, nil
+	}
+	if err := handle.Complete(ctx, result); err != nil {
+		return Result{}, fmt.Errorf("finalize execution ledger: %w", err)
+	}
+	return result, nil
 }
 
 func (s *Service) validateRequest(
@@ -239,6 +287,19 @@ func validateLimits(limits Limits) error {
 		return errors.New("execution limits exceed service maximums")
 	}
 	return nil
+}
+
+func acquire(ctx context.Context, semaphore chan struct{}) error {
+	select {
+	case semaphore <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func release(semaphore chan struct{}) {
+	<-semaphore
 }
 
 func preflightChanges(changes []contracts.FileChange, limits Limits) error {

@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,13 +57,13 @@ func (f *fakeWorkflow) ExecuteTask(
 }
 
 type localApplicator struct {
-	calls int
+	calls atomic.Int32
 }
 
 func (a *localApplicator) Apply(
 	_ context.Context, worktree string, changes []contracts.FileChange, _ Limits,
 ) error {
-	a.calls++
+	a.calls.Add(1)
 	for _, change := range changes {
 		target := filepath.Join(worktree, filepath.FromSlash(change.Path))
 		switch change.Operation {
@@ -176,7 +178,7 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 		UID: os.Getuid(), GID: os.Getgid(), Limits: DefaultLimits(),
 		ActorID: uuid.NewString(), AuthorName: "Harness Execution",
 		AuthorEmail: "execution@harness.invalid",
-	}, memoryArtifacts{digest: proposalBody}, applicator, workflowStore)
+	}, memoryArtifacts{digest: proposalBody}, applicator, workflowStore, NewMemoryExecutionLedger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,13 +193,32 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 		Implementation: request, Proposal: proposal,
 		ProposalArtifact: artifact, Lease: lease, ExpectedTaskRevision: 3,
 	}
-	result, err := service.Execute(t.Context(), executionRequest)
-	if err != nil {
-		t.Fatal(err)
+	var wait sync.WaitGroup
+	results := make([]Result, 2)
+	executionErrors := make([]error, 2)
+	for index := range results {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results[index], executionErrors[index] = service.Execute(t.Context(), executionRequest)
+		}()
 	}
-	if applicator.calls != 1 || result.BaseCommit != commit ||
+	wait.Wait()
+	for _, executionErr := range executionErrors {
+		if executionErr != nil {
+			t.Fatal(executionErr)
+		}
+	}
+	if results[0].Replay == results[1].Replay {
+		t.Fatalf("concurrent results did not converge to one replay: %#v", results)
+	}
+	result := results[0]
+	if result.Replay {
+		result = results[1]
+	}
+	if applicator.calls.Load() != 1 || result.BaseCommit != commit ||
 		len(workflowStore.commands) != 2 || result.CandidateCommit == "" {
-		t.Fatalf("unexpected result: %#v calls=%d", result, applicator.calls)
+		t.Fatalf("unexpected result: %#v calls=%d", result, applicator.calls.Load())
 	}
 	if len(result.ActualDiff) != len(proposal.GetChanges()) {
 		t.Fatalf("actual diff = %#v", result.ActualDiff)
@@ -213,6 +234,14 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 	if repeated.CandidateCommit != result.CandidateCommit ||
 		!repeated.ReportArtifact.Equal(result.ReportArtifact) || !repeated.Replay {
 		t.Fatalf("execution was not deterministic: %#v %#v", result, repeated)
+	}
+	conflict := executionRequest
+	conflict.ExpectedTaskRevision++
+	if _, err := service.Execute(t.Context(), conflict); !errors.Is(err, ErrExecutionConflict) {
+		t.Fatalf("conflicting execution error = %v", err)
+	}
+	if applicator.calls.Load() != 1 {
+		t.Fatalf("conflicting execution reached applicator %d times", applicator.calls.Load())
 	}
 	if status := runGit(t, repository, "status", "--short"); status != "" {
 		t.Fatalf("source checkout changed: %s", status)
@@ -232,7 +261,7 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
 		Limits: DefaultLimits(), ActorID: uuid.NewString(),
 		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
-	}, memoryArtifacts{digest: []byte("corrupt")}, applicator, workflowStore)
+	}, memoryArtifacts{digest: []byte("corrupt")}, applicator, workflowStore, NewMemoryExecutionLedger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,8 +276,8 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 		Implementation: request, Proposal: proposal,
 		ProposalArtifact: artifact, Lease: lease, ExpectedTaskRevision: 3,
 	})
-	if !errors.Is(err, ErrArtifactIntegrity) || applicator.calls != 0 {
-		t.Fatalf("corrupt proposal reached applicator: calls=%d err=%v", applicator.calls, err)
+	if !errors.Is(err, ErrArtifactIntegrity) || applicator.calls.Load() != 0 {
+		t.Fatalf("corrupt proposal reached applicator: calls=%d err=%v", applicator.calls.Load(), err)
 	}
 
 	replacement := "content"
@@ -279,7 +308,7 @@ func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
 		Limits: DefaultLimits(), ActorID: uuid.NewString(),
 		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
-	}, memoryArtifacts{digest: proposalBody}, &localApplicator{}, workflowStore)
+	}, memoryArtifacts{digest: proposalBody}, &localApplicator{}, workflowStore, NewMemoryExecutionLedger())
 	if err != nil {
 		t.Fatal(err)
 	}

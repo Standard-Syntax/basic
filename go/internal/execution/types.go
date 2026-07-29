@@ -16,6 +16,7 @@ var (
 	ErrArtifactIntegrity = errors.New("execution artifact integrity check failed")
 	ErrUnsafePath        = errors.New("unsafe execution path")
 	ErrLimitExceeded     = errors.New("execution limit exceeded")
+	ErrExecutionConflict = errors.New("execution ID already has different content")
 )
 
 const (
@@ -23,6 +24,8 @@ const (
 	DefaultMaxFileBytes    = 1 << 20
 	DefaultMaxTotalBytes   = 10 << 20
 	DefaultTimeout         = 5 * time.Minute
+	DefaultMaxConcurrent   = 4
+	DefaultMaxWorktrees    = 8
 )
 
 type Request struct {
@@ -61,6 +64,8 @@ type Config struct {
 	AuthorName     string
 	AuthorEmail    string
 	Limits         Limits
+	MaxConcurrent  int
+	MaxWorktrees   int
 }
 
 type ArtifactStore interface {
@@ -70,6 +75,22 @@ type ArtifactStore interface {
 
 type WorkflowStore interface {
 	ExecuteTask(context.Context, workflow.TaskCommand) (workflow.CommandResult, error)
+}
+
+type ExecutionStart struct {
+	ExecutionID    string
+	RequestDigest  string
+	Timestamp      time.Time
+	ReservationTTL time.Duration
+}
+
+type ExecutionHandle interface {
+	Replay() (Result, bool)
+	Complete(context.Context, Result) error
+}
+
+type ExecutionLedger interface {
+	Begin(context.Context, ExecutionStart) (ExecutionHandle, error)
 }
 
 type Applicator interface {
