@@ -8,8 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
+
+	repositoryutil "github.com/Standard-Syntax/basic/go/internal/repository"
 )
 
 func createWorktree(
@@ -33,80 +34,16 @@ func createWorktree(
 	); err != nil {
 		return "", fmt.Errorf("create detached worktree: %w", err)
 	}
-	if err := materializeTree(ctx, config.RepositoryRoot, worktree, baseCommit); err != nil {
+	if err := repositoryutil.MaterializeTree(
+		ctx, config.RepositoryRoot, worktree, baseCommit,
+	); err != nil {
 		_ = removeWorktree(context.Background(), config.RepositoryRoot, worktree)
+		if errors.Is(err, repositoryutil.ErrUnsafePath) {
+			return "", fmt.Errorf("%w: %w", ErrUnsafePath, err)
+		}
 		return "", err
 	}
 	return worktree, nil
-}
-
-func materializeTree(ctx context.Context, repository, worktree, commit string) error {
-	tree, err := gitOutput(ctx, repository, "ls-tree", "-rz", "--full-tree", "-r", commit)
-	if err != nil {
-		return fmt.Errorf("list base tree: %w", err)
-	}
-	root, err := os.OpenRoot(worktree)
-	if err != nil {
-		return fmt.Errorf("open worktree root: %w", err)
-	}
-	defer root.Close()
-	for _, record := range bytes.Split(tree, []byte{0}) {
-		if len(record) == 0 {
-			continue
-		}
-		mode, objectID, path, err := parseTreeRecord(record)
-		if err != nil {
-			return err
-		}
-		if err := materializeEntry(ctx, repository, root, mode, objectID, path); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func parseTreeRecord(record []byte) (string, string, string, error) {
-	header, pathBytes, ok := bytes.Cut(record, []byte{'\t'})
-	fields := bytes.Fields(header)
-	if !ok || len(fields) != 3 {
-		return "", "", "", errors.New("invalid git tree record")
-	}
-	mode, objectType, objectID := string(fields[0]), string(fields[1]), string(fields[2])
-	path := string(pathBytes)
-	if _, err := normalizePath(path); err != nil {
-		return "", "", "", fmt.Errorf("%w: tracked path %q", ErrUnsafePath, path)
-	}
-	if objectType != "blob" || (mode != "100644" && mode != "100755" && mode != "120000") {
-		return "", "", "",
-			fmt.Errorf("%w: unsupported tracked entry %q mode %s", ErrUnsafePath, path, mode)
-	}
-	return mode, objectID, path, nil
-}
-
-func materializeEntry(
-	ctx context.Context, repository string, root *os.Root, mode, objectID, path string,
-) error {
-	body, err := gitOutput(ctx, repository, "cat-file", "blob", objectID)
-	if err != nil {
-		return fmt.Errorf("read tracked blob %q: %w", path, err)
-	}
-	parent := filepath.ToSlash(filepath.Dir(path))
-	if parent != "." {
-		if err := root.MkdirAll(parent, 0o750); err != nil {
-			return fmt.Errorf("create tracked parent %q: %w", parent, err)
-		}
-	}
-	if mode == "120000" {
-		if err := root.Symlink(string(body), path); err != nil {
-			return fmt.Errorf("materialize symlink %q: %w", path, err)
-		}
-		return nil
-	}
-	permissions, _ := strconv.ParseUint(mode[3:], 8, 32)
-	if err := root.WriteFile(path, body, os.FileMode(permissions)); err != nil {
-		return fmt.Errorf("materialize blob %q: %w", path, err)
-	}
-	return nil
 }
 
 func removeWorktree(ctx context.Context, repository, worktree string) error {
