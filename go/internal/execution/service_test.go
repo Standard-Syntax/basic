@@ -329,11 +329,13 @@ func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 		t.Fatalf("stale candidate ref %q remains", ref)
 	}
 	workflowStore.failLast = nil
+	executionRequest.ExecutionID = uuid.NewString()
 	result, err := service.Execute(t.Context(), executionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	workflowStore.failLast = workflow.ErrRevisionConflict
+	executionRequest.ExecutionID = uuid.NewString()
 	if _, err := service.Execute(t.Context(), executionRequest); !errors.Is(
 		err, workflow.ErrRevisionConflict,
 	) {
