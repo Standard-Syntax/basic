@@ -167,6 +167,24 @@ There is no listener or authentication middleware in Phase 8.
 PostgreSQL and includes the approval repository concurrency, replay, rollback,
 and immutability suite.
 
+## Draft pull request publication
+
+Construct `publication.Service` with trusted repository coordinates, remote and
+base branch, `harness/` prefix, publication actor UUID, content-addressed
+artifact store, workflow store, `GitCommandPublisher`, `GitHubRESTClient`, and
+`PostgresPublicationRepository`. Supply a stable publication UUID/timestamp,
+run ID/revision, reviewed base and candidate commits, and exact specification,
+implementation, execution, verification, review, and approval references.
+
+The credential source returns an ephemeral token per request. Do not place the
+token in the endpoint, environment inherited by Git, artifact store, or
+database. Production endpoints must use HTTPS. Normal tests use a local bare
+remote and `httptest`; they do not contact GitHub.
+
+`make integration-test` also applies migration `0013` and runs publication
+checkpoint, conflict, rollback, concurrency, migration-digest, trigger, bare
+Git, and loopback REST tests.
+
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed
 fixtures, while Go and Python tests verify cross-language digest equality.

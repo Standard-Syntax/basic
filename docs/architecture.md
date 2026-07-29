@@ -99,7 +99,23 @@ digest and candidate binding, stores `task_approval.v1`, and emits an
 `decision_ready` retries only the deterministic workflow command; immutable
 database fields prevent replacing the human identity, evidence, or decision.
 
-No HTTP/gRPC execution, verification, review, or approval server, real provider, runtime Python
-agent, pull-request operation, branch publication, merge operation, or
-deployment exists. `MERGED` records an already completed, approval-bound
-external fact.
+Phase 9 adds `go/internal/publication`, an in-process application boundary.
+It verifies the specification, implementation, execution, verification,
+review, and approval bodies by digest and cross-binding before any Git or PR
+mutation. The configured remote base must equal the reviewed base commit.
+The exact candidate is pushed once to deterministic `harness/<run-id>` using
+argument-only Git, disabled hooks/prompts, and an explicit empty expected-value
+lease. An already-equal branch is recovery; any other branch value is a
+conflict.
+
+The narrow GitHub REST client lists exact owner/head/base PRs before creation,
+embeds a publication-ID marker, and creates only `draft: true`. Migration
+`0013` advances immutable rows through `reserved`, `branch_ready`, `pr_ready`,
+and `completed`; the final checkpoint stores `draft_pull_request.v1` and emits
+the idempotent `RecordDraftPullRequest` command. Migration `0014` extends only
+the closed workflow actor constraint for `PUBLICATION_SERVICE`. The run remains
+`MERGE_READY`.
+
+No HTTP/gRPC execution, verification, review, approval, or publication server,
+real provider, runtime Python agent, merge operation, or deployment exists.
+`MERGED` still records an already completed, approval-bound external fact.

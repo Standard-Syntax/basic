@@ -57,6 +57,7 @@ func (m *memoryArtifacts) Put(
 }
 
 type fakeGit struct {
+	mu           sync.Mutex
 	base         string
 	branch       string
 	candidate    string
@@ -65,13 +66,19 @@ type fakeGit struct {
 }
 
 func (f *fakeGit) BaseHead(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.baseCalls.Add(1)
 	return f.base, nil
 }
 func (f *fakeGit) BranchHead(context.Context, string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.candidate, f.candidate != "", nil
 }
 func (f *fakeGit) Publish(_ context.Context, branch, candidate string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.publishCalls.Add(1)
 	if f.candidate != "" && f.candidate != candidate {
 		return false, ErrBranchConflict
@@ -107,6 +114,9 @@ func (f *fakePulls) CreateDraft(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalls++
+	if f.value != nil {
+		return DraftPullRequest{}, errors.New("duplicate head and base")
+	}
 	value := DraftPullRequest{
 		Number: 41, URL: "https://example.invalid/pull/41", State: "open",
 		Draft: true, Head: input.Head, Base: input.Base, Marker: input.Marker,
@@ -214,8 +224,49 @@ func TestServiceConflictingPublicationIDFailsClosed(t *testing.T) {
 	}
 }
 
+func TestConcurrentExactPublicationConvergesOnOneBranchAndPullRequest(t *testing.T) {
+	service, request, git, pulls, _ := publicationFixture(t)
+	const callers = 8
+	results := make(chan Result, callers)
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			result, err := service.Publish(context.Background(), request)
+			results <- result
+			errs <- err
+		}()
+	}
+	var artifact workflow.ArtifactRef
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		result := <-results
+		if artifact.URI == "" {
+			artifact = result.PublicationArtifact
+		}
+		if !artifact.Equal(result.PublicationArtifact) {
+			t.Fatalf("publication artifacts differ: %v %v", artifact, result.PublicationArtifact)
+		}
+	}
+	if git.candidate != request.CandidateCommit || pulls.createCalls != 1 {
+		t.Fatalf("candidate=%s PR creates=%d", git.candidate, pulls.createCalls)
+	}
+}
+
 func publicationFixture(
 	t *testing.T,
+) (*Service, Request, *fakeGit, *fakePulls, *fakeWorkflow) {
+	t.Helper()
+	return publicationFixtureForCommits(
+		t,
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	)
+}
+
+func publicationFixtureForCommits(
+	t *testing.T, base, candidate string,
 ) (*Service, Request, *fakeGit, *fakePulls, *fakeWorkflow) {
 	t.Helper()
 	store := newMemoryArtifacts()
@@ -231,8 +282,6 @@ func publicationFixture(
 		return ref
 	}
 	runID := uuid.NewString()
-	base := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	candidate := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	specification := putJSON(map[string]any{
 		"schema_version": "1", "title": "Implement approved publication",
 	})
