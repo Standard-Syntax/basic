@@ -1,0 +1,6 @@
+create 
+1.  coderabbit configuration for stacked pull request reviews (linting, formatting, type checking should not be apart of code rabbit reviews, this is the job of the linter, formatter and type checker and github ci) - should not comment on nitpicks
+2.  Pull request template
+3. Git hub CI workflow
+4. Deepsource Configuration - should not comment on nitpicks
+5. semgrep configuration
