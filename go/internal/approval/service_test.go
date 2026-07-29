@@ -138,10 +138,59 @@ func TestStandardApprovalEmitsBoundHumanCommand(t *testing.T) {
 	}
 	var artifact TaskApproval
 	if err := json.Unmarshal(body, &artifact); err != nil ||
+		artifact.RunID != request.RunID || artifact.TaskID != request.TaskID ||
 		artifact.CandidateCommit != request.CandidateCommit ||
 		!artifact.Review.Equal(request.Review) ||
 		artifact.Implementation.Digest != request.Implementation.Digest {
 		t.Fatalf("artifact=%#v err=%v", artifact, err)
+	}
+}
+
+func TestReviewReportTaskIdentityMismatchCannotTransition(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*review.ReviewReport)
+	}{
+		{
+			name: "run ID",
+			edit: func(report *review.ReviewReport) {
+				report.RunID = "another-run"
+			},
+		},
+		{
+			name: "task ID",
+			edit: func(report *review.ReviewReport) {
+				report.TaskID = "TASK-999"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, request, store, workflowPort := approvalFixture(t)
+			body, err := store.Get(t.Context(), request.Review)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var report review.ReviewReport
+			if err := json.Unmarshal(body, &report); err != nil {
+				t.Fatal(err)
+			}
+			test.edit(&report)
+			body, err = json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Review, err = store.Put(t.Context(), body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ApproveTask(t.Context(), request); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("task identity mismatch err=%v", err)
+			}
+			if workflowPort.calls != 0 {
+				t.Fatal("task identity mismatch reached workflow")
+			}
+		})
 	}
 }
 

@@ -73,6 +73,8 @@ type TaskApproval struct {
 	Reason                      string               `json:"reason,omitempty"`
 	Elevated                    bool                 `json:"elevated"`
 	RiskReasons                 []string             `json:"risk_reasons"`
+	RunID                       string               `json:"run_id"`
+	TaskID                      string               `json:"task_id"`
 	CandidateCommit             string               `json:"candidate_commit"`
 	ApprovedSpecificationDigest string               `json:"approved_specification_digest"`
 	ApprovedTaskDigest          string               `json:"approved_task_digest"`

@@ -77,6 +77,7 @@ func (s *Service) decide(
 		Approver: normalizedPrincipal(request.Principal), Decision: decision,
 		DecisionTimestamp: request.DecisionTimestamp.UTC().Format(time.RFC3339Nano),
 		Reason:            reason, Elevated: elevated, RiskReasons: riskReasons,
+		RunID: request.RunID, TaskID: request.TaskID,
 		CandidateCommit:             request.CandidateCommit,
 		ApprovedSpecificationDigest: request.ApprovedSpecificationDigest,
 		ApprovedTaskDigest:          request.ApprovedTaskDigest,
@@ -91,7 +92,7 @@ func (s *Service) decide(
 	if err != nil {
 		return Result{}, err
 	}
-	command := s.command(request, decision, reason, artifact)
+	command := approvalCommand(request, decision, reason, artifact)
 	workflowResult, err := s.workflow.ExecuteTask(ctx, command)
 	if err != nil {
 		return Result{}, fmt.Errorf("apply human task decision: %w", err)
@@ -103,6 +104,30 @@ func (s *Service) decide(
 }
 
 func (s *Service) validateRequest(ctx context.Context, request Request) error {
+	if err := validateRequestIdentity(request); err != nil {
+		return err
+	}
+	if err := validateRiskInputs(request); err != nil {
+		return err
+	}
+	if err := s.validateInputArtifacts(ctx, request); err != nil {
+		return err
+	}
+	reportBody, err := fetchVerifiedArtifact(ctx, s.artifacts, request.Review)
+	if err != nil {
+		return err
+	}
+	report, err := decodeReviewReport(reportBody)
+	if err != nil {
+		return err
+	}
+	if !reviewReportMatches(report, request) {
+		return fmt.Errorf("%w: trusted review binding", ErrInvalidRequest)
+	}
+	return nil
+}
+
+func validateRequestIdentity(request Request) error {
 	_, approvalIDErr := uuid.Parse(request.ApprovalID)
 	_, principalIDErr := uuid.Parse(request.Principal.ID)
 	if approvalIDErr != nil || principalIDErr != nil ||
@@ -113,6 +138,10 @@ func (s *Service) validateRequest(ctx context.Context, request Request) error {
 		request.ExpectedTaskRevision == 0 || len(request.ActualChangedPaths) == 0 {
 		return ErrInvalidRequest
 	}
+	return nil
+}
+
+func validateRiskInputs(request Request) error {
 	for _, changedPath := range request.ActualChangedPaths {
 		if !safeRepoPath(changedPath) {
 			return fmt.Errorf("%w: changed path", ErrInvalidRequest)
@@ -123,27 +152,29 @@ func (s *Service) validateRequest(ctx context.Context, request Request) error {
 			return fmt.Errorf("%w: resource label", ErrInvalidRequest)
 		}
 	}
+	return nil
+}
+
+func (s *Service) validateInputArtifacts(ctx context.Context, request Request) error {
 	for _, ref := range []workflow.ArtifactRef{
-		request.Implementation, request.Execution, request.Verification, request.Review,
+		request.Implementation, request.Execution, request.Verification,
 	} {
 		if err := verifyArtifact(ctx, s.artifacts, ref); err != nil {
 			return err
 		}
 	}
-	report, err := loadReviewReport(ctx, s.artifacts, request.Review)
-	if err != nil {
-		return err
-	}
-	if !report.Passed || report.CandidateCommit != request.CandidateCommit ||
-		report.ApprovedSpecificationDigest != request.ApprovedSpecificationDigest ||
-		report.ApprovedTaskDigest != request.ApprovedTaskDigest ||
-		report.ImplementationProposalDigest != request.Implementation.Digest ||
-		!report.Execution.Equal(request.Execution) ||
-		!report.Verification.Equal(request.Verification) ||
-		!reviewInputMatches(report) {
-		return fmt.Errorf("%w: trusted review binding", ErrInvalidRequest)
-	}
 	return nil
+}
+
+func reviewReportMatches(report review.ReviewReport, request Request) bool {
+	return report.Passed && report.RunID == request.RunID && report.TaskID == request.TaskID &&
+		report.CandidateCommit == request.CandidateCommit &&
+		report.ApprovedSpecificationDigest == request.ApprovedSpecificationDigest &&
+		report.ApprovedTaskDigest == request.ApprovedTaskDigest &&
+		report.ImplementationProposalDigest == request.Implementation.Digest &&
+		report.Execution.Equal(request.Execution) &&
+		report.Verification.Equal(request.Verification) &&
+		reviewInputMatches(report)
 }
 
 func reviewInputMatches(r review.ReviewReport) bool {
@@ -213,27 +244,28 @@ func safeRepoPath(value string) bool {
 func verifyArtifact(
 	ctx context.Context, store ArtifactStore, ref workflow.ArtifactRef,
 ) error {
+	_, err := fetchVerifiedArtifact(ctx, store, ref)
+	return err
+}
+
+func fetchVerifiedArtifact(
+	ctx context.Context, store ArtifactStore, ref workflow.ArtifactRef,
+) ([]byte, error) {
 	if err := ref.Validate(); err != nil {
-		return fmt.Errorf("%w: artifact reference", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: artifact reference", ErrInvalidRequest)
 	}
 	body, err := store.Get(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("load approval input artifact: %w", err)
+		return nil, fmt.Errorf("load approval input artifact: %w", err)
 	}
 	sum := sha256.Sum256(body)
 	if hex.EncodeToString(sum[:]) != ref.Digest {
-		return ErrArtifactIntegrity
+		return nil, ErrArtifactIntegrity
 	}
-	return nil
+	return body, nil
 }
 
-func loadReviewReport(
-	ctx context.Context, store ArtifactStore, ref workflow.ArtifactRef,
-) (review.ReviewReport, error) {
-	body, err := store.Get(ctx, ref)
-	if err != nil {
-		return review.ReviewReport{}, err
-	}
+func decodeReviewReport(body []byte) (review.ReviewReport, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	var report review.ReviewReport
@@ -262,7 +294,7 @@ func (s *Service) storeApproval(
 	return artifact, nil
 }
 
-func (s *Service) command(
+func approvalCommand(
 	request Request, decision, reason string, approval workflow.ArtifactRef,
 ) workflow.TaskCommand {
 	id := func(label string) string {
