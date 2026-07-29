@@ -1,0 +1,133 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 2: Transactional Kernel State Machine
+
+## Summary
+
+Implement the complete run/task lifecycle as a trusted Go domain model backed by PostgreSQL. Every accepted command will validate state, actor authority, required immutable bindings, and expected revision before atomically updating current state and appending events. No model provider, worktree, command execution, verification runner, HTTP/gRPC server, pull-request creation, merge, or deployment side effect is included.
+
+The existing `make check` baseline passes and the worktree is clean.
+
+## Stack Initialization and Vertical Slices
+
+At implementation start, create an independent stack from `main`:
+
+```bash
+gh stack init --base main \
+  phase02/run-intake \
+  phase02/task-planning \
+  phase02/task-lifecycle \
+  phase02/run-completion \
+  phase02/transactional-hardening
+gh stack bottom
+gh stack view --json
+```
+
+This was not executed during Plan Mode because stack initialization changes repository state.
+
+Each branch must pass its applicable unit and PostgreSQL integration tests independently:
+
+1. `phase02/run-intake`
+   - Add pgx/v5, the versioned SQL migration runner, and initial run/command/event tables.
+   - Implement run creation and specification propose/reject/approve commands end-to-end through transactional persistence.
+   - Prove invalid state, actor, artifact, and revision inputs produce no state or event changes.
+
+2. `phase02/task-planning`
+   - Add task and dependency persistence.
+   - Implement task-graph propose/reject/approve transitions.
+   - Atomically create approved task aggregates and dependencies; mark only dependency-free tasks `READY` and emit their readiness events.
+
+3. `phase02/task-lifecycle`
+   - Implement the complete task transition matrix, attempt accounting, immutable artifact bindings, dependency readiness, retry/rework behavior, and terminal states.
+   - Keep lease, reasoning, execution, verification, and review results as typed references to externally produced facts; do not perform those side effects.
+
+4. `phase02/run-completion`
+   - Implement run progression from `READY` through terminal states.
+   - Gate run advancement on persisted task states and required evidence; reaching `MERGED` records an externally completed merge fact but performs no GitHub operation.
+
+5. `phase02/transactional-hardening`
+   - Add concurrency, rollback, idempotency, append-only enforcement, migration, and full-lifecycle integration tests.
+   - Add disposable Docker Compose PostgreSQL support and CI execution.
+   - Update architecture, security, resource, development, state-machine, decision-log, and Phase 2 completion documentation.
+
+## Domain and Persistence Design
+
+Add handwritten domain code under `go/internal/workflow`; generated Protobuf code remains transport-only and unchanged.
+
+Expose these internal kernel contracts:
+
+- Typed `RunState` and `TaskState` constants that reject unknown values.
+- `Actor`, `ArtifactRef`, and `CommandEnvelope` values containing command ID, actor identity, expected aggregate revision, timestamp, correlation ID, and causation ID.
+- Explicit command structs rather than an `any` payload API.
+- Run and task aggregates that apply a command to a copy and return the next snapshot plus typed events; failures return neither partial state nor events.
+- A transactional store used by a workflow application service to lock the snapshot, validate the expected revision, apply the aggregate command, persist events, and update state in one transaction.
+
+PostgreSQL will use checked-in, forward-only SQL migrations and an in-repository pgx migration runner guarded by an advisory lock. Persist:
+
+- `workflow_runs`: state, revision, and immutable lifecycle bindings.
+- `workflow_tasks`: run ownership, state, revision, attempt limits/current attempt, and task bindings.
+- `workflow_task_dependencies`: approved dependency edges.
+- `workflow_commands`: command identity, canonical request digest, and recorded result for idempotency.
+- `workflow_events`: ordered event envelopes and JSONB typed payloads.
+- `schema_migrations`: applied migration versions and digests.
+
+A database trigger will reject event updates and deletes. Unique aggregate/revision constraints preserve event order. Reusing a command ID with the same digest returns its recorded result without another transition; reuse with different content fails closed.
+
+## Legal Transitions
+
+Run transitions:
+
+| From | Allowed destination |
+|---|---|
+| New | `DRAFT` |
+| `DRAFT` | `SPECIFICATION_REVIEW` |
+| `SPECIFICATION_REVIEW` | `DRAFT`, `TASK_PLANNING`, `REJECTED` |
+| `TASK_PLANNING` | `TASK_PLAN_REVIEW` |
+| `TASK_PLAN_REVIEW` | `TASK_PLANNING`, `READY`, `REJECTED` |
+| `READY` | `EXECUTING` |
+| `EXECUTING` | `VERIFYING` |
+| `VERIFYING` | `REVIEWING` |
+| `REVIEWING` | `AWAITING_APPROVAL` |
+| `AWAITING_APPROVAL` | `MERGE_READY`, `REJECTED` |
+| `MERGE_READY` | `MERGED` |
+
+Every nonterminal run may transition to `FAILED` through a kernel failure command or `CANCELLED` through an authorized human cancellation. Terminal states are immutable.
+
+Task transitions:
+
+| From | Allowed destination |
+|---|---|
+| New | `PENDING`, or `READY` when dependency-free |
+| `PENDING` | `READY` after all dependencies are accepted |
+| `READY` | `LEASED` |
+| `LEASED` | `REASONING`, `READY` on lease release/expiry |
+| `REASONING` | `PROPOSAL_REJECTED`, `EXECUTING` |
+| `PROPOSAL_REJECTED` | `READY`, `FAILED` |
+| `EXECUTING` | `VERIFYING` |
+| `VERIFYING` | `REVIEWING`, `REWORK_REQUIRED` |
+| `REVIEWING` | `AWAITING_APPROVAL`, `REWORK_REQUIRED` |
+| `REWORK_REQUIRED` | `READY`, `FAILED` |
+| `AWAITING_APPROVAL` | `ACCEPTED`, `REWORK_REQUIRED` |
+
+Every nonterminal task may become `FAILED` for a non-retryable error or exhausted attempts and `CANCELLED` when its run is cancelled. Terminal task states are immutable.
+
+Human actors alone may approve or reject specifications, task graphs, reviewed tasks, or runs. Trusted service actors may record operational facts only for their assigned stage. Python, model, proposal, and unknown actors receive no transition authority. Each stage transition requires the relevant immutable digest, artifact URI, candidate commit, evidence, review, or approval binding.
+
+## Test Plan
+
+- Exhaustively test every command against every run/task state; unspecified edges must fail with byte-for-byte equivalent snapshots and no emitted events.
+- Test missing or unauthorized actors, missing/mismatched artifact bindings, stale revisions, invalid identifiers, unknown states, attempt exhaustion, dependency failures, and terminal-state immutability.
+- Prove task-graph approval atomically creates tasks, dependencies, state updates, and events.
+- Prove concurrent commands using one expected revision yield exactly one winner.
+- Inject failures before event insertion, snapshot update, and commit to prove complete rollback.
+- Verify command replay idempotency, conflicting command-ID rejection, ordered event revisions, and database-level event immutability.
+- Run a PostgreSQL-backed lifecycle from run creation through recorded merge, including rejection, retry, rework, cancellation, and failure variants.
+- Add `make integration-test` using disposable PostgreSQL and require both it and the existing `make check` in CI.
+
+## Assumptions
+
+- PostgreSQL is intentionally included despite the earlier database-free Phase 2 recommendation.
+- pgx/v5, plain versioned SQL, an in-repo migration runner, and Docker Compose are the selected tooling.
+- Artifact bodies remain outside PostgreSQL; Phase 2 stores only immutable URIs, digests, commits, and small event payloads.
+- No existing reasoning Protobuf field numbers, manifest formats, or Python APIs change.
+- Each stack branch is reviewable and buildable independently; publication remains a separate explicit action.
