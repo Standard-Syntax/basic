@@ -301,8 +301,9 @@ func (r *anthropicRuntime) sendWithRetry(
 	if attemptLimit == 0 {
 		return nil, 0, &ProviderError{Kind: ProviderErrorResponse}
 	}
-	deadline := time.Now().Add(r.timeout)
-	if expiresAt.Before(deadline) {
+	now := time.Now()
+	deadline := now.Add(r.timeout)
+	if expiresAt.After(now) && expiresAt.Before(deadline) {
 		deadline = expiresAt
 	}
 	providerContext, cancel := context.WithDeadline(ctx, deadline)
@@ -391,9 +392,8 @@ func retryDelay(err error, attempt uint32) time.Duration {
 	const maximumRetryAfter = 30 * time.Second
 	var apiError *anthropic.Error
 	if errors.As(err, &apiError) && apiError.Response != nil {
-		if delay, ok := parseRetryAfter(apiError.Response.Header.Get("Retry-After")); ok &&
-			delay <= maximumRetryAfter {
-			return delay
+		if delay, ok := parseRetryAfter(apiError.Response.Header.Get("Retry-After")); ok {
+			return min(delay, maximumRetryAfter)
 		}
 	}
 	return time.Duration(1<<(attempt-1)) * 250 * time.Millisecond

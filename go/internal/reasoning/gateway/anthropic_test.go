@@ -37,7 +37,7 @@ type sequenceMessageSender struct {
 }
 
 func (s *sequenceMessageSender) Send(
-	context.Context, string, anthropic.MessageNewParams,
+	context.Context, string, *anthropic.MessageNewParams,
 ) (*anthropic.Message, error) {
 	index := int(s.position.Add(1)) - 1
 	var reply *anthropic.Message
@@ -297,6 +297,25 @@ func TestAnthropicImplementationRetriesWithinAllBounds(t *testing.T) {
 			"usage=%+v calls=%d delays=%v",
 			result.Usage, sender.position.Load(), delays,
 		)
+	}
+}
+
+func TestAnthropicImplementationAllowsUnsetExpiry(t *testing.T) {
+	sender := &captureMessageSender{
+		reply: anthropicMessage(t, validImplementationProjection(t)),
+	}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	request.Envelope.ExpiresAt = nil
+	result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil || result.Proposal == nil || sender.calls.Load() != 1 {
+		t.Fatalf("result=%+v calls=%d err=%v", result, sender.calls.Load(), err)
+	}
+}
+
+func TestAnthropicRetryAfterIsCapped(t *testing.T) {
+	err := anthropicAPIError(t, http.StatusTooManyRequests, "120")
+	if delay := retryDelay(err, 1); delay != 30*time.Second {
+		t.Fatalf("retry delay = %s", delay)
 	}
 }
 
