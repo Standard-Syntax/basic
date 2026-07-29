@@ -92,9 +92,9 @@ be added to those directories.
 `go/internal/reasoning/gateway` is a library boundary, not a daemon. Construct
 it with an exact manifest resolver, deterministic fake adapter,
 content-addressed artifact store, invocation repository, and clock, then call
-`Service.ProposeImplementation`. `NewService` applies 1 MiB request/proposal
-defaults; pass one `ByteLimits` value to configure smaller or larger positive
-limits.
+`Service.ProposeImplementation`. `NewService` applies 1 MiB request, proposal,
+and provider-response defaults; pass one `ByteLimits` value to configure
+smaller or larger positive limits.
 
 There is intentionally no production artifact-store implementation in Phase 5.
 The integration tests use an integrity-checking in-memory store while
