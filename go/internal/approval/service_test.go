@@ -16,8 +16,10 @@ import (
 )
 
 type memoryArtifacts struct {
-	mu     sync.Mutex
-	values map[string][]byte
+	mu      sync.Mutex
+	values  map[string][]byte
+	puts    int
+	failPut bool
 }
 
 func newMemoryArtifacts() *memoryArtifacts {
@@ -29,6 +31,11 @@ func (s *memoryArtifacts) Put(
 ) (workflow.ArtifactRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.puts++
+	if s.failPut {
+		s.failPut = false
+		return workflow.ArtifactRef{}, errors.New("injected artifact failure")
+	}
 	sum := sha256.Sum256(body)
 	digest := hex.EncodeToString(sum[:])
 	s.values[digest] = append([]byte(nil), body...)
@@ -48,14 +55,35 @@ func (s *memoryArtifacts) Get(
 }
 
 type workflowRecorder struct {
-	command workflow.TaskCommand
-	calls   int
+	mu            sync.Mutex
+	command       workflow.TaskCommand
+	calls         int
+	seen          map[string]struct{}
+	failOnce      bool
+	ambiguousOnce bool
 }
 
 func (w *workflowRecorder) ExecuteTask(
 	_ context.Context, command workflow.TaskCommand,
 ) (workflow.CommandResult, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.failOnce {
+		w.failOnce = false
+		return workflow.CommandResult{}, errors.New("injected workflow failure")
+	}
+	if w.seen == nil {
+		w.seen = make(map[string]struct{})
+	}
+	if _, ok := w.seen[command.Envelope().CommandID]; ok {
+		return workflow.CommandResult{Replay: true}, nil
+	}
+	w.seen[command.Envelope().CommandID] = struct{}{}
 	w.calls++
+	if w.ambiguousOnce {
+		w.ambiguousOnce = false
+		return workflow.CommandResult{}, errors.New("ambiguous workflow completion")
+	}
 	w.command = command
 	return workflow.CommandResult{Revision: command.Envelope().ExpectedRevision + 1}, nil
 }
@@ -254,5 +282,96 @@ func TestElevatedRiskClassificationIsDeterministic(t *testing.T) {
 		if reasons[index] != want[index] {
 			t.Fatalf("risk reasons=%v", reasons)
 		}
+	}
+}
+
+func TestConcurrentExactApprovalIsOneLogicalDecision(t *testing.T) {
+	service, request, _, workflowPort := approvalFixture(t)
+	const callers = 12
+	results := make(chan Result, callers)
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			result, err := service.ApproveTask(context.Background(), request)
+			results <- result
+			errs <- err
+		}()
+	}
+	var artifact workflow.ArtifactRef
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		result := <-results
+		if artifact.URI == "" {
+			artifact = result.ApprovalArtifact
+		}
+		if !artifact.Equal(result.ApprovalArtifact) {
+			t.Fatalf("concurrent artifacts differ: %v %v", artifact, result.ApprovalArtifact)
+		}
+	}
+	if workflowPort.calls != 1 {
+		t.Fatalf("logical workflow decisions=%d", workflowPort.calls)
+	}
+}
+
+func TestConflictingDecisionReuseFailsClosed(t *testing.T) {
+	service, request, _, workflowPort := approvalFixture(t)
+	if _, err := service.ApproveTask(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RequireTaskRework(
+		t.Context(), request, "different decision",
+	); !errors.Is(err, ErrApprovalConflict) {
+		t.Fatalf("conflicting decision err=%v", err)
+	}
+	if workflowPort.calls != 1 {
+		t.Fatalf("conflict emitted workflow command: %d", workflowPort.calls)
+	}
+}
+
+func TestDecisionReadyRecoveryRetriesOnlyWorkflow(t *testing.T) {
+	service, request, store, workflowPort := approvalFixture(t)
+	workflowPort.failOnce = true
+	if _, err := service.ApproveTask(t.Context(), request); err == nil {
+		t.Fatal("injected workflow failure was hidden")
+	}
+	puts := store.puts
+	result, err := service.ApproveTask(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.puts != puts || result.ApprovalArtifact.URI == "" || workflowPort.calls != 1 {
+		t.Fatalf("recovery repeated pre-transition work: puts=%d/%d calls=%d", store.puts, puts, workflowPort.calls)
+	}
+}
+
+func TestArtifactFailureRollsBackWithoutWorkflow(t *testing.T) {
+	service, request, store, workflowPort := approvalFixture(t)
+	store.failPut = true
+	if _, err := service.ApproveTask(t.Context(), request); err == nil {
+		t.Fatal("artifact failure was hidden")
+	}
+	if workflowPort.calls != 0 {
+		t.Fatal("artifact failure reached workflow")
+	}
+	if _, err := service.ApproveTask(t.Context(), request); err != nil {
+		t.Fatalf("reservation did not roll back: %v", err)
+	}
+}
+
+func TestAmbiguousWorkflowCompletionRecoversByIdempotentReplay(t *testing.T) {
+	service, request, store, workflowPort := approvalFixture(t)
+	workflowPort.ambiguousOnce = true
+	if _, err := service.ApproveTask(t.Context(), request); err == nil {
+		t.Fatal("ambiguous completion was hidden")
+	}
+	puts := store.puts
+	result, err := service.ApproveTask(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Replay || store.puts != puts || workflowPort.calls != 1 {
+		t.Fatalf("recovery result=%#v puts=%d/%d calls=%d", result, store.puts, puts, workflowPort.calls)
 	}
 }

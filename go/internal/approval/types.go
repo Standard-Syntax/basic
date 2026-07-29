@@ -14,6 +14,8 @@ var (
 	ErrUnauthorized      = errors.New("task approval principal is unauthorized")
 	ErrElevatedRole      = errors.New("elevated approval role is required")
 	ErrArtifactIntegrity = errors.New("task approval artifact integrity check failed")
+	ErrApprovalConflict  = errors.New("approval ID already has different content")
+	ErrApprovalState     = errors.New("invalid approval ledger state")
 )
 
 type Role string
@@ -62,6 +64,39 @@ type ArtifactStore interface {
 
 type WorkflowStore interface {
 	ExecuteTask(context.Context, workflow.TaskCommand) (workflow.CommandResult, error)
+}
+
+type ApprovalStart struct {
+	ApprovalID                  string
+	RequestDigest               string
+	RequestedAt                 time.Time
+	PrincipalID                 string
+	RunID                       string
+	TaskID                      string
+	CandidateCommit             string
+	ApprovedSpecificationDigest string
+	ApprovedTaskDigest          string
+	ImplementationDigest        string
+	ExecutionDigest             string
+	VerificationDigest          string
+	ReviewDigest                string
+}
+
+type DecisionCheckpoint struct {
+	Result Result
+	Reason string
+}
+
+type ApprovalHandle interface {
+	Replay() (Result, bool)
+	Decision() (DecisionCheckpoint, bool)
+	SaveDecision(context.Context, DecisionCheckpoint) error
+	Complete(context.Context, Result) error
+	Rollback(context.Context) error
+}
+
+type ApprovalLedger interface {
+	Begin(context.Context, ApprovalStart) (ApprovalHandle, error)
 }
 
 type TaskApproval struct {

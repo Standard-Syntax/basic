@@ -37,13 +37,28 @@ var protectedLabels = map[string]struct{}{
 type Service struct {
 	artifacts ArtifactStore
 	workflow  WorkflowStore
+	ledger    ApprovalLedger
 }
 
-func NewService(artifacts ArtifactStore, workflowStore WorkflowStore) (*Service, error) {
+func NewService(
+	artifacts ArtifactStore,
+	workflowStore WorkflowStore,
+	configuredLedger ...ApprovalLedger,
+) (*Service, error) {
 	if artifacts == nil || workflowStore == nil {
 		return nil, errors.New("approval artifact store and workflow store are required")
 	}
-	return &Service{artifacts: artifacts, workflow: workflowStore}, nil
+	if len(configuredLedger) > 1 {
+		return nil, errors.New("at most one approval ledger is allowed")
+	}
+	var ledger ApprovalLedger = NewMemoryApprovalLedger()
+	if len(configuredLedger) == 1 {
+		ledger = configuredLedger[0]
+	}
+	if ledger == nil {
+		return nil, errors.New("approval ledger is required")
+	}
+	return &Service{artifacts: artifacts, workflow: workflowStore, ledger: ledger}, nil
 }
 
 func (s *Service) ApproveTask(ctx context.Context, request Request) (Result, error) {
@@ -62,6 +77,31 @@ func (s *Service) RequireTaskRework(
 func (s *Service) decide(
 	ctx context.Context, request Request, decision, reason string,
 ) (Result, error) {
+	requestDigest, err := approvalRequestDigest(request, decision, reason)
+	if err != nil {
+		return Result{}, err
+	}
+	handle, err := s.ledger.Begin(ctx, ApprovalStart{
+		ApprovalID: request.ApprovalID, RequestDigest: requestDigest,
+		RequestedAt: request.DecisionTimestamp, PrincipalID: request.Principal.ID,
+		RunID: request.RunID, TaskID: request.TaskID, CandidateCommit: request.CandidateCommit,
+		ApprovedSpecificationDigest: request.ApprovedSpecificationDigest,
+		ApprovedTaskDigest:          request.ApprovedTaskDigest,
+		ImplementationDigest:        request.Implementation.Digest,
+		ExecutionDigest:             request.Execution.Digest,
+		VerificationDigest:          request.Verification.Digest, ReviewDigest: request.Review.Digest,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = handle.Rollback(context.Background()) }()
+	if replay, ok := handle.Replay(); ok {
+		replay.Replay = true
+		return replay, nil
+	}
+	if checkpoint, ok := handle.Decision(); ok {
+		return s.applyCheckpoint(ctx, request, checkpoint, handle)
+	}
 	if err := s.validateRequest(ctx, request); err != nil {
 		return Result{}, err
 	}
@@ -92,15 +132,49 @@ func (s *Service) decide(
 	if err != nil {
 		return Result{}, err
 	}
-	command := approvalCommand(request, decision, reason, artifact)
+	checkpoint := DecisionCheckpoint{Result: Result{
+		ApprovalID: request.ApprovalID, Decision: decision, ApprovalArtifact: artifact,
+		Elevated: elevated, RiskReasons: riskReasons,
+	}, Reason: reason}
+	if err := handle.SaveDecision(ctx, checkpoint); err != nil {
+		return Result{}, fmt.Errorf("checkpoint human task decision: %w", err)
+	}
+	return s.applyCheckpoint(ctx, request, checkpoint, handle)
+}
+
+func (s *Service) applyCheckpoint(
+	ctx context.Context,
+	request Request,
+	checkpoint DecisionCheckpoint,
+	handle ApprovalHandle,
+) (Result, error) {
+	command := approvalCommand(
+		request, checkpoint.Result.Decision, checkpoint.Reason,
+		checkpoint.Result.ApprovalArtifact,
+	)
 	workflowResult, err := s.workflow.ExecuteTask(ctx, command)
 	if err != nil {
 		return Result{}, fmt.Errorf("apply human task decision: %w", err)
 	}
-	return Result{
-		ApprovalID: request.ApprovalID, Decision: decision, ApprovalArtifact: artifact,
-		Elevated: elevated, RiskReasons: riskReasons, Replay: workflowResult.Replay,
-	}, nil
+	result := cloneResult(checkpoint.Result)
+	result.Replay = workflowResult.Replay
+	if err := handle.Complete(ctx, result); err != nil {
+		return Result{}, fmt.Errorf("complete human task decision: %w", err)
+	}
+	return result, nil
+}
+
+func approvalRequestDigest(request Request, decision, reason string) (string, error) {
+	body, err := json.Marshal(struct {
+		Request  Request `json:"request"`
+		Decision string  `json:"decision"`
+		Reason   string  `json:"reason"`
+	}{Request: request, Decision: decision, Reason: reason})
+	if err != nil {
+		return "", fmt.Errorf("encode approval request: %w", err)
+	}
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Service) validateRequest(ctx context.Context, request Request) error {
