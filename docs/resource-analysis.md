@@ -45,9 +45,6 @@ Verification permits at most 16 catalog checks, applies a ten-minute maximum
 to each, runs checks sequentially within a verification, and defaults to two
 concurrent verifications and four workspace slots. Operators must size the
 artifact backend for retained logs and reports.
-The pinned Anthropic SDK increases offline Go compile/vet working data; the
-verification image seeds those caches and the isolated worker limit is
-therefore 2 GiB memory with 1 GiB tmpfs.
 
 Phase 8 adds no worker container or external network load. Review requests and
 proposals retain the 1 MiB gateway defaults. Approval concurrency is serialized
