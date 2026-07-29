@@ -91,8 +91,15 @@ func (c *GitHubRESTClient) CreateDraft(
 		Body: input.Body, Draft: true,
 	}
 	var response githubPullRequest
-	if err := c.do(ctx, http.MethodPost, c.pullPath(input), payload, &response); err != nil {
-		return DraftPullRequest{}, err
+	if createErr := c.do(ctx, http.MethodPost, c.pullPath(input), payload, &response); createErr != nil {
+		recovered, exists, findErr := c.FindDraft(ctx, input)
+		if findErr != nil {
+			return DraftPullRequest{}, errors.Join(createErr, findErr)
+		}
+		if exists {
+			return recovered, nil
+		}
+		return DraftPullRequest{}, createErr
 	}
 	if response.Head.Ref != input.Head || response.Base.Ref != input.Base ||
 		response.State != "open" || !response.Draft ||

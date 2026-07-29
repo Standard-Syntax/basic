@@ -66,6 +66,44 @@ func TestGitHubClientListsBeforeCreatingDraftWithRequiredHeaders(t *testing.T) {
 	}
 }
 
+func TestGitHubClientRecoversExistingDraftAfterCreateConflict(t *testing.T) {
+	input := prInput()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch call := calls.Add(1); call {
+		case 1:
+			if request.Method != http.MethodPost {
+				t.Errorf("first method = %s", request.Method)
+			}
+			http.Error(writer, "pull request already exists", http.StatusUnprocessableEntity)
+		case 2:
+			if request.Method != http.MethodGet {
+				t.Errorf("second method = %s", request.Method)
+			}
+			if request.URL.Query().Get("head") != input.Owner+":"+input.Head ||
+				request.URL.Query().Get("base") != input.Base ||
+				request.URL.Query().Get("state") != "all" {
+				t.Errorf("lookup query = %s", request.URL.RawQuery)
+			}
+			_ = json.NewEncoder(writer).Encode([]githubPullRequest{
+				testPullRequest(input.Head, input.Base, input.Body),
+			})
+		default:
+			t.Errorf("unexpected request %d", call)
+		}
+	}))
+	defer server.Close()
+
+	pr, err := githubClient(t, server.URL, DefaultMaxBodyBytes).
+		CreateDraft(t.Context(), input)
+	if err != nil || pr.Number != 17 || !pr.Draft {
+		t.Fatalf("recovered=%#v err=%v", pr, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d", calls.Load())
+	}
+}
+
 func TestGitHubClientRecoversMatchingDraftAndRejectsMismatches(t *testing.T) {
 	for name, mutate := range map[string]func(*githubPullRequest){
 		"matching": func(*githubPullRequest) {},
