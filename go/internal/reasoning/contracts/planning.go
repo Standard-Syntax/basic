@@ -11,7 +11,9 @@ import (
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 )
 
-var taskIDPattern = regexp.MustCompile(`^TASK-[0-9]{3}$`)
+var taskIDPattern = regexp.MustCompile(
+	`^(TASK-[0-9]{3}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$`,
+)
 var checkIDPattern = regexp.MustCompile(
 	`^(CHECK-[A-Z0-9][A-Z0-9-]*|[a-z][a-z0-9-]*-v[0-9]+)$`,
 )

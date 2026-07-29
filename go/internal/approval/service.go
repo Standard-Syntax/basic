@@ -24,7 +24,6 @@ import (
 var (
 	commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 	digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-	taskPattern   = regexp.MustCompile(`^TASK-[0-9]{3}$`)
 	labelPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 )
 
@@ -204,9 +203,11 @@ func (s *Service) validateRequest(ctx context.Context, request Request) error {
 func validateRequestIdentity(request Request) error {
 	_, approvalIDErr := uuid.Parse(request.ApprovalID)
 	_, principalIDErr := uuid.Parse(request.Principal.ID)
+	_, runIDErr := uuid.Parse(request.RunID)
+	_, taskIDErr := uuid.Parse(request.TaskID)
 	if approvalIDErr != nil || principalIDErr != nil ||
-		request.DecisionTimestamp.IsZero() || request.RunID == "" ||
-		!taskPattern.MatchString(request.TaskID) || !commitPattern.MatchString(request.CandidateCommit) ||
+		runIDErr != nil || taskIDErr != nil || request.DecisionTimestamp.IsZero() ||
+		!commitPattern.MatchString(request.CandidateCommit) ||
 		!digestPattern.MatchString(request.ApprovedSpecificationDigest) ||
 		!digestPattern.MatchString(request.ApprovedTaskDigest) ||
 		request.ExpectedTaskRevision == 0 || len(request.ActualChangedPaths) == 0 {

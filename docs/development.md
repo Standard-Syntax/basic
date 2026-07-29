@@ -148,6 +148,25 @@ The initial catalog entry is `make-check-v1`, which always resolves to
 `go/cmd/verification-service` and `go/cmd/verification-worker` open no
 listeners.
 
+## Trusted review and human approval
+
+Construct `gateway.NewReviewService` with the registered review manifest,
+`FakeReviewAdapter`, content-addressed artifact store, invocation repository,
+and clock. Pass that gateway to `review.NewService` with a review-service actor
+UUID and workflow store. `Review` requires exact Phase 6 and Phase 7 report
+artifacts, the frozen v1 request, kernel resource labels, and expected task
+revision.
+
+Construct `approval.NewService` with the same content-addressed store, workflow
+store, and optionally `PostgresApprovalRepository`. Call `ApproveTask` or
+`RequireTaskRework` with a trusted principal, actual changed paths, exclusive
+resource labels, exact candidate/upstream references, and expected revision.
+There is no listener or authentication middleware in Phase 8.
+
+`make integration-test` applies migrations `0011` and `0012` in disposable
+PostgreSQL and includes the approval repository concurrency, replay, rollback,
+and immutability suite.
+
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed
 fixtures, while Go and Python tests verify cross-language digest equality.

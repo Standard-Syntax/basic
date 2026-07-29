@@ -84,7 +84,22 @@ Completed invocation rows reject update and deletion by database trigger. No
 production filesystem or object-store backend exists; tests use an
 integrity-checking in-memory artifact store.
 
-No HTTP/gRPC execution or verification server, real provider, runtime Python
+Phase 8 extends the same gateway with a deterministic `review` adapter and the
+unchanged `review_proposal.v1` transport. Migration `0011` permits only
+`implementation` and `review` invocation stages. `go/internal/review`
+reconstructs the Phase 6 diff and Phase 7 evidence from content-addressed
+reports, enforces fixed high/critical blocking policy, stores
+`review_report.v1`, and emits only `RecordTaskReview`.
+
+`go/internal/approval` is the distinct authenticated application boundary.
+It classifies elevated paths and exclusive resources, validates every upstream
+digest and candidate binding, stores `task_approval.v1`, and emits an
+`ActorHuman` task command. Migration `0012` persists `reserved`,
+`decision_ready`, and `completed` approval states. Recovery from
+`decision_ready` retries only the deterministic workflow command; immutable
+database fields prevent replacing the human identity, evidence, or decision.
+
+No HTTP/gRPC execution, verification, review, or approval server, real provider, runtime Python
 agent, pull-request operation, branch publication, merge operation, or
 deployment exists. `MERGED` records an already completed, approval-bound
 external fact.

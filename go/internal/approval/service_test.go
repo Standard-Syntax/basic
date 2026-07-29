@@ -103,10 +103,12 @@ func approvalFixture(t *testing.T) (*Service, Request, *memoryArtifacts, *workfl
 	verification := put("verification")
 	reviewRequest := put("review request")
 	reviewProposal := put("review proposal")
+	runID := uuid.NewString()
+	taskID := uuid.NewString()
 	report := review.ReviewReport{
 		SchemaVersion: "1", ReviewID: uuid.NewString(),
 		ReviewedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		RunID:      "run-1", TaskID: "TASK-001", Attempt: 1,
+		RunID:      runID, TaskID: taskID, Attempt: 1,
 		CandidateCommit:              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		ApprovedSpecificationDigest:  repeat('b', 64),
 		ApprovedTaskDigest:           repeat('c', 64),
@@ -131,7 +133,7 @@ func approvalFixture(t *testing.T) (*Service, Request, *memoryArtifacts, *workfl
 	return service, Request{
 		ApprovalID: uuid.NewString(), DecisionTimestamp: time.Now().UTC(),
 		Principal: Principal{ID: uuid.NewString(), Roles: []Role{RoleApprover}},
-		RunID:     "run-1", TaskID: "TASK-001",
+		RunID:     runID, TaskID: taskID,
 		CandidateCommit:             report.CandidateCommit,
 		ApprovedSpecificationDigest: report.ApprovedSpecificationDigest,
 		ApprovedTaskDigest:          report.ApprovedTaskDigest,
@@ -373,5 +375,49 @@ func TestAmbiguousWorkflowCompletionRecoversByIdempotentReplay(t *testing.T) {
 	}
 	if !result.Replay || store.puts != puts || workflowPort.calls != 1 {
 		t.Fatalf("recovery result=%#v puts=%d/%d calls=%d", result, store.puts, puts, workflowPort.calls)
+	}
+}
+
+func TestPhase5Through8HumanApprovalBoundary(t *testing.T) {
+	service, request, _, workflowPort := approvalFixture(t)
+	result, err := service.ApproveTask(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := workflowPort.command.(workflow.ApproveTask)
+	now := request.DecisionTimestamp.Add(-time.Minute)
+	task := workflow.Task{
+		ID: request.TaskID, RunID: request.RunID,
+		State: workflow.TaskStateAwaitingApproval, Revision: request.ExpectedTaskRevision,
+		MaxAttempts: 1, CurrentAttempt: 1,
+		Proposal: &request.Implementation, Execution: &request.Execution,
+		Verification: &request.Verification, Review: &request.Review,
+		CandidateCommit: request.CandidateCommit, CreatedAt: now, UpdatedAt: now,
+	}
+	accepted, events, err := task.Apply(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.State != workflow.TaskStateAccepted || accepted.Approval == nil ||
+		!accepted.Approval.Equal(result.ApprovalArtifact) ||
+		len(events) != 1 || events[0].Type != "TASK_ACCEPTED" {
+		t.Fatalf("accepted=%#v events=%#v", accepted, events)
+	}
+}
+
+func TestCandidateOrReviewDigestMismatchCannotTransition(t *testing.T) {
+	service, request, _, workflowPort := approvalFixture(t)
+	request.CandidateCommit = repeat('9', 40)
+	if _, err := service.ApproveTask(t.Context(), request); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("candidate mismatch err=%v", err)
+	}
+	request.CandidateCommit = repeat('a', 40)
+	request.Review.Digest = repeat('8', 64)
+	request.Review.URI = "artifact://sha256/" + request.Review.Digest
+	if _, err := service.ApproveTask(t.Context(), request); err == nil {
+		t.Fatal("altered review digest was accepted")
+	}
+	if workflowPort.calls != 0 {
+		t.Fatal("mismatched evidence reached workflow")
 	}
 }

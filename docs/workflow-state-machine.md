@@ -56,6 +56,18 @@ are exact bindings. Passing complete coverage moves `VERIFYING` to
 `REVIEWING`; any failed or uncovered criterion records failed evidence and
 moves the task to `REWORK_REQUIRED`.
 
+`RecordTaskReview` is emitted only by the trusted review-service actor.
+`REWORK_REQUIRED` recommendations and `HIGH` or `CRITICAL` findings record the
+review and move directly to `REWORK_REQUIRED`; advisory acceptance records the
+review and stops at `AWAITING_APPROVAL`.
+
+Only the approval application may translate an authenticated principal with an
+`approver` role into `ActorHuman`. Elevated work additionally requires
+`elevated_approver`. `ApproveTask` binds the exact candidate, trusted review,
+and immutable approval artifact before reaching `ACCEPTED`;
+`RequireTaskRework` binds the same candidate and review. A reviewer
+recommendation never satisfies either human command.
+
 Task-graph approval validates uniqueness, references, attempt limits, and
 acyclicity, then atomically creates snapshots, dependency edges, creation or
 readiness events, and the run transition. Models and Python have no authority.

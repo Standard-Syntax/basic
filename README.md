@@ -17,10 +17,10 @@ The installed Python SDK compiles offline definitions for all four reasoning
 stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
 reader independently enforces the same v1 stage/output and safety policy.
 
-The in-process Go reasoning gateway now executes only the implementation stage
-through a deterministic fake adapter. It resolves the exact registered
-manifest digest, validates proposals into five stable rejection codes, stores
-payloads through a content-addressed artifact interface, and records immutable
+The in-process Go reasoning gateway executes implementation and review stages
+through deterministic fake adapters. It resolves exact registered manifest
+digests, validates proposals into five stable rejection codes, stores payloads
+through a content-addressed artifact interface, and records immutable
 PostgreSQL invocation metadata. It starts no listener and calls no model.
 
 The Go execution library revalidates accepted proposals, fences them to the
@@ -32,6 +32,11 @@ The in-process verification library validates the execution report and exact
 candidate binding, resolves `make-check-v1` from an immutable Go catalog, runs
 `make check` offline in a separate locked-down image, and records a
 content-addressed verification report through a recoverable immutable ledger.
+
+The trusted review library reconstructs that diff and evidence, records
+blocking rework or advisory acceptance, and never approves work. The separate
+human approval library enforces standard/elevated roles, writes an immutable
+approval artifact, and alone may move a reviewed task to `ACCEPTED`.
 
 ## Quick start
 

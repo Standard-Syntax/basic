@@ -28,6 +28,14 @@ from the request. It consumes exactly one provider-request budget unit and
 executes no command, repository mutation, network call, or workflow transition.
 Request and proposal transports retain their published v1 Protobuf shape.
 
+Phase 8 applies the same deterministic byte limits, artifact integrity,
+provider accounting, typed rejection, immutable replay, and conflict behavior
+to `ReviewRequest` and `ReviewProposal`. The registered manifest must be stage
+`review` with output `review_proposal.v1`. Proposal identity is derived from
+the request; neither the fake adapter nor a recommendation carries approval
+authority. The trusted review service separately fixes `HIGH` and `CRITICAL`
+as blocking and requires unexpected changed paths to be reported.
+
 ## Compatibility
 
 The package and schema major version are `v1`. Published field numbers and enum
