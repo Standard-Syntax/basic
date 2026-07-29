@@ -28,11 +28,11 @@ type captureMessageSender struct {
 }
 
 func (s *captureMessageSender) Send(
-	_ context.Context, key string, params anthropic.MessageNewParams,
+	_ context.Context, key string, params *anthropic.MessageNewParams,
 ) (*anthropic.Message, error) {
 	s.calls.Add(1)
 	s.key = key
-	s.params = params
+	s.params = *params
 	return s.reply, s.err
 }
 
@@ -141,6 +141,14 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertImplementationResult(t, result, sender)
+	assertImplementationRequest(t, sender.params, request, result.Proposal)
+}
+
+func assertImplementationResult(
+	t *testing.T, result AdapterResult, sender *captureMessageSender,
+) {
+	t.Helper()
 	if result.Proposal == nil || result.MalformedOutput != nil ||
 		result.Provider != AnthropicProvider || result.ProviderRequestID != "msg_123" ||
 		result.Usage.InputTokens != 15 || result.Usage.OutputTokens != 7 ||
@@ -152,11 +160,20 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 		sender.params.Model != anthropic.Model("claude-test") {
 		t.Fatalf("unexpected Messages request: %+v", sender.params)
 	}
-	schema := sender.params.OutputConfig.Format.Schema
+}
+
+func assertImplementationRequest(
+	t *testing.T,
+	params anthropic.MessageNewParams,
+	request *reasoningv1.ImplementationRequest,
+	proposal *reasoningv1.ImplementationProposal,
+) {
+	t.Helper()
+	schema := params.OutputConfig.Format.Schema
 	if schema["additionalProperties"] != false {
 		t.Fatalf("root schema is not closed: %+v", schema)
 	}
-	user := sender.params.Messages[0].Content[0].OfText.Text
+	user := params.Messages[0].Content[0].OfText.Text
 	var rendered implementationContext
 	if err := json.Unmarshal([]byte(user), &rendered); err != nil {
 		t.Fatal(err)
@@ -165,8 +182,8 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 		rendered.RepositoryContext[0].Content != request.GetRepositoryContext()[0].GetContent() {
 		t.Fatalf("inline repository content was duplicated: %+v", rendered)
 	}
-	if result.Proposal.GetIdentity().GetRequestId() != request.GetEnvelope().GetRequestId() ||
-		result.Proposal.GetApprovedTaskDigest() != request.GetApprovedTaskDigest() {
+	if proposal.GetIdentity().GetRequestId() != request.GetEnvelope().GetRequestId() ||
+		proposal.GetApprovedTaskDigest() != request.GetApprovedTaskDigest() {
 		t.Fatal("trusted proposal identity was not injected")
 	}
 }

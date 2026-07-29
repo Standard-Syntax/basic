@@ -62,7 +62,7 @@ func (m StaticCapabilityModels) ResolveModel(
 
 type MessageSender interface {
 	Send(
-		context.Context, string, anthropic.MessageNewParams,
+		context.Context, string, *anthropic.MessageNewParams,
 	) (*anthropic.Message, error)
 }
 
@@ -132,7 +132,7 @@ type sdkMessageSender struct {
 }
 
 func (s *sdkMessageSender) Send(
-	ctx context.Context, key string, params anthropic.MessageNewParams,
+	ctx context.Context, key string, params *anthropic.MessageNewParams,
 ) (*anthropic.Message, error) {
 	options := []option.RequestOption{
 		option.WithAPIKey(key),
@@ -146,7 +146,7 @@ func (s *sdkMessageSender) Send(
 		options = append(options, option.WithBaseURL(s.baseURL))
 	}
 	client := anthropic.NewClient(options...)
-	return client.Messages.New(ctx, params)
+	return client.Messages.New(ctx, *params)
 }
 
 type AnthropicImplementationAdapter struct {
@@ -203,7 +203,7 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 			},
 		},
 	}
-	message, err := a.runtime.sender.Send(ctx, key, params)
+	message, err := a.runtime.sender.Send(ctx, key, &params)
 	clearString(&key)
 	if err != nil {
 		return AdapterResult{}, err
