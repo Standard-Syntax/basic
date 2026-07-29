@@ -142,7 +142,7 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertImplementationResult(t, result, sender)
-	assertImplementationRequest(t, sender.params, request, result.Proposal)
+	assertImplementationRequest(t, &sender.params, request, result.Proposal)
 }
 
 func assertImplementationResult(
@@ -164,7 +164,7 @@ func assertImplementationResult(
 
 func assertImplementationRequest(
 	t *testing.T,
-	params anthropic.MessageNewParams,
+	params *anthropic.MessageNewParams,
 	request *reasoningv1.ImplementationRequest,
 	proposal *reasoningv1.ImplementationProposal,
 ) {
