@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type credentialSourceFunc func(context.Context) (string, error)
@@ -25,6 +28,44 @@ type captureMessageSender struct {
 	reply  *anthropic.Message
 	err    error
 	calls  atomic.Int32
+}
+
+type sequenceMessageSender struct {
+	replies  []*anthropic.Message
+	errors   []error
+	position atomic.Int32
+}
+
+func (s *sequenceMessageSender) Send(
+	context.Context, string, anthropic.MessageNewParams,
+) (*anthropic.Message, error) {
+	index := int(s.position.Add(1)) - 1
+	var reply *anthropic.Message
+	var err error
+	if index < len(s.replies) {
+		reply = s.replies[index]
+	}
+	if index < len(s.errors) {
+		err = s.errors[index]
+	}
+	return reply, err
+}
+
+func anthropicAPIError(t *testing.T, status int, retryAfter string) error {
+	t.Helper()
+	var apiError anthropic.Error
+	if err := json.Unmarshal(
+		[]byte(`{"error":{"type":"rate_limit_error"}}`), &apiError,
+	); err != nil {
+		t.Fatal(err)
+	}
+	apiError.StatusCode = status
+	apiError.RequestID = "req_error"
+	apiError.Response = &http.Response{StatusCode: status, Header: make(http.Header)}
+	if retryAfter != "" {
+		apiError.Response.Header.Set("Retry-After", retryAfter)
+	}
+	return &apiError
 }
 
 func (s *captureMessageSender) Send(
@@ -106,6 +147,7 @@ func anthropicImplementationFixture(
 	agentManifest.Prompt.ArtifactURI = prompt.URI
 	agentManifest.Prompt.SHA256 = prompt.SHA256
 	request := gatewayRequest(t)
+	request.Envelope.ExpiresAt = timestamppb.New(time.Now().Add(time.Hour))
 	request.Envelope.Budget.MaximumInputTokens = 100_000
 	request.Envelope.InputArtifacts = nil
 	for _, file := range request.GetRepositoryContext() {
@@ -224,5 +266,92 @@ func TestAnthropicImplementationGuardsCredentialsAndContentSecrets(t *testing.T)
 	if !errors.Is(err, ErrCredentialUnavailable) ||
 		strings.Contains(err.Error(), "test-credential") {
 		t.Fatalf("credential leaked through error: %v", err)
+	}
+}
+
+func TestAnthropicImplementationRetriesWithinAllBounds(t *testing.T) {
+	sender := &sequenceMessageSender{
+		replies: []*anthropic.Message{
+			nil, nil, anthropicMessage(t, validImplementationProjection(t)),
+		},
+		errors: []error{
+			anthropicAPIError(t, http.StatusTooManyRequests, "0"),
+			anthropicAPIError(t, http.StatusInternalServerError, ""),
+			nil,
+		},
+	}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	request.Envelope.Budget.MaximumProviderRequests = 3
+	var delays []time.Duration
+	adapter.runtime.sleep = func(_ context.Context, delay time.Duration) error {
+		delays = append(delays, delay)
+		return nil
+	}
+	result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage.ProviderRequests != 3 || sender.position.Load() != 3 ||
+		len(delays) != 2 || delays[0] != 0 || delays[1] != 500*time.Millisecond {
+		t.Fatalf(
+			"usage=%+v calls=%d delays=%v",
+			result.Usage, sender.position.Load(), delays,
+		)
+	}
+}
+
+func TestAnthropicImplementationClassifiesProviderFailuresWithoutLeaks(t *testing.T) {
+	sender := &sequenceMessageSender{
+		errors: []error{anthropicAPIError(t, http.StatusUnauthorized, "")},
+	}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	_, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	var providerError *ProviderError
+	if !errors.As(err, &providerError) ||
+		providerError.Kind != ProviderErrorAuthentication ||
+		providerError.Attempts != 1 || strings.Contains(err.Error(), "test-credential") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestAnthropicImplementationRefusalAndUsageBudgetAreNotAccepted(t *testing.T) {
+	t.Run("refusal", func(t *testing.T) {
+		message := anthropicMessage(t, validImplementationProjection(t))
+		message.StopReason = anthropic.StopReasonRefusal
+		sender := &captureMessageSender{reply: message}
+		adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+		_, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+		var providerError *ProviderError
+		if !errors.As(err, &providerError) ||
+			providerError.Kind != ProviderErrorRefusal {
+			t.Fatalf("err=%v", err)
+		}
+	})
+	t.Run("usage", func(t *testing.T) {
+		message := anthropicMessage(t, validImplementationProjection(t))
+		message.Usage.InputTokens = 100_001
+		sender := &captureMessageSender{reply: message}
+		adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+		result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+		if err != nil || result.MalformedOutput == nil || result.Proposal != nil {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+	})
+}
+
+func TestAnthropicImplementationHonorsCallerCancellation(t *testing.T) {
+	sender := &sequenceMessageSender{
+		errors: []error{anthropicAPIError(t, http.StatusInternalServerError, "")},
+	}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	adapter.runtime.sleep = func(ctx context.Context, _ time.Duration) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := adapter.ProposeImplementation(ctx, agentManifest, request)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
 	}
 }

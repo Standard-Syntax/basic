@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,9 +24,10 @@ import (
 )
 
 const (
-	AnthropicProvider      = "anthropic"
-	defaultProviderTimeout = 5 * time.Minute
-	estimatedBytesPerToken = 4
+	AnthropicProvider       = "anthropic"
+	defaultProviderTimeout  = 5 * time.Minute
+	estimatedBytesPerToken  = 4
+	maximumProviderAttempts = 3
 )
 
 var (
@@ -35,6 +38,35 @@ var (
 		`(?i)(api[_-]?key|authorization|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*\S+`,
 	)
 )
+
+type ProviderErrorKind string
+
+const (
+	ProviderErrorAuthentication ProviderErrorKind = "authentication"
+	ProviderErrorPermission     ProviderErrorKind = "permission"
+	ProviderErrorBilling        ProviderErrorKind = "billing"
+	ProviderErrorTimeout        ProviderErrorKind = "timeout"
+	ProviderErrorRateLimit      ProviderErrorKind = "rate_limit"
+	ProviderErrorRefusal        ProviderErrorKind = "refusal"
+	ProviderErrorTransport      ProviderErrorKind = "transport"
+	ProviderErrorResponse       ProviderErrorKind = "provider"
+)
+
+// ProviderError deliberately excludes response bodies, request headers, URLs,
+// and credentials.
+type ProviderError struct {
+	Kind       ProviderErrorKind
+	StatusCode int
+	RequestID  string
+	Attempts   uint32
+}
+
+func (e *ProviderError) Error() string {
+	if e == nil {
+		return "Anthropic provider error"
+	}
+	return fmt.Sprintf("Anthropic %s error after %d attempt(s)", e.Kind, e.Attempts)
+}
 
 // CredentialSource returns a credential for one invocation. Implementations
 // must not cache or log returned values.
@@ -80,6 +112,12 @@ func WithAnthropicBaseURL(baseURL string) AnthropicOption {
 	}
 }
 
+func WithAnthropicTimeout(timeout time.Duration) AnthropicOption {
+	return func(runtime *anthropicRuntime) {
+		runtime.timeout = timeout
+	}
+}
+
 func withAnthropicMessageSender(sender MessageSender) AnthropicOption {
 	return func(runtime *anthropicRuntime) {
 		runtime.sender = sender
@@ -94,6 +132,7 @@ type anthropicRuntime struct {
 	baseURL     string
 	sender      MessageSender
 	timeout     time.Duration
+	sleep       func(context.Context, time.Duration) error
 }
 
 func newAnthropicRuntime(
@@ -109,12 +148,15 @@ func newAnthropicRuntime(
 	}
 	runtime := &anthropicRuntime{
 		credentials: credentials, models: models, artifacts: artifacts,
-		timeout: defaultProviderTimeout,
+		timeout: defaultProviderTimeout, sleep: sleepContext,
 	}
 	for _, apply := range options {
 		if apply != nil {
 			apply(runtime)
 		}
+	}
+	if runtime.timeout <= 0 {
+		return nil, errors.New("positive Anthropic provider timeout is required")
 	}
 	if runtime.sender == nil {
 		runtime.sender = &sdkMessageSender{
@@ -180,6 +222,7 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 	if err != nil {
 		return AdapterResult{}, err
 	}
+	defer clearString(&key)
 	system, user, err := a.runtime.renderImplementation(
 		ctx, key, agentManifest, request,
 	)
@@ -203,10 +246,18 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 			},
 		},
 	}
-	message, err := a.runtime.sender.Send(ctx, key, &params)
-	clearString(&key)
+	message, attempts, err := a.runtime.sendWithRetry(
+		ctx, key, &params,
+		request.GetEnvelope().GetBudget().GetMaximumProviderRequests(),
+		request.GetEnvelope().GetExpiresAt().AsTime(),
+	)
 	if err != nil {
 		return AdapterResult{}, err
+	}
+	if message.StopReason == anthropic.StopReasonRefusal {
+		return AdapterResult{}, &ProviderError{
+			Kind: ProviderErrorRefusal, RequestID: message.ID, Attempts: attempts,
+		}
 	}
 	response := []byte(message.RawJSON())
 	result := AdapterResult{
@@ -219,8 +270,16 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 					message.Usage.CacheReadInputTokens,
 			)),
 			OutputTokens:     uint64(maxInt64(0, message.Usage.OutputTokens)),
-			ProviderRequests: 1,
+			ProviderRequests: attempts,
 		},
+	}
+	budget := request.GetEnvelope().GetBudget()
+	if result.Usage.InputTokens > budget.GetMaximumInputTokens() ||
+		result.Usage.OutputTokens > budget.GetMaximumOutputTokens() {
+		result.MalformedOutput = &MalformedOutput{
+			Message: "provider token usage exceeds the trusted request budget",
+		}
+		return result, nil
 	}
 	projection, malformed := decodeImplementationMessage(message)
 	if malformed != nil {
@@ -229,6 +288,141 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 	}
 	result.Proposal = implementationProposalFromProjection(projection, request)
 	return result, nil
+}
+
+func (r *anthropicRuntime) sendWithRetry(
+	ctx context.Context,
+	key string,
+	params *anthropic.MessageNewParams,
+	maximumRequests uint32,
+	expiresAt time.Time,
+) (*anthropic.Message, uint32, error) {
+	attemptLimit := min(maximumRequests, uint32(maximumProviderAttempts))
+	if attemptLimit == 0 {
+		return nil, 0, &ProviderError{Kind: ProviderErrorResponse}
+	}
+	deadline := time.Now().Add(r.timeout)
+	if expiresAt.Before(deadline) {
+		deadline = expiresAt
+	}
+	providerContext, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	var lastErr error
+	for attempt := uint32(1); attempt <= attemptLimit; attempt++ {
+		message, err := r.sender.Send(providerContext, key, params)
+		if err == nil {
+			return message, attempt, nil
+		}
+		lastErr = err
+		if providerContext.Err() != nil {
+			if ctx.Err() != nil {
+				return nil, attempt, ctx.Err()
+			}
+			return nil, attempt, &ProviderError{
+				Kind: ProviderErrorTimeout, Attempts: attempt,
+			}
+		}
+		if !retryableProviderError(err) || attempt == attemptLimit {
+			return nil, attempt, classifyProviderError(err, attempt)
+		}
+		delay := retryDelay(err, attempt)
+		if time.Now().Add(delay).After(deadline) {
+			return nil, attempt, &ProviderError{
+				Kind: ProviderErrorTimeout, Attempts: attempt,
+			}
+		}
+		if err := r.sleep(providerContext, delay); err != nil {
+			if ctx.Err() != nil {
+				return nil, attempt, ctx.Err()
+			}
+			return nil, attempt, &ProviderError{
+				Kind: ProviderErrorTimeout, Attempts: attempt,
+			}
+		}
+	}
+	return nil, attemptLimit, classifyProviderError(lastErr, attemptLimit)
+}
+
+func retryableProviderError(err error) bool {
+	var apiError *anthropic.Error
+	if errors.As(err, &apiError) {
+		status := apiError.StatusCode
+		return status == http.StatusRequestTimeout ||
+			status == http.StatusConflict ||
+			status == http.StatusTooManyRequests ||
+			status >= http.StatusInternalServerError
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError)
+}
+
+func classifyProviderError(err error, attempts uint32) error {
+	classified := &ProviderError{Kind: ProviderErrorTransport, Attempts: attempts}
+	var apiError *anthropic.Error
+	if !errors.As(err, &apiError) {
+		if errors.Is(err, context.DeadlineExceeded) {
+			classified.Kind = ProviderErrorTimeout
+		}
+		return classified
+	}
+	classified.StatusCode = apiError.StatusCode
+	classified.RequestID = apiError.RequestID
+	switch apiError.StatusCode {
+	case http.StatusUnauthorized:
+		classified.Kind = ProviderErrorAuthentication
+	case http.StatusForbidden:
+		classified.Kind = ProviderErrorPermission
+	case http.StatusPaymentRequired:
+		classified.Kind = ProviderErrorBilling
+	case http.StatusRequestTimeout:
+		classified.Kind = ProviderErrorTimeout
+	case http.StatusTooManyRequests:
+		classified.Kind = ProviderErrorRateLimit
+	default:
+		classified.Kind = ProviderErrorResponse
+		if strings.Contains(strings.ToLower(string(apiError.Type())), "billing") {
+			classified.Kind = ProviderErrorBilling
+		}
+	}
+	return classified
+}
+
+func retryDelay(err error, attempt uint32) time.Duration {
+	const maximumRetryAfter = 30 * time.Second
+	var apiError *anthropic.Error
+	if errors.As(err, &apiError) && apiError.Response != nil {
+		if delay, ok := parseRetryAfter(apiError.Response.Header.Get("Retry-After")); ok &&
+			delay <= maximumRetryAfter {
+			return delay
+		}
+	}
+	return time.Duration(1<<(attempt-1)) * 250 * time.Millisecond
+}
+
+func parseRetryAfter(value string) (time.Duration, bool) {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second, true
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := time.Until(when)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *anthropicRuntime) invocationConfiguration(
