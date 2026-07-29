@@ -28,6 +28,29 @@ func (m memoryArtifacts) Get(_ context.Context, reference workflow.ArtifactRef) 
 	return append([]byte(nil), value...), nil
 }
 
+func (m memoryArtifacts) Put(_ context.Context, body []byte) (workflow.ArtifactRef, error) {
+	digest := sha256Hex(body)
+	m[digest] = append([]byte(nil), body...)
+	return workflow.ArtifactRef{
+		URI: "artifact://sha256/" + digest, Digest: digest,
+	}, nil
+}
+
+type fakeWorkflow struct {
+	commands []workflow.TaskCommand
+	failLast error
+}
+
+func (f *fakeWorkflow) ExecuteTask(
+	_ context.Context, command workflow.TaskCommand,
+) (workflow.CommandResult, error) {
+	f.commands = append(f.commands, command)
+	if _, final := command.(workflow.RecordTaskExecution); final && f.failLast != nil {
+		return workflow.CommandResult{}, f.failLast
+	}
+	return workflow.CommandResult{Revision: command.Envelope().ExpectedRevision + 1}, nil
+}
+
 type localApplicator struct {
 	calls int
 }
@@ -75,6 +98,11 @@ func executionFixture(
 		t.Fatal(err)
 	}
 	if err := proto.Unmarshal(proposalBody, &proposal); err != nil {
+		t.Fatal(err)
+	}
+	proposal.Changes[2].ExpectedOriginalSha256 = sha256Hex([]byte("package reasoning\n"))
+	proposalBody, err = proto.MarshalOptions{Deterministic: true}.Marshal(&proposal)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return &request, &proposal, proposalBody
@@ -139,10 +167,13 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 	digest := hex.EncodeToString(sum[:])
 	artifact := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
 	applicator := &localApplicator{}
+	workflowStore := &fakeWorkflow{}
 	service, err := NewService(Config{
 		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
 		UID: os.Getuid(), GID: os.Getgid(), Limits: DefaultLimits(),
-	}, memoryArtifacts{digest: proposalBody}, applicator)
+		ActorID: uuid.NewString(), AuthorName: "Harness Execution",
+		AuthorEmail: "execution@harness.invalid",
+	}, memoryArtifacts{digest: proposalBody}, applicator, workflowStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,32 +183,32 @@ func TestServiceRevalidatesMaterializesAndAppliesProposal(t *testing.T) {
 		ExpiresAt:    service.now().Add(time.Hour),
 		FencingToken: request.GetEnvelope().GetAttempt(),
 	}
-	result, err := service.Execute(t.Context(), Request{
-		ExecutionID: uuid.NewString(), Implementation: request, Proposal: proposal,
+	executionRequest := Request{
+		ExecutionID: uuid.NewString(), ExecutionTimestamp: service.now(),
+		Implementation: request, Proposal: proposal,
 		ProposalArtifact: artifact, Lease: lease, ExpectedTaskRevision: 3,
-	})
+	}
+	result, err := service.Execute(t.Context(), executionRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = removeWorktree(context.Background(), repository, result.Worktree)
-	})
-	if applicator.calls != 1 || result.BaseCommit != commit {
+	if applicator.calls != 1 || result.BaseCommit != commit ||
+		len(workflowStore.commands) != 2 || result.CandidateCommit == "" {
 		t.Fatalf("unexpected result: %#v calls=%d", result, applicator.calls)
 	}
-	for _, change := range result.Proposal.Changes {
-		target := filepath.Join(result.Worktree, filepath.FromSlash(change.Path))
-		body, readErr := os.ReadFile(target)
-		switch change.Operation {
-		case contracts.FileDelete:
-			if !errors.Is(readErr, os.ErrNotExist) {
-				t.Fatalf("deleted path %q remains: %v", change.Path, readErr)
-			}
-		default:
-			if readErr != nil || string(body) != *change.ReplacementContent {
-				t.Fatalf("replacement %q mismatch: %q %v", change.Path, body, readErr)
-			}
-		}
+	if len(result.ActualDiff) != len(proposal.GetChanges()) {
+		t.Fatalf("actual diff = %#v", result.ActualDiff)
+	}
+	if resolved := runGit(t, repository, "rev-parse", result.CandidateRef); resolved != result.CandidateCommit {
+		t.Fatalf("candidate ref = %s, want %s", resolved, result.CandidateCommit)
+	}
+	repeated, err := service.Execute(t.Context(), executionRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.CandidateCommit != result.CandidateCommit ||
+		!repeated.ReportArtifact.Equal(result.ReportArtifact) {
+		t.Fatalf("execution was not deterministic: %#v %#v", result, repeated)
 	}
 	if status := runGit(t, repository, "status", "--short"); status != "" {
 		t.Fatalf("source checkout changed: %s", status)
@@ -192,10 +223,12 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 	digest := hex.EncodeToString(sum[:])
 	artifact := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
 	applicator := &localApplicator{}
+	workflowStore := &fakeWorkflow{}
 	service, err := NewService(Config{
 		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
-		Limits: DefaultLimits(),
-	}, memoryArtifacts{digest: []byte("corrupt")}, applicator)
+		Limits: DefaultLimits(), ActorID: uuid.NewString(),
+		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
+	}, memoryArtifacts{digest: []byte("corrupt")}, applicator, workflowStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +239,8 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 		FencingToken: request.GetEnvelope().GetAttempt(),
 	}
 	_, err = service.Execute(t.Context(), Request{
-		ExecutionID: uuid.NewString(), Implementation: request, Proposal: proposal,
+		ExecutionID: uuid.NewString(), ExecutionTimestamp: service.now(),
+		Implementation: request, Proposal: proposal,
 		ProposalArtifact: artifact, Lease: lease, ExpectedTaskRevision: 3,
 	})
 	if !errors.Is(err, ErrArtifactIntegrity) || applicator.calls != 0 {
@@ -222,5 +256,42 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 	}
 	if err := preflightChanges(unsafe, DefaultLimits()); !errors.Is(err, ErrUnsafePath) {
 		t.Fatalf("unsafe changes error = %v", err)
+	}
+}
+
+func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
+	request, proposal, proposalBody := executionFixture(t)
+	repository, worktrees, commit := fixtureRepository(t, request)
+	request.BaseCommit = commit
+	digest := sha256Hex(proposalBody)
+	artifact := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
+	now := request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)
+	lease := workflow.LeaseRef{
+		ID: uuid.NewString(), OwnerID: uuid.NewString(),
+		ExpiresAt: now.Add(time.Hour), FencingToken: request.GetEnvelope().GetAttempt(),
+	}
+	workflowStore := &fakeWorkflow{failLast: workflow.ErrRevisionConflict}
+	service, err := NewService(Config{
+		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
+		Limits: DefaultLimits(), ActorID: uuid.NewString(),
+		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
+	}, memoryArtifacts{digest: proposalBody}, &localApplicator{}, workflowStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	_, err = service.Execute(t.Context(), Request{
+		ExecutionID: uuid.NewString(), ExecutionTimestamp: now,
+		Implementation: request, Proposal: proposal, ProposalArtifact: artifact,
+		Lease: lease, ExpectedTaskRevision: 3,
+	})
+	if !errors.Is(err, workflow.ErrRevisionConflict) {
+		t.Fatalf("final workflow error = %v", err)
+	}
+	ref := "refs/harness/candidates/" + request.GetEnvelope().GetRunId() + "/" +
+		request.GetApprovedTaskId() + "/1-1"
+	command := exec.Command("git", "-C", repository, "show-ref", "--verify", "--quiet", ref)
+	if command.Run() == nil {
+		t.Fatalf("stale candidate ref %q remains", ref)
 	}
 }

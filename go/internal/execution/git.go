@@ -122,6 +122,7 @@ func removeWorktree(ctx context.Context, repository, worktree string) error {
 
 func gitOutput(ctx context.Context, repository string, arguments ...string) ([]byte, error) {
 	base := []string{
+		"--literal-pathspecs",
 		"-c", "core.hooksPath=/dev/null",
 		"-c", "diff.external=",
 		"-c", "core.attributesFile=/dev/null",

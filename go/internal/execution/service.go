@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
+	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
@@ -22,12 +23,15 @@ type Service struct {
 	config     Config
 	artifacts  ArtifactStore
 	applicator Applicator
+	workflow   WorkflowStore
 	now        func() time.Time
 }
 
-func NewService(config Config, artifacts ArtifactStore, applicator Applicator) (*Service, error) {
-	if artifacts == nil || applicator == nil {
-		return nil, errors.New("artifact store and applicator are required")
+func NewService(
+	config Config, artifacts ArtifactStore, applicator Applicator, workflowStore WorkflowStore,
+) (*Service, error) {
+	if artifacts == nil || applicator == nil || workflowStore == nil {
+		return nil, errors.New("artifact store, applicator, and workflow store are required")
 	}
 	if config.RepositoryRoot == "" || config.WorktreeRoot == "" || config.WorkerImage == "" {
 		return nil, errors.New("repository, worktree root, and worker image are required")
@@ -43,45 +47,45 @@ func NewService(config Config, artifacts ArtifactStore, applicator Applicator) (
 	if err := validateLimits(config.Limits); err != nil {
 		return nil, err
 	}
+	if _, err := uuid.Parse(config.ActorID); err != nil ||
+		strings.TrimSpace(config.AuthorName) == "" || strings.TrimSpace(config.AuthorEmail) == "" {
+		return nil, errors.New("execution actor and author metadata are required")
+	}
 	return &Service{
-		config: config, artifacts: artifacts, applicator: applicator, now: time.Now,
+		config: config, artifacts: artifacts, applicator: applicator,
+		workflow: workflowStore, now: time.Now,
 	}, nil
 }
 
 func (s *Service) Execute(ctx context.Context, request Request) (Result, error) {
-	if err := validateExecutionIdentity(request); err != nil {
-		return Result{}, err
-	}
-	mappedRequest, err := contracts.MapImplementationRequestAt(request.Implementation, s.now().UTC())
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: implementation request: %v", ErrInvalidRequest, err)
-	}
-	if mappedRequest.ApprovedTaskID != request.Implementation.GetEnvelope().GetTaskId() ||
-		mappedRequest.Envelope.Attempt != request.Lease.FencingToken {
-		return Result{}, fmt.Errorf("%w: task lease binding", ErrInvalidRequest)
-	}
-	if err := s.verifyProposalArtifact(ctx, request); err != nil {
-		return Result{}, err
-	}
-	mappedProposal, err := contracts.MapImplementationProposal(request.Proposal, mappedRequest)
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: implementation proposal: %v", ErrInvalidRequest, err)
-	}
-	if err := preflightChanges(mappedProposal.Changes, s.config.Limits); err != nil {
-		return Result{}, err
-	}
-	worktree, err := createWorktree(ctx, s.config, request.ExecutionID, mappedRequest.BaseCommit)
+	mappedRequest, mappedProposal, err := s.validateRequest(ctx, request)
 	if err != nil {
 		return Result{}, err
 	}
-	keep := false
+	worktree, err := createWorktree(
+		ctx, s.config, request.ExecutionID, mappedRequest.BaseCommit,
+	)
+	if err != nil {
+		return Result{}, err
+	}
 	defer func() {
-		if !keep {
-			_ = removeWorktree(context.Background(), s.config.RepositoryRoot, worktree)
-		}
+		_ = removeWorktree(context.Background(), s.config.RepositoryRoot, worktree)
 	}()
 	if err := validateTargets(worktree, mappedProposal.Changes); err != nil {
 		return Result{}, err
+	}
+	if err := validateTargetDigests(worktree, mappedProposal.Changes); err != nil {
+		return Result{}, err
+	}
+	accepted, err := s.workflow.ExecuteTask(ctx, workflow.AcceptTaskProposal{
+		Meta: s.commandEnvelope(
+			request.ExecutionID, "accept", request.ExpectedTaskRevision, s.now().UTC(),
+		),
+		Run: mappedRequest.Envelope.RunID, ID: mappedRequest.ApprovedTaskID,
+		Proposal: request.ProposalArtifact, Lease: request.Lease,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("accept task proposal: %w", err)
 	}
 	applyContext, cancel := context.WithTimeout(ctx, s.config.Limits.Timeout)
 	defer cancel()
@@ -90,12 +94,86 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	); err != nil {
 		return Result{}, fmt.Errorf("apply implementation proposal: %w", err)
 	}
-	keep = true
+	candidate, candidateRef, actualDiff, err := buildCandidate(
+		ctx, s.config, worktree, request, mappedRequest, mappedProposal,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	keepRef := false
+	defer func() {
+		if !keepRef {
+			_ = deleteCandidateRef(
+				context.Background(), s.config.RepositoryRoot, candidateRef, candidate,
+			)
+		}
+	}()
+	report := ExecutionReport{
+		SchemaVersion: "1", ExecutionID: request.ExecutionID,
+		ExecutedAt: request.ExecutionTimestamp.UTC().Format(time.RFC3339Nano),
+		RunID:      mappedRequest.Envelope.RunID, TaskID: mappedRequest.ApprovedTaskID,
+		Attempt: mappedRequest.Envelope.Attempt, Proposal: request.ProposalArtifact,
+		Lease: request.Lease, BaseCommit: mappedRequest.BaseCommit,
+		CandidateCommit: candidate, CandidateRef: candidateRef,
+		Limits: s.config.Limits, ActualDiff: actualDiff,
+	}
+	reportBytes, err := marshalReport(report)
+	if err != nil {
+		return Result{}, err
+	}
+	reportArtifact, err := s.artifacts.Put(ctx, reportBytes)
+	if err != nil {
+		return Result{}, fmt.Errorf("store execution report: %w", err)
+	}
+	recordedAt := s.now().UTC()
+	_, err = s.workflow.ExecuteTask(ctx, workflow.RecordTaskExecution{
+		Meta: s.commandEnvelope(
+			request.ExecutionID, "record", accepted.Revision, recordedAt,
+		),
+		Run: mappedRequest.Envelope.RunID, ID: mappedRequest.ApprovedTaskID,
+		Proposal: request.ProposalArtifact, Execution: reportArtifact,
+		CandidateCommit: candidate, Lease: request.Lease,
+	})
+	if err != nil {
+		return Result{}, fmt.Errorf("record task execution: %w", err)
+	}
+	keepRef = true
 	return Result{
 		ExecutionID: request.ExecutionID, BaseCommit: mappedRequest.BaseCommit,
-		Worktree: worktree, Request: mappedRequest, Proposal: mappedProposal,
-		Lease: request.Lease, Limits: s.config.Limits,
+		CandidateCommit: candidate, CandidateRef: candidateRef,
+		ReportArtifact: reportArtifact, Lease: request.Lease,
+		Limits: s.config.Limits, ActualDiff: actualDiff,
 	}, nil
+}
+
+func (s *Service) validateRequest(
+	ctx context.Context, request Request,
+) (contracts.ImplementationRequest, contracts.ImplementationProposal, error) {
+	if err := validateExecutionIdentity(request); err != nil {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{}, err
+	}
+	mappedRequest, err := contracts.MapImplementationRequestAt(request.Implementation, s.now().UTC())
+	if err != nil {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{},
+			fmt.Errorf("%w: implementation request: %v", ErrInvalidRequest, err)
+	}
+	if mappedRequest.ApprovedTaskID != request.Implementation.GetEnvelope().GetTaskId() ||
+		mappedRequest.Envelope.Attempt != request.Lease.FencingToken {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{},
+			fmt.Errorf("%w: task lease binding", ErrInvalidRequest)
+	}
+	if err := s.verifyProposalArtifact(ctx, request); err != nil {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{}, err
+	}
+	mappedProposal, err := contracts.MapImplementationProposal(request.Proposal, mappedRequest)
+	if err != nil {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{},
+			fmt.Errorf("%w: implementation proposal: %v", ErrInvalidRequest, err)
+	}
+	if err := preflightChanges(mappedProposal.Changes, s.config.Limits); err != nil {
+		return contracts.ImplementationRequest{}, contracts.ImplementationProposal{}, err
+	}
+	return mappedRequest, mappedProposal, nil
 }
 
 func (s *Service) verifyProposalArtifact(ctx context.Context, request Request) error {
@@ -123,13 +201,30 @@ func (s *Service) verifyProposalArtifact(ctx context.Context, request Request) e
 func validateExecutionIdentity(request Request) error {
 	if _, err := uuid.Parse(request.ExecutionID); err != nil ||
 		request.Implementation == nil || request.Proposal == nil ||
-		request.ExpectedTaskRevision == 0 {
+		request.ExpectedTaskRevision == 0 || request.ExecutionTimestamp.IsZero() {
 		return ErrInvalidRequest
 	}
 	if err := request.Lease.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	return nil
+}
+
+func (s *Service) commandEnvelope(
+	executionID, purpose string, revision uint64, timestamp time.Time,
+) workflow.CommandEnvelope {
+	id := func(label string) string {
+		return uuid.NewSHA1(
+			uuid.NameSpaceURL, []byte("harness:execution:"+executionID+":"+label),
+		).String()
+	}
+	return workflow.CommandEnvelope{
+		CommandID: id(purpose), Actor: workflow.Actor{
+			ID: s.config.ActorID, Kind: workflow.ActorExecutionService,
+		},
+		ExpectedRevision: revision, Timestamp: timestamp,
+		CorrelationID: id("correlation"), CausationID: id(purpose + ":cause"),
+	}
 }
 
 func validateLimits(limits Limits) error {
@@ -226,6 +321,23 @@ func validateTargets(worktree string, changes []contracts.FileChange) error {
 				(info.Mode().Perm() != 0o644 && info.Mode().Perm() != 0o755)) {
 				return fmt.Errorf("%w: unsupported target %q", ErrUnsafePath, change.Path)
 			}
+		}
+	}
+	return nil
+}
+
+func validateTargetDigests(worktree string, changes []contracts.FileChange) error {
+	for _, change := range changes {
+		if change.Operation == contracts.FileCreate {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(change.Path)))
+		if err != nil {
+			return fmt.Errorf("read target %q: %w", change.Path, err)
+		}
+		sum := sha256.Sum256(body)
+		if hex.EncodeToString(sum[:]) != change.ExpectedOriginalSHA256 {
+			return fmt.Errorf("%w: original digest %q", ErrArtifactIntegrity, change.Path)
 		}
 	}
 	return nil

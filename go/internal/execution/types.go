@@ -27,6 +27,7 @@ const (
 
 type Request struct {
 	ExecutionID          string
+	ExecutionTimestamp   time.Time
 	Implementation       *reasoningv1.ImplementationRequest
 	Proposal             *reasoningv1.ImplementationProposal
 	ProposalArtifact     workflow.ArtifactRef
@@ -35,10 +36,10 @@ type Request struct {
 }
 
 type Limits struct {
-	MaxChangedFiles int
-	MaxFileBytes    int64
-	MaxTotalBytes   int64
-	Timeout         time.Duration
+	MaxChangedFiles int           `json:"max_changed_files"`
+	MaxFileBytes    int64         `json:"max_file_bytes"`
+	MaxTotalBytes   int64         `json:"max_total_bytes"`
+	Timeout         time.Duration `json:"timeout_nanoseconds"`
 }
 
 func DefaultLimits() Limits {
@@ -56,11 +57,19 @@ type Config struct {
 	WorkerImage    string
 	UID            int
 	GID            int
+	ActorID        string
+	AuthorName     string
+	AuthorEmail    string
 	Limits         Limits
 }
 
 type ArtifactStore interface {
 	Get(context.Context, workflow.ArtifactRef) ([]byte, error)
+	Put(context.Context, []byte) (workflow.ArtifactRef, error)
+}
+
+type WorkflowStore interface {
+	ExecuteTask(context.Context, workflow.TaskCommand) (workflow.CommandResult, error)
 }
 
 type Applicator interface {
@@ -68,11 +77,37 @@ type Applicator interface {
 }
 
 type Result struct {
-	ExecutionID string
-	BaseCommit  string
-	Worktree    string
-	Request     contracts.ImplementationRequest
-	Proposal    contracts.ImplementationProposal
-	Lease       workflow.LeaseRef
-	Limits      Limits
+	ExecutionID     string
+	BaseCommit      string
+	CandidateCommit string
+	CandidateRef    string
+	ReportArtifact  workflow.ArtifactRef
+	Lease           workflow.LeaseRef
+	Limits          Limits
+	ActualDiff      []DiffEntry
+	Replay          bool
+}
+
+type DiffEntry struct {
+	Operation    contracts.FileOperation `json:"operation"`
+	Path         string                  `json:"path"`
+	Mode         string                  `json:"mode,omitempty"`
+	BeforeSHA256 string                  `json:"before_sha256"`
+	AfterSHA256  string                  `json:"after_sha256"`
+}
+
+type ExecutionReport struct {
+	SchemaVersion   string               `json:"schema_version"`
+	ExecutionID     string               `json:"execution_id"`
+	ExecutedAt      string               `json:"executed_at"`
+	RunID           string               `json:"run_id"`
+	TaskID          string               `json:"task_id"`
+	Attempt         uint32               `json:"attempt"`
+	Proposal        workflow.ArtifactRef `json:"proposal"`
+	Lease           workflow.LeaseRef    `json:"lease"`
+	BaseCommit      string               `json:"base_commit"`
+	CandidateCommit string               `json:"candidate_commit"`
+	CandidateRef    string               `json:"candidate_ref"`
+	Limits          Limits               `json:"limits"`
+	ActualDiff      []DiffEntry          `json:"actual_diff"`
 }
