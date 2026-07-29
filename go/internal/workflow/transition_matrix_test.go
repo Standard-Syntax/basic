@@ -195,7 +195,7 @@ func TestTaskGraphApprovalStateMatrix(t *testing.T) {
 
 func matrixTask(state TaskState) Task {
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1,
 	}
 	proposal := artifact("artifact://matrix/proposal", 'a')
 	execution := artifact("artifact://matrix/task-execution", 'b')
@@ -228,7 +228,9 @@ func TestTaskCommandStateMatrix(t *testing.T) {
 	cases := []taskCase{
 		{"lease", setTaskStates(TaskStateReady), TaskStateLeased, "TASK_LEASED", 1,
 			func(v Task) TaskCommand {
-				return LeaseTask{Meta: envelope(ActorWorkflowService, v.Revision), Run: v.RunID, ID: v.ID, Lease: *v.Lease}
+				lease := *v.Lease
+				lease.FencingToken = v.CurrentAttempt + 1
+				return LeaseTask{Meta: envelope(ActorWorkflowService, v.Revision), Run: v.RunID, ID: v.ID, Lease: lease}
 			}},
 		{"release lease", setTaskStates(TaskStateLeased), TaskStateReady, "TASK_LEASE_RELEASED", 0,
 			func(v Task) TaskCommand {
@@ -244,11 +246,11 @@ func TestTaskCommandStateMatrix(t *testing.T) {
 			}},
 		{"accept proposal", setTaskStates(TaskStateReasoning),
 			TaskStateExecuting, "TASK_EXECUTION_STARTED", 0, func(v Task) TaskCommand {
-				return AcceptTaskProposal{Meta: envelope(ActorExecutionService, v.Revision), Run: v.RunID, ID: v.ID, Proposal: *v.Proposal}
+				return AcceptTaskProposal{Meta: envelope(ActorExecutionService, v.Revision), Run: v.RunID, ID: v.ID, Proposal: *v.Proposal, Lease: *v.Lease}
 			}},
 		{"execute", setTaskStates(TaskStateExecuting),
 			TaskStateVerifying, "TASK_EXECUTED", 0, func(v Task) TaskCommand {
-				return RecordTaskExecution{Meta: envelope(ActorExecutionService, v.Revision), Run: v.RunID, ID: v.ID, Proposal: *v.Proposal, Execution: *v.Execution, CandidateCommit: v.CandidateCommit}
+				return RecordTaskExecution{Meta: envelope(ActorExecutionService, v.Revision), Run: v.RunID, ID: v.ID, Proposal: *v.Proposal, Execution: *v.Execution, CandidateCommit: v.CandidateCommit, Lease: *v.Lease}
 			}},
 		{"verification pass", setTaskStates(TaskStateVerifying),
 			TaskStateReviewing, "TASK_VERIFIED", 0, func(v Task) TaskCommand {

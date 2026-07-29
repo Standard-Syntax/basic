@@ -11,9 +11,10 @@ import (
 var commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
 type LeaseRef struct {
-	ID        string    `json:"id"`
-	OwnerID   string    `json:"owner_id"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID           string    `json:"id"`
+	OwnerID      string    `json:"owner_id"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	FencingToken uint32    `json:"fencing_token"`
 }
 
 func (l LeaseRef) Validate() error {
@@ -26,12 +27,16 @@ func (l LeaseRef) Validate() error {
 	if l.ExpiresAt.IsZero() {
 		return fmt.Errorf("%w: lease expiry", ErrInvalid)
 	}
+	if l.FencingToken == 0 {
+		return fmt.Errorf("%w: lease fencing token", ErrInvalid)
+	}
 	return nil
 }
 
 func (l LeaseRef) Equal(other LeaseRef) bool {
 	return l.ID == other.ID && l.OwnerID == other.OwnerID &&
-		l.ExpiresAt.UnixMicro() == other.ExpiresAt.UnixMicro()
+		l.ExpiresAt.UnixMicro() == other.ExpiresAt.UnixMicro() &&
+		l.FencingToken == other.FencingToken
 }
 
 type TaskDefinition struct {
@@ -298,6 +303,7 @@ type AcceptTaskProposal struct {
 	Run      string          `json:"run_id"`
 	ID       string          `json:"task_id"`
 	Proposal ArtifactRef     `json:"proposal"`
+	Lease    LeaseRef        `json:"lease"`
 }
 
 func (AcceptTaskProposal) taskCommand()                {}
@@ -312,6 +318,7 @@ type RecordTaskExecution struct {
 	Proposal        ArtifactRef     `json:"proposal"`
 	Execution       ArtifactRef     `json:"execution"`
 	CandidateCommit string          `json:"candidate_commit"`
+	Lease           LeaseRef        `json:"lease"`
 }
 
 func (RecordTaskExecution) taskCommand()                {}
@@ -502,6 +509,9 @@ func (t Task) lease(command LeaseTask) (taskTransition, error) {
 	if err := command.Lease.Validate(); err != nil {
 		return taskTransition{}, err
 	}
+	if command.Lease.FencingToken != t.CurrentAttempt+1 {
+		return taskTransition{}, fmt.Errorf("%w: lease fencing token", ErrInvalid)
+	}
 	next := t
 	lease := command.Lease
 	next.Lease = &lease
@@ -571,6 +581,9 @@ func (t Task) acceptProposal(command AcceptTaskProposal) (taskTransition, error)
 	if command.Meta.Actor.Kind != ActorExecutionService {
 		return taskTransition{}, ErrUnauthorized
 	}
+	if err := t.validateActiveLease(command.Lease, command.Meta.Timestamp); err != nil {
+		return taskTransition{}, err
+	}
 	if err := command.Proposal.Validate(); err != nil {
 		return taskTransition{}, err
 	}
@@ -588,6 +601,9 @@ func (t Task) recordExecution(command RecordTaskExecution) (taskTransition, erro
 	if command.Meta.Actor.Kind != ActorExecutionService {
 		return taskTransition{}, ErrUnauthorized
 	}
+	if err := t.validateActiveLease(command.Lease, command.Meta.Timestamp); err != nil {
+		return taskTransition{}, err
+	}
 	if err := validateBoundArtifact(t.Proposal, command.Proposal, "proposal"); err != nil {
 		return taskTransition{}, err
 	}
@@ -601,6 +617,19 @@ func (t Task) recordExecution(command RecordTaskExecution) (taskTransition, erro
 	next.CandidateCommit = command.CandidateCommit
 	next.State = TaskStateVerifying
 	return taskTransition{next: next, eventType: "TASK_EXECUTED", payload: map[string]any{}}, nil
+}
+
+func (t Task) validateActiveLease(lease LeaseRef, now time.Time) error {
+	if err := lease.Validate(); err != nil {
+		return err
+	}
+	if t.Lease == nil || !t.Lease.Equal(lease) {
+		return fmt.Errorf("%w: stale task lease", ErrRevisionConflict)
+	}
+	if !now.Before(t.Lease.ExpiresAt) {
+		return fmt.Errorf("%w: expired task lease", ErrRevisionConflict)
+	}
+	return nil
 }
 
 func (t Task) recordVerification(command RecordTaskVerification) (taskTransition, error) {

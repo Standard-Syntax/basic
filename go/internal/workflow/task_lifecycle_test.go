@@ -28,7 +28,7 @@ func TestTaskCommandDigestIncludesConcreteType(t *testing.T) {
 	meta := envelope(ActorWorkflowService, 1)
 	runID, taskID := uuid.NewString(), uuid.NewString()
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1,
 	}
 	leaseDigest, err := taskCommandDigest(LeaseTask{
 		Meta: meta, Run: runID, ID: taskID, Lease: lease,
@@ -50,7 +50,7 @@ func TestTaskCommandDigestIncludesConcreteType(t *testing.T) {
 func TestCompleteTaskLifecycle(t *testing.T) {
 	task := readyTask()
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1,
 	}
 	proposal := artifact("artifact://proposals/1", 'a')
 	execution := artifact("artifact://executions/1", 'b')
@@ -70,12 +70,12 @@ func TestCompleteTaskLifecycle(t *testing.T) {
 			return StartReasoning{Meta: envelope(ActorReasoningService, t.Revision), Run: t.RunID, ID: t.ID, Lease: lease}
 		}},
 		{TaskStateExecuting, func(t Task) TaskCommand {
-			return AcceptTaskProposal{Meta: envelope(ActorExecutionService, t.Revision), Run: t.RunID, ID: t.ID, Proposal: proposal}
+			return AcceptTaskProposal{Meta: envelope(ActorExecutionService, t.Revision), Run: t.RunID, ID: t.ID, Proposal: proposal, Lease: lease}
 		}},
 		{TaskStateVerifying, func(t Task) TaskCommand {
 			return RecordTaskExecution{
 				Meta: envelope(ActorExecutionService, t.Revision), Run: t.RunID, ID: t.ID,
-				Proposal: proposal, Execution: execution, CandidateCommit: commit,
+				Proposal: proposal, Execution: execution, CandidateCommit: commit, Lease: lease,
 			}
 		}},
 		{TaskStateReviewing, func(t Task) TaskCommand {
@@ -113,7 +113,7 @@ func TestTaskRetriesAndAttemptExhaustion(t *testing.T) {
 	task := readyTask()
 	task.MaxAttempts = 1
 	lease := LeaseRef{
-		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour),
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1,
 	}
 	var err error
 	task, _, err = task.Apply(LeaseTask{
@@ -144,20 +144,110 @@ func TestTaskRetriesAndAttemptExhaustion(t *testing.T) {
 	}
 }
 
+func TestExecutionTransitionsRequireCurrentUnexpiredLease(t *testing.T) {
+	task := readyTask()
+	lease := LeaseRef{
+		ID: uuid.NewString(), OwnerID: uuid.NewString(),
+		ExpiresAt: testTime.Add(time.Hour), FencingToken: 1,
+	}
+	var err error
+	task, _, err = task.Apply(LeaseTask{
+		Meta: envelope(ActorWorkflowService, task.Revision),
+		Run:  task.RunID, ID: task.ID, Lease: lease,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _, err = task.Apply(StartReasoning{
+		Meta: envelope(ActorReasoningService, task.Revision),
+		Run:  task.RunID, ID: task.ID, Lease: lease,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := artifact("artifact://proposals/fenced", 'a')
+	for name, mutate := range map[string]func(*AcceptTaskProposal){
+		"lease id":      func(command *AcceptTaskProposal) { command.Lease.ID = uuid.NewString() },
+		"lease owner":   func(command *AcceptTaskProposal) { command.Lease.OwnerID = uuid.NewString() },
+		"lease expiry":  func(command *AcceptTaskProposal) { command.Lease.ExpiresAt = command.Lease.ExpiresAt.Add(time.Second) },
+		"fencing token": func(command *AcceptTaskProposal) { command.Lease.FencingToken++ },
+		"expired": func(command *AcceptTaskProposal) {
+			command.Meta.Timestamp = lease.ExpiresAt
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			command := AcceptTaskProposal{
+				Meta: envelope(ActorExecutionService, task.Revision),
+				Run:  task.RunID, ID: task.ID, Proposal: proposal, Lease: lease,
+			}
+			mutate(&command)
+			next, events, applyErr := task.Apply(command)
+			if !errors.Is(applyErr, ErrRevisionConflict) ||
+				!reflect.DeepEqual(next, Task{}) || events != nil {
+				t.Fatalf("stale lease leaked transition: %#v %#v %v", next, events, applyErr)
+			}
+		})
+	}
+
+	executing, _, err := task.Apply(AcceptTaskProposal{
+		Meta: envelope(ActorExecutionService, task.Revision),
+		Run:  task.RunID, ID: task.ID, Proposal: proposal, Lease: lease,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := lease
+	stale.FencingToken++
+	next, events, err := executing.Apply(RecordTaskExecution{
+		Meta: envelope(ActorExecutionService, executing.Revision),
+		Run:  executing.RunID, ID: executing.ID, Proposal: proposal,
+		Execution:       artifact("artifact://executions/fenced", 'b'),
+		CandidateCommit: "0123456789012345678901234567890123456789",
+		Lease:           stale,
+	})
+	if !errors.Is(err, ErrRevisionConflict) ||
+		!reflect.DeepEqual(next, Task{}) || events != nil {
+		t.Fatalf("stale final fence leaked transition: %#v %#v %v", next, events, err)
+	}
+}
+
+func TestLeaseFencingTokenTracksAttempt(t *testing.T) {
+	task := readyTask()
+	lease := LeaseRef{
+		ID: uuid.NewString(), OwnerID: uuid.NewString(),
+		ExpiresAt: testTime.Add(time.Hour), FencingToken: 2,
+	}
+	next, events, err := task.Apply(LeaseTask{
+		Meta: envelope(ActorWorkflowService, task.Revision),
+		Run:  task.RunID, ID: task.ID, Lease: lease,
+	})
+	if !errors.Is(err, ErrInvalid) || !reflect.DeepEqual(next, Task{}) || events != nil {
+		t.Fatalf("out-of-sequence fence accepted: %#v %#v %v", next, events, err)
+	}
+	lease.FencingToken = 1
+	task, _, err = task.Apply(LeaseTask{
+		Meta: envelope(ActorWorkflowService, task.Revision),
+		Run:  task.RunID, ID: task.ID, Lease: lease,
+	})
+	if err != nil || task.CurrentAttempt != lease.FencingToken {
+		t.Fatalf("attempt/fence mismatch: %#v %v", task, err)
+	}
+}
+
 func TestTaskInvalidTransitionsLeaveByteEquivalentSnapshot(t *testing.T) {
 	task := readyTask()
 	commands := []TaskCommand{
 		StartReasoning{
 			Meta: envelope(ActorReasoningService, task.Revision), Run: task.RunID, ID: task.ID,
-			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour)},
+			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1},
 		},
 		LeaseTask{
 			Meta: envelope(ActorModel, task.Revision), Run: task.RunID, ID: task.ID,
-			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour)},
+			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1},
 		},
 		LeaseTask{
 			Meta: envelope(ActorWorkflowService, task.Revision-1), Run: task.RunID, ID: task.ID,
-			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour)},
+			Lease: LeaseRef{ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: testTime.Add(time.Hour), FencingToken: 1},
 		},
 	}
 	for _, command := range commands {
