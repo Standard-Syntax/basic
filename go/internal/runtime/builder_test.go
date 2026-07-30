@@ -33,7 +33,7 @@ func TestRepositorySnapshotAndBoundedContextUseCommittedObjects(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, err := BuildImplementationContext(context.Background(), root, snapshot.BaseCommit,
-		snapshot, []string{"src"}, []string{"secret"}, ContextLimits{MaxFiles: 1, MaxBytes: 64})
+		snapshot, []string{"src"}, []string{"src/app.go"}, ContextLimits{MaxFiles: 1, MaxBytes: 64})
 	if err != nil || len(files) != 1 || files[0].Content != "package app\n" {
 		t.Fatalf("context = %#v, %v", files, err)
 	}

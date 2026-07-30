@@ -393,7 +393,7 @@ func BuildImplementationContext(
 	ctx context.Context,
 	root, commit string,
 	snapshot RepositorySnapshot,
-	readable, prohibited []string,
+	readable, _ []string,
 	limits ContextLimits,
 ) ([]*reasoningv1.RepositoryContextFile, error) {
 	if commit != snapshot.BaseCommit || limits.MaxFiles <= 0 || limits.MaxBytes <= 0 {
@@ -402,7 +402,7 @@ func BuildImplementationContext(
 	var result []*reasoningv1.RepositoryContextFile
 	var total int64
 	for _, entry := range snapshot.Entries {
-		if !withinAny(entry.Path, readable) || withinAny(entry.Path, prohibited) {
+		if !withinAny(entry.Path, readable) {
 			continue
 		}
 		if len(result) == limits.MaxFiles {
