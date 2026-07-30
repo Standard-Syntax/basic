@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYRRFXT6KJZNP9W3FH8PJBAK",
+  "session_id": "019fb117-3a56-72c1-b4e2-2cb18d07b44e",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T05:38:28.309967217Z",
+  "branch": "phase12/anthropic-runtime",
+  "checkpoints_count": 2,
+  "save_step_count": 1,
+  "files_touched": [
+    "go/cmd/workflow-service/main.go",
+    "go/internal/reasoning/gateway/minimax.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "d0fcd4a635fc",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1408248,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 77663488,
+    "output_tokens": 130846,
+    "api_call_count": 516
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T05:38:28.079863653Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 7,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 7,
+    "total_lines_changed": 11,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
