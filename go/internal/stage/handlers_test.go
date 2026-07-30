@@ -30,3 +30,21 @@ func TestExecutionExpectedRevisionSurvivesPartialExecution(t *testing.T) {
 		t.Fatal("unrelated task state resumed execution")
 	}
 }
+
+func TestVerificationExpectedRevisionSurvivesCompletedTransition(t *testing.T) {
+	for _, test := range []struct {
+		state    workflow.TaskState
+		revision uint64
+		want     uint64
+	}{
+		{workflow.TaskStateVerifying, 9, 9},
+		{workflow.TaskStateReviewing, 10, 9},
+	} {
+		got, err := verificationExpectedRevision(workflow.Task{
+			State: test.state, Revision: test.revision,
+		})
+		if err != nil || got != test.want {
+			t.Fatalf("%s revision = %d, %v; want %d", test.state, got, err, test.want)
+		}
+	}
+}

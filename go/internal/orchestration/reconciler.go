@@ -226,6 +226,10 @@ func (r *Reconciler) heartbeat(
 			if err := r.ledger.Renew(
 				ctx, job.ID, r.config.OwnerID, job.FencingToken, expires,
 			); err != nil {
+				if ctx.Err() != nil {
+					done <- nil
+					return
+				}
 				cancel()
 				done <- err
 				return

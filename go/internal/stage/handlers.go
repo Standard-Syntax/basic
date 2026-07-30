@@ -354,11 +354,16 @@ func (h *Handlers) verify(
 			CriterionID: criterion, CheckIDs: request.GetAvailableCheckIds(),
 		})
 	}
+	expectedRevision, err := verificationExpectedRevision(task)
+	if err != nil {
+		return orchestration.HandlerResult{}, err
+	}
 	result, err := h.verification.Verify(ctx, verification.Request{
-		VerificationID: ids.VerificationID, VerificationTimestamp: h.now(),
-		Implementation: request, ExecutionArtifact: executionRef,
+		VerificationID:        ids.VerificationID,
+		VerificationTimestamp: request.GetEnvelope().GetCreatedAt().AsTime(),
+		Implementation:        request, ExecutionArtifact: executionRef,
 		CandidateCommit:      executionReport.CandidateCommit,
-		ExpectedTaskRevision: task.Revision, Requirements: requirements,
+		ExpectedTaskRevision: expectedRevision, Requirements: requirements,
 	})
 	if err != nil {
 		return orchestration.HandlerResult{}, err
@@ -366,6 +371,18 @@ func (h *Handlers) verify(
 	return orchestration.HandlerResult{
 		Artifact: result.ReportArtifact, Continue: result.Passed,
 	}, nil
+}
+
+func verificationExpectedRevision(task workflow.Task) (uint64, error) {
+	switch task.State {
+	case workflow.TaskStateVerifying:
+		return task.Revision, nil
+	case workflow.TaskStateReviewing:
+		if task.Revision > 1 {
+			return task.Revision - 1, nil
+		}
+	}
+	return 0, fmt.Errorf("task state %s cannot resume verification", task.State)
 }
 
 func (h *Handlers) reviewTask(

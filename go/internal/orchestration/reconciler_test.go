@@ -18,6 +18,7 @@ type memoryLedger struct {
 	retried   []retryCall
 	failed    []failureCall
 	renewals  int
+	renew     func(context.Context) error
 }
 
 type completeCall struct {
@@ -48,8 +49,13 @@ func (m *memoryLedger) Claim(context.Context, string, time.Time, time.Duration) 
 	m.found = false
 	return m.job, true, nil
 }
-func (m *memoryLedger) Renew(context.Context, string, string, uint64, time.Time) error {
+func (m *memoryLedger) Renew(
+	ctx context.Context, _ string, _ string, _ uint64, _ time.Time,
+) error {
 	m.renewals++
+	if m.renew != nil {
+		return m.renew(ctx)
+	}
 	return nil
 }
 func (m *memoryLedger) CompleteAndEnqueue(
@@ -174,6 +180,43 @@ func TestOnceHonorsStopDecisionAndRenewsLongClaim(t *testing.T) {
 	if ledger.renewals == 0 || len(ledger.completed) != 1 ||
 		ledger.completed[0].next != nil {
 		t.Fatalf("renewals=%d completed=%#v", ledger.renewals, ledger.completed)
+	}
+}
+
+func TestOnceIgnoresRenewalCancellationAfterHandlerCompletes(t *testing.T) {
+	runID, taskID, owner := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	renewStarted := make(chan struct{})
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: runID, TaskID: &taskID, Attempt: 1,
+		Stage: StageVerification, FencingToken: 4,
+	}}
+	ledger.renew = func(ctx context.Context) error {
+		close(renewStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	handlers := handlersReturning(nil)
+	handlers[StageVerification] = HandlerFunc(func(
+		_ context.Context, _ runtime.Job, ids Identities,
+	) (HandlerResult, error) {
+		<-renewStarted
+		digest := runtime.Digest([]byte(ids.ActivityID))
+		return HandlerResult{Artifact: workflow.ArtifactRef{
+			URI: "artifact://sha256/" + digest, Digest: digest,
+		}, Continue: true}, nil
+	})
+	reconciler, err := New(Config{
+		OwnerID: owner, ClaimTTL: 3 * time.Millisecond,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Millisecond,
+	}, ledger, &memoryArtifacts{}, handlers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := reconciler.Once(t.Context()); err != nil || !worked {
+		t.Fatalf("once = %v, %v", worked, err)
+	}
+	if len(ledger.completed) != 1 || len(ledger.retried) != 0 {
+		t.Fatalf("completed=%#v retried=%#v", ledger.completed, ledger.retried)
 	}
 }
 
