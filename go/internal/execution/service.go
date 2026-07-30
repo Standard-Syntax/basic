@@ -19,6 +19,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const executionCleanupTimeout = 5 * time.Second
+
 type Service struct {
 	config     Config
 	artifacts  ArtifactStore
@@ -160,7 +162,7 @@ func (s *Service) runExecution(ctx context.Context, request Request) (Result, er
 	completed := false
 	defer func() {
 		if !completed {
-			_ = handle.Abandon(context.WithoutCancel(ctx))
+			abandonExecutionReservation(ctx, handle, executionCleanupTimeout)
 		}
 	}()
 	releaseCapacity, err := s.acquireCapacity(ctx)
@@ -171,6 +173,14 @@ func (s *Service) runExecution(ctx context.Context, request Request) (Result, er
 	result, err := s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
 	completed = err == nil
 	return result, err
+}
+
+func abandonExecutionReservation(
+	ctx context.Context, handle ExecutionHandle, timeout time.Duration,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	_ = handle.Abandon(cleanupCtx)
 }
 
 func (s *Service) acquireCapacity(ctx context.Context) (func(), error) {

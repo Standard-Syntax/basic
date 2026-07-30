@@ -64,6 +64,24 @@ type cancelledApplicator struct {
 	started chan struct{}
 }
 
+type blockingAbandonHandle struct {
+	sawDeadline atomic.Bool
+}
+
+func (*blockingAbandonHandle) Replay() (Result, bool) { return Result{}, false }
+func (h *blockingAbandonHandle) Abandon(ctx context.Context) error {
+	_, ok := ctx.Deadline()
+	h.sawDeadline.Store(ok)
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (*blockingAbandonHandle) FinalTransitionTime(
+	context.Context, time.Time,
+) (time.Time, error) {
+	return time.Time{}, nil
+}
+func (*blockingAbandonHandle) Complete(context.Context, Result) error { return nil }
+
 func (c cancelledApplicator) Apply(
 	ctx context.Context, _ string, _ []contracts.FileChange, _ Limits,
 ) error {
@@ -94,6 +112,20 @@ func (a *localApplicator) Apply(
 		}
 	}
 	return nil
+}
+
+func TestAbandonExecutionReservationIsBoundedAfterCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	handle := &blockingAbandonHandle{}
+	started := time.Now()
+	abandonExecutionReservation(ctx, handle, 10*time.Millisecond)
+	if !handle.sawDeadline.Load() {
+		t.Fatal("cleanup context had no deadline")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bounded cleanup took %s", elapsed)
+	}
 }
 
 func executionFixture(
