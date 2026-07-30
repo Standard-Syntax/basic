@@ -159,6 +159,14 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 		var state string
 		err := pool.QueryRow(t.Context(), `SELECT state FROM workflow_tasks
 			WHERE run_id=$1 AND task_id=$2`, runID, taskID).Scan(&state)
+		var failedStage, failureDigest string
+		if failureErr := pool.QueryRow(t.Context(), `SELECT stage,failure_digest
+			FROM runtime_stage_jobs
+			WHERE run_id=$1 AND task_id=$2 AND state='FAILED'
+			ORDER BY updated_at DESC LIMIT 1`, runID, taskID).
+			Scan(&failedStage, &failureDigest); failureErr == nil {
+			t.Fatalf("runtime stage %s failed: artifact digest %s", failedStage, failureDigest)
+		}
 		return err == nil && state == string(workflow.TaskStateAwaitingApproval)
 	})
 	var completedBeforeRestart int
