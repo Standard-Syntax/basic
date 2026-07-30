@@ -706,13 +706,6 @@ func (*Server) envelope(
 	}
 }
 
-func (s *Server) storeContent(ctx context.Context, content json.RawMessage) (workflow.ArtifactRef, error) {
-	if len(content) == 0 || string(content) == "null" {
-		return workflow.ArtifactRef{}, workflow.ErrInvalid
-	}
-	return s.artifacts.Put(ctx, content)
-}
-
 func decodeProtoPair(
 	requestBody, proposalBody json.RawMessage, request, proposal proto.Message,
 ) error {
