@@ -420,7 +420,7 @@ func (h *Handlers) reviewTask(
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
-	request, err := runtime.BuildReviewRequest(runtime.ReviewInput{
+	request, err := runtime.BuildReviewRequest(&runtime.ReviewInput{
 		RequestID: ids.InvocationID, RunID: job.RunID, TaskID: *job.TaskID,
 		ManifestDigest: h.config.ReviewManifestDigest, Attempt: job.Attempt,
 		CreatedAt: task.UpdatedAt, ExpiresAt: task.Lease.ExpiresAt,
@@ -537,7 +537,7 @@ func (h *Handlers) verificationReport(
 	return report, err
 }
 
-func (h *Handlers) envelope(
+func (*Handlers) envelope(
 	commandID, actorID string, kind workflow.ActorKind, revision uint64, at time.Time,
 ) workflow.CommandEnvelope {
 	return workflow.CommandEnvelope{
