@@ -91,7 +91,7 @@ def test_prompt_uses_only_stage_supported_missing_evidence_channels(stage: str) 
         if other_stage != stage
         for channel in channels
     } - set(SUPPORTED_CHANNELS[stage])
-    assert not unsupported.intersection(text.split())
+    assert all(channel not in text for channel in unsupported)
 
 
 @pytest.mark.parametrize("stage", STAGE_ORDER)

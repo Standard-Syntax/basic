@@ -218,21 +218,21 @@ evidence-request structure.
 }
 
 
-def render_prompt(
+def _prompt_inputs(
     stage: str,
-    *,
-    shared_fragments: Mapping[str, str] = SHARED_FRAGMENTS,
-    stage_fragments: Mapping[str, Mapping[str, str]] = STAGE_FRAGMENTS,
-) -> bytes:
-    """Render one prompt, rejecting incomplete or ambiguous authoring inputs."""
+    shared_fragments: Mapping[str, str],
+    stage_fragments: Mapping[str, Mapping[str, str]],
+) -> tuple[StageContract, dict[str, str]]:
     contract = STAGE_CONTRACTS.get(stage)
     if contract is None:
         raise PromptAuthoringError(f"unsupported prompt stage: {stage}")
     stage_values = stage_fragments.get(stage)
     if stage_values is None:
         raise PromptAuthoringError(f"missing stage fragments: {stage}")
+    return contract, {**shared_fragments, **stage_values}
 
-    fragments = {**shared_fragments, **stage_values}
+
+def _validate_fragment_names(fragments: Mapping[str, str]) -> None:
     missing = [name for name in SECTION_ORDER if name not in fragments]
     if missing:
         raise PromptAuthoringError(f"missing prompt fragments: {', '.join(missing)}")
@@ -240,26 +240,18 @@ def render_prompt(
     if extras:
         raise PromptAuthoringError(f"unknown prompt fragments: {', '.join(extras)}")
 
-    values = {
-        "request_name": contract.request_name,
-        "proposal_name": contract.proposal_name,
-        "output_schema": contract.output_schema,
-    }
-    rendered_sections: list[str] = []
-    formatter = Formatter()
-    for name in SECTION_ORDER:
-        fragment = fragments[name]
-        placeholders = {
-            field_name
-            for _, field_name, _, _ in formatter.parse(fragment)
-            if field_name is not None
-        }
-        unknown = sorted(placeholders - set(values))
-        if unknown:
-            raise PromptAuthoringError(f"unknown placeholders in {name}: {', '.join(unknown)}")
-        rendered_sections.append(fragment.format_map(values).strip())
 
-    text = "\n\n".join(rendered_sections) + "\n"
+def _render_fragment(name: str, fragment: str, values: Mapping[str, str]) -> str:
+    placeholders = {
+        field_name for _, field_name, _, _ in Formatter().parse(fragment) if field_name is not None
+    }
+    unknown = sorted(placeholders - set(values))
+    if unknown:
+        raise PromptAuthoringError(f"unknown placeholders in {name}: {', '.join(unknown)}")
+    return fragment.format_map(values).strip()
+
+
+def _encode_prompt(text: str) -> bytes:
     if "\r" in text or not text.endswith("\n") or text.endswith("\n\n"):
         raise PromptAuthoringError("rendered prompt must use LF and one terminal newline")
     headings = [line for line in text.splitlines() if line.startswith("# ")]
@@ -269,6 +261,25 @@ def render_prompt(
         return text.encode("utf-8")
     except UnicodeEncodeError as error:
         raise PromptAuthoringError("rendered prompt must be valid UTF-8") from error
+
+
+def render_prompt(
+    stage: str,
+    *,
+    shared_fragments: Mapping[str, str] = SHARED_FRAGMENTS,
+    stage_fragments: Mapping[str, Mapping[str, str]] = STAGE_FRAGMENTS,
+) -> bytes:
+    """Render one prompt, rejecting incomplete or ambiguous authoring inputs."""
+    contract, fragments = _prompt_inputs(stage, shared_fragments, stage_fragments)
+    _validate_fragment_names(fragments)
+    values = {
+        "request_name": contract.request_name,
+        "proposal_name": contract.proposal_name,
+        "output_schema": contract.output_schema,
+    }
+    rendered_sections = [_render_fragment(name, fragments[name], values) for name in SECTION_ORDER]
+    text = "\n\n".join(rendered_sections) + "\n"
+    return _encode_prompt(text)
 
 
 def render_all_prompts() -> dict[str, bytes]:
