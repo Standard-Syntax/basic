@@ -30,23 +30,28 @@ type config struct {
 }
 
 func main() {
+	os.Exit(mainExit())
+}
+
+func mainExit() int {
 	configPath := flag.String("config", "", "absolute path to strict JSON configuration")
 	flag.Parse()
 	if *configPath == "" {
 		slog.Error("configuration is required")
-		os.Exit(2)
+		return 2
 	}
 	value, err := loadConfig(*configPath)
 	if err != nil {
 		slog.Error("load configuration", "error", err)
-		os.Exit(2)
+		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, value); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("workflow service stopped", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func loadConfig(path string) (config, error) {
@@ -76,7 +81,10 @@ func loadConfig(path string) (config, error) {
 }
 
 func run(ctx context.Context, value config) error {
-	if err := workflow.Migrate(ctx, value.DatabaseURL); err != nil {
+	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
+	err := workflow.Migrate(migrateCtx, value.DatabaseURL)
+	cancelMigrate()
+	if err != nil {
 		return fmt.Errorf("migrate workflow: %w", err)
 	}
 	pool, err := pgxpool.New(ctx, value.DatabaseURL)
@@ -84,7 +92,10 @@ func run(ctx context.Context, value config) error {
 		return err
 	}
 	defer pool.Close()
-	if err := pool.Ping(ctx); err != nil {
+	pingCtx, cancelPing := context.WithTimeout(ctx, 30*time.Second)
+	err = pool.Ping(pingCtx)
+	cancelPing()
+	if err != nil {
 		return err
 	}
 	artifacts, err := artifact.NewStore(value.ArtifactRoot, value.MaxArtifactBytes)

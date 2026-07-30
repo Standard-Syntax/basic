@@ -213,6 +213,40 @@ func (l *Ledger) Complete(
 	return nil
 }
 
+func (l *Ledger) CompleteAndEnqueue(
+	ctx context.Context,
+	jobID, owner string,
+	fence uint64,
+	result workflow.ArtifactRef,
+	next *Job,
+	now time.Time,
+) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	tx, err := l.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE runtime_stage_jobs SET state='COMPLETED',
+		result_uri=$4,result_digest=$5,claim_owner=NULL,claim_expires_at=NULL,updated_at=$6
+		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
+		jobID, owner, fence, result.URI, result.Digest, now.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return classifyJobUpdate(ctx, tx, jobID)
+	}
+	if next != nil {
+		if err := enqueueTx(ctx, tx, *next); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (l *Ledger) Retry(
 	ctx context.Context, jobID, owner string, fence uint64, available time.Time,
 ) error {
@@ -257,8 +291,16 @@ func (l *Ledger) CancelRun(ctx context.Context, runID string, now time.Time) err
 }
 
 func (l *Ledger) classifyJobUpdate(ctx context.Context, jobID string) error {
+	return classifyJobUpdate(ctx, l.pool, jobID)
+}
+
+type queryRower interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func classifyJobUpdate(ctx context.Context, queryer queryRower, jobID string) error {
 	var state string
-	err := l.pool.QueryRow(ctx, `SELECT state FROM runtime_stage_jobs WHERE job_id=$1`, jobID).Scan(&state)
+	err := queryer.QueryRow(ctx, `SELECT state FROM runtime_stage_jobs WHERE job_id=$1`, jobID).Scan(&state)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
@@ -269,4 +311,29 @@ func (l *Ledger) classifyJobUpdate(ctx context.Context, jobID string) error {
 	default:
 		return ErrStaleFence
 	}
+}
+
+func enqueueTx(ctx context.Context, tx pgx.Tx, job Job) error {
+	var task any
+	if job.TaskID != nil {
+		task = *job.TaskID
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO runtime_stage_jobs
+		(job_id,run_id,task_id,attempt,stage,state,available_at,created_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,'READY',$6,$6,$6) ON CONFLICT DO NOTHING`,
+		job.ID, job.RunID, task, job.Attempt, job.Stage, job.AvailableAt.UTC())
+	if err != nil || tag.RowsAffected() == 1 {
+		return err
+	}
+	var id string
+	err = tx.QueryRow(ctx, `SELECT job_id::text FROM runtime_stage_jobs
+		WHERE run_id=$1 AND task_id IS NOT DISTINCT FROM $2 AND attempt=$3 AND stage=$4`,
+		job.RunID, task, job.Attempt, job.Stage).Scan(&id)
+	if err != nil {
+		return err
+	}
+	if id != job.ID {
+		return ErrConflict
+	}
+	return nil
 }

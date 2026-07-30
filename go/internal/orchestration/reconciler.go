@@ -31,10 +31,11 @@ var orderedStages = []string{
 
 type JobLedger interface {
 	Claim(context.Context, string, time.Time, time.Duration) (runtime.Job, bool, error)
-	Complete(context.Context, string, string, uint64, workflow.ArtifactRef, time.Time) error
+	CompleteAndEnqueue(
+		context.Context, string, string, uint64, workflow.ArtifactRef, *runtime.Job, time.Time,
+	) error
 	Retry(context.Context, string, string, uint64, time.Time) error
 	Fail(context.Context, string, string, uint64, workflow.ArtifactRef, time.Time) error
-	Enqueue(context.Context, runtime.Job) error
 }
 
 type ArtifactStore interface {
@@ -134,22 +135,29 @@ func (r *Reconciler) Once(ctx context.Context) (bool, error) {
 	if job.TaskID != nil {
 		logger = logger.With("task_id", *job.TaskID)
 	}
-	result, handleErr := r.handlers[job.Stage].Handle(ctx, job, ids)
+	var result workflow.ArtifactRef
+	var handleErr error
+	handler, ok := r.handlers[job.Stage]
+	if !ok {
+		handleErr = fmt.Errorf("no handler registered for stage %q", job.Stage)
+	} else {
+		handlerCtx, cancel := context.WithTimeout(ctx, r.config.ClaimTTL)
+		result, handleErr = handler.Handle(handlerCtx, job, ids)
+		cancel()
+	}
 	if handleErr == nil {
-		if err := r.ledger.Complete(
-			ctx, job.ID, r.config.OwnerID, job.FencingToken, result, r.now(),
-		); err != nil {
-			return true, err
-		}
+		var nextJob *runtime.Job
 		if next, ok := nextStage(job.Stage); ok {
-			nextJob := runtime.Job{
+			nextJob = &runtime.Job{
 				ID:    StableID(job.RunID, taskValue(job.TaskID), fmt.Sprint(job.Attempt), next, "job"),
 				RunID: job.RunID, TaskID: job.TaskID, Attempt: job.Attempt,
 				Stage: next, AvailableAt: r.now().UTC(),
 			}
-			if err := r.ledger.Enqueue(ctx, nextJob); err != nil {
-				return true, err
-			}
+		}
+		if err := r.ledger.CompleteAndEnqueue(
+			ctx, job.ID, r.config.OwnerID, job.FencingToken, result, nextJob, r.now(),
+		); err != nil {
+			return true, err
 		}
 		logger.Info("runtime stage completed", "result_digest", result.Digest)
 		return true, nil
