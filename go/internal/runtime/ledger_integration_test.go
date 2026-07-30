@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -289,8 +290,11 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 		t.Fatalf("current completion = %v", err)
 	}
 	replay, err := ledger.BeginIdempotency(ctx, request)
-	if err != nil || !replay.Replay || replay.StatusCode != http.StatusCreated ||
-		string(replay.Response) != string(response) {
+	var gotResponse, wantResponse any
+	gotJSONErr := json.Unmarshal(replay.Response, &gotResponse)
+	wantJSONErr := json.Unmarshal(response, &wantResponse)
+	if err != nil || gotJSONErr != nil || wantJSONErr != nil || !replay.Replay ||
+		replay.StatusCode != http.StatusCreated || !reflect.DeepEqual(gotResponse, wantResponse) {
 		t.Fatalf("completed replay = %#v, %v", replay, err)
 	}
 }
