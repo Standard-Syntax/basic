@@ -91,9 +91,17 @@ func mainExit() int {
 }
 
 func loadConfig(path string) (config, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+	if !cleanAbsolutePath(path) {
 		return config{}, errors.New("config path must be clean and absolute")
 	}
+	value, err := decodeConfig(path)
+	if err != nil {
+		return config{}, err
+	}
+	return normalizeConfig(value)
+}
+
+func decodeConfig(path string) (config, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return config{}, err
@@ -109,35 +117,64 @@ func loadConfig(path string) (config, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return config{}, errors.New("configuration has trailing content")
 	}
+	return value, nil
+}
+
+func normalizeConfig(value config) (config, error) {
+	var err error
 	value.Provider, err = value.Provider.Normalize()
 	if err != nil {
 		return config{}, err
 	}
-	for _, path := range []string{
+	if err := validateCleanAbsolutePaths("runtime", []string{
 		value.ArtifactRoot, value.RepositoryRoot, value.WorktreeRoot,
 		value.VerificationWorkspaceRoot, value.ImplementationManifestPath,
 		value.ImplementationPromptPath, value.ReviewManifestPath, value.ReviewPromptPath,
-	} {
-		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return config{}, errors.New("runtime paths must be clean and absolute")
-		}
+	}); err != nil {
+		return config{}, err
 	}
 	if value.Provider.Mode == gateway.FakeProviderMode {
-		for _, path := range []string{
+		if err := validateCleanAbsolutePaths("fake proposal", []string{
 			value.FakeImplementationProposal, value.FakeReviewProposal,
-		} {
-			if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-				return config{}, errors.New("fake proposal paths must be clean and absolute")
-			}
+		}); err != nil {
+			return config{}, err
 		}
 	}
-	if value.DatabaseURL == "" || value.OwnerID == "" || value.ServiceActorID == "" ||
-		value.ReasoningActorID == "" || value.ExecutionActorID == "" ||
-		value.VerificationActorID == "" || value.ReviewActorID == "" ||
-		value.ExecutionWorkerImage == "" || value.VerificationWorkerImage == "" ||
-		value.WorkerUID <= 0 || value.WorkerGID <= 0 {
+	if !completeConfig(value) {
 		return config{}, errors.New("incomplete configuration")
 	}
+	applyConfigDefaults(&value)
+	return value, nil
+}
+
+func cleanAbsolutePath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+
+func validateCleanAbsolutePaths(kind string, paths []string) error {
+	for _, path := range paths {
+		if !cleanAbsolutePath(path) {
+			return fmt.Errorf("%s paths must be clean and absolute", kind)
+		}
+	}
+	return nil
+}
+
+func completeConfig(value config) bool {
+	required := []string{
+		value.DatabaseURL, value.OwnerID, value.ServiceActorID, value.ReasoningActorID,
+		value.ExecutionActorID, value.VerificationActorID, value.ReviewActorID,
+		value.ExecutionWorkerImage, value.VerificationWorkerImage,
+	}
+	for _, item := range required {
+		if item == "" {
+			return false
+		}
+	}
+	return value.WorkerUID > 0 && value.WorkerGID > 0
+}
+
+func applyConfigDefaults(value *config) {
 	if value.ContextMaxFiles == 0 {
 		value.ContextMaxFiles = 32
 	}
@@ -150,7 +187,6 @@ func loadConfig(path string) (config, error) {
 	if value.ClaimTTL == 0 {
 		value.ClaimTTL = 30 * time.Second
 	}
-	return value, nil
 }
 
 func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
