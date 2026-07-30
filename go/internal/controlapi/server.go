@@ -259,42 +259,14 @@ func (s *Server) applyMutation(
 	if body.DecisionTime.IsZero() {
 		return 0, nil, errors.New("decision_timestamp is required")
 	}
-	runID, suffix, runRoute := parseRunPath(request.URL.Path)
-	taskID, taskSuffix, taskRoute := parseTaskPath(request.URL.Path)
 	if request.URL.Path == "/v1/runs" {
-		if !hasRole(principal, RoleOperator) {
-			return 0, nil, workflow.ErrUnauthorized
-		}
-		if _, err := uuid.Parse(body.RunID); err != nil {
-			return 0, nil, workflow.ErrInvalid
-		}
-		result, err := s.workflow.ExecuteRun(request.Context(), workflow.CreateRun{
-			Meta: s.envelope(key, principal.ID, workflow.ActorHuman, 0, body.DecisionTime),
-			ID:   body.RunID,
-		})
-		return http.StatusCreated, result, err
+		return s.createRun(request.Context(), principal, key, body)
 	}
+	taskID, taskSuffix, taskRoute := parseTaskPath(request.URL.Path)
 	if taskRoute && taskSuffix == "/retry" {
-		if !hasRole(principal, RoleOperator) {
-			return 0, nil, workflow.ErrUnauthorized
-		}
-		if _, err := uuid.Parse(body.RunID); err != nil {
-			return 0, nil, workflow.ErrInvalid
-		}
-		tasks, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
-		if err != nil {
-			return 0, nil, err
-		}
-		expected, err := requiredRevision(request.Header.Get("If-Match"))
-		if err != nil || expected != tasks.Revision {
-			return 0, nil, workflow.ErrRevisionConflict
-		}
-		result, err := s.workflow.ExecuteTask(request.Context(), workflow.RetryTask{
-			Meta: s.envelope(key, s.config.ServiceActorID, workflow.ActorWorkflowService, expected, body.DecisionTime),
-			Run:  tasks.RunID, ID: tasks.ID,
-		})
-		return http.StatusOK, result, err
+		return s.retryTask(request, principal, key, body, taskID)
 	}
+	runID, suffix, runRoute := parseRunPath(request.URL.Path)
 	if !runRoute {
 		return 0, nil, workflow.ErrNotFound
 	}
@@ -309,7 +281,49 @@ func (s *Server) applyMutation(
 	return s.applyRunMutation(request.Context(), principal, key, suffix, body, run)
 }
 
-func (s *Server) applyRunMutation(
+func (s *Server) createRun(
+	ctx context.Context, principal Principal, key string, body mutationBody,
+) (int, any, error) {
+	if !hasRole(principal, RoleOperator) {
+		return 0, nil, workflow.ErrUnauthorized
+	}
+	if _, err := uuid.Parse(body.RunID); err != nil {
+		return 0, nil, workflow.ErrInvalid
+	}
+	result, err := s.workflow.ExecuteRun(ctx, workflow.CreateRun{
+		Meta: s.envelope(key, principal.ID, workflow.ActorHuman, 0, body.DecisionTime),
+		ID:   body.RunID,
+	})
+	return http.StatusCreated, result, err
+}
+
+func (s *Server) retryTask(
+	request *http.Request, principal Principal, key string, body mutationBody, taskID string,
+) (int, any, error) {
+	if !hasRole(principal, RoleOperator) {
+		return 0, nil, workflow.ErrUnauthorized
+	}
+	if _, err := uuid.Parse(body.RunID); err != nil {
+		return 0, nil, workflow.ErrInvalid
+	}
+	task, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
+	if err != nil {
+		return 0, nil, err
+	}
+	expected, err := requiredRevision(request.Header.Get("If-Match"))
+	if err != nil || expected != task.Revision {
+		return 0, nil, workflow.ErrRevisionConflict
+	}
+	result, err := s.workflow.ExecuteTask(request.Context(), workflow.RetryTask{
+		Meta: s.envelope(
+			key, s.config.ServiceActorID, workflow.ActorWorkflowService, expected, body.DecisionTime,
+		),
+		Run: task.RunID, ID: task.ID,
+	})
+	return http.StatusOK, result, err
+}
+
+func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-command audit table
 	ctx context.Context, principal Principal, key, suffix string, body mutationBody, run workflow.Run,
 ) (int, any, error) {
 	serviceMeta := func(step string, revision uint64) workflow.CommandEnvelope {
@@ -423,7 +437,7 @@ func (s *Server) applyRunMutation(
 	}
 }
 
-func (s *Server) compositeApprove(
+func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered approval checkpoints
 	ctx context.Context, principal Principal, key string, at time.Time, run workflow.Run,
 ) (workflow.CommandResult, error) {
 	tasks, err := s.workflow.ListTasks(ctx, run.ID)
@@ -513,7 +527,7 @@ func (s *Server) compositeApprove(
 	})
 }
 
-func (s *Server) envelope(
+func (*Server) envelope(
 	commandID, actorID string, kind workflow.ActorKind, revision uint64, at time.Time,
 ) workflow.CommandEnvelope {
 	return workflow.CommandEnvelope{
@@ -620,6 +634,8 @@ func (s *Server) writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, workflow.ErrRevisionConflict):
 		writeError(w, http.StatusPreconditionFailed, "revision_conflict", "ETag revision conflict")
+	case errors.Is(err, runtime.ErrInProgress):
+		writeError(w, http.StatusConflict, "idempotency_in_progress", "request is still processing")
 	case errors.Is(err, workflow.ErrCommandConflict), errors.Is(err, runtime.ErrConflict):
 		writeError(w, http.StatusConflict, "idempotency_conflict", "idempotency identity conflict")
 	case errors.Is(err, workflow.ErrInvalid), errors.Is(err, workflow.ErrInvalidTransition):

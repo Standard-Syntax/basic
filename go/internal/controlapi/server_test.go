@@ -29,16 +29,16 @@ func (f *fakeWorkflow) ExecuteTask(_ context.Context, command workflow.TaskComma
 	f.taskCommands = append(f.taskCommands, command)
 	return workflow.CommandResult{AggregateID: command.TaskID()}, nil
 }
-func (f *fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
+func (*fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
 	return workflow.Run{}, workflow.ErrNotFound
 }
-func (f *fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, error) {
+func (*fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, error) {
 	return workflow.Task{}, workflow.ErrNotFound
 }
-func (f *fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error) {
+func (*fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error) {
 	return nil, nil
 }
-func (f *fakeWorkflow) ListEvents(context.Context, string, string) ([]workflow.Event, error) {
+func (*fakeWorkflow) ListEvents(context.Context, string, string) ([]workflow.Event, error) {
 	return nil, nil
 }
 
@@ -93,7 +93,7 @@ func TestHealthAndAuthentication(t *testing.T) {
 		token  string
 		status int
 	}{{"/healthz", "", 200}, {"/readyz", "", 401}, {"/readyz", token, 200}} {
-		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request := httptest.NewRequest(http.MethodGet, test.path, http.NoBody)
 		if test.token != "" {
 			request.Header.Set("Authorization", "Bearer "+test.token)
 		}
