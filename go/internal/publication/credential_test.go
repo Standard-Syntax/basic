@@ -26,7 +26,8 @@ func TestFileCredentialReadsPerRequestAndChecksPermissions(t *testing.T) {
 	if token, err := source.Token(context.Background()); err != nil || token != "second" {
 		t.Fatalf("second token = %q, %v", token, err)
 	}
-	if err := os.Chmod(path, 0o640); err != nil {
+	// Deliberately create an unsafe credential to prove the reader rejects it.
+	if err := os.Chmod(path, 0o640); err != nil { // skipcq: GSC-G302
 		t.Fatal(err)
 	}
 	if _, err := source.Token(context.Background()); !errors.Is(err, ErrCredentialPermissions) {
