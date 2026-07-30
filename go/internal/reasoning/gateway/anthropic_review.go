@@ -62,9 +62,11 @@ func (a *AnthropicReviewAdapter) ProposeReview(
 			anthropic.NewTextBlock(user),
 		)},
 		Temperature: param.NewOpt(agentManifest.Model.Temperature),
-		OutputConfig: anthropic.OutputConfigParam{
+	}
+	if !a.runtime.miniMax {
+		params.OutputConfig = anthropic.OutputConfigParam{
 			Format: anthropic.JSONOutputFormatParam{Schema: reviewOutputSchema()},
-		},
+		}
 	}
 	message, attempts, err := a.runtime.sendWithRetry(
 		ctx, key, &params,
@@ -81,7 +83,7 @@ func (a *AnthropicReviewAdapter) ProposeReview(
 	}
 	result := ReviewAdapterResult{
 		ProviderResponse: []byte(message.RawJSON()), ProviderRequestID: message.ID,
-		Provider: AnthropicProvider, Model: string(message.Model),
+		Provider: a.runtime.providerName(), Model: string(message.Model),
 		Usage: Usage{
 			InputTokens: uint64(maxInt64(
 				0, message.Usage.InputTokens+
@@ -159,7 +161,11 @@ func (r *anthropicRuntime) renderReview(
 			maximumTokens {
 		return "", "", errors.New("rendered provider context exceeds input token budget")
 	}
-	return string(prompt), string(user), nil
+	system, err := r.systemPrompt(prompt, reviewOutputSchema())
+	if err != nil {
+		return "", "", err
+	}
+	return system, string(user), nil
 }
 
 type reviewProjection struct {
