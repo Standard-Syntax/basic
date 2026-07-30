@@ -153,7 +153,9 @@ func loadConfig(path string) (config, error) {
 	return value, nil
 }
 
-func run(ctx context.Context, value config) error {
+func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
+	ctx context.Context, value config,
+) error {
 	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
 	err := migrateAll(migrateCtx, value.DatabaseURL)
 	cancelMigrate()

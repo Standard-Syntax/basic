@@ -28,15 +28,20 @@ func (c ProviderConfig) Normalize() (ProviderConfig, error) {
 	if normalized.Mode == "" {
 		normalized.Mode = MiniMaxMode
 	}
-	if normalized.Mode == FakeProviderMode {
+	switch normalized.Mode {
+	case FakeProviderMode:
 		if normalized.BaseURL != "" || normalized.Model != "" || normalized.APIKeyEnv != "" {
 			return ProviderConfig{}, errors.New("fake provider does not accept remote configuration")
 		}
 		return normalized, nil
-	}
-	if normalized.Mode != MiniMaxMode {
+	case MiniMaxMode:
+		return normalizeMiniMaxConfig(normalized)
+	default:
 		return ProviderConfig{}, errors.New("provider mode must be minimax_anthropic or fake")
 	}
+}
+
+func normalizeMiniMaxConfig(normalized ProviderConfig) (ProviderConfig, error) {
 	if normalized.BaseURL == "" {
 		normalized.BaseURL = MiniMaxBaseURL
 	}
