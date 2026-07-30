@@ -15,8 +15,14 @@ func (s *Store) GetRun(ctx context.Context, runID string) (Run, error) {
 		return Run{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	run, _, err := loadRun(ctx, tx, runID)
-	return cloneRun(run), err
+	run, found, err := loadRun(ctx, tx, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	if !found {
+		return Run{}, ErrNotFound
+	}
+	return cloneRun(run), nil
 }
 
 func (s *Store) GetTask(ctx context.Context, runID, taskID string) (Task, error) {
@@ -30,7 +36,12 @@ func (s *Store) GetTask(ctx context.Context, runID, taskID string) (Task, error)
 }
 
 func (s *Store) ListTasks(ctx context.Context, runID string) ([]Task, error) {
-	rows, err := s.pool.Query(ctx, `SELECT task_id FROM workflow_tasks WHERE run_id=$1 ORDER BY task_id`, runID)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, `SELECT task_id FROM workflow_tasks WHERE run_id=$1 ORDER BY task_id`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list task identities: %w", err)
 	}
@@ -50,11 +61,14 @@ func (s *Store) ListTasks(ctx context.Context, runID string) ([]Task, error) {
 	rows.Close()
 	tasks := make([]Task, 0, len(ids))
 	for _, id := range ids {
-		task, err := s.GetTask(ctx, runID, id)
+		task, err := loadTask(ctx, tx, runID, id)
 		if err != nil {
 			return nil, err
 		}
-		tasks = append(tasks, task)
+		tasks = append(tasks, cloneTask(task))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }
@@ -94,12 +108,12 @@ func (s *Store) ListEvents(ctx context.Context, aggregateType, aggregateID strin
 
 func cloneRun(value Run) Run {
 	if value.Specification != nil {
-		copy := *value.Specification
-		value.Specification = &copy
+		cloned := *value.Specification
+		value.Specification = &cloned
 	}
 	if value.TaskGraph != nil {
-		copy := *value.TaskGraph
-		value.TaskGraph = &copy
+		cloned := *value.TaskGraph
+		value.TaskGraph = &cloned
 	}
 	for src, dst := range map[*ArtifactRef]**ArtifactRef{
 		value.Execution: &value.Execution, value.Verification: &value.Verification,
@@ -107,8 +121,8 @@ func cloneRun(value Run) Run {
 		value.Publication: &value.Publication, value.Merge: &value.Merge,
 	} {
 		if src != nil {
-			copy := *src
-			*dst = &copy
+			cloned := *src
+			*dst = &cloned
 		}
 	}
 	return value
@@ -116,8 +130,8 @@ func cloneRun(value Run) Run {
 
 func cloneTask(value Task) Task {
 	if value.Lease != nil {
-		copy := *value.Lease
-		value.Lease = &copy
+		cloned := *value.Lease
+		value.Lease = &cloned
 	}
 	for src, dst := range map[*ArtifactRef]**ArtifactRef{
 		value.Proposal: &value.Proposal, value.Execution: &value.Execution,
@@ -125,8 +139,8 @@ func cloneTask(value Task) Task {
 		value.Approval: &value.Approval,
 	} {
 		if src != nil {
-			copy := *src
-			*dst = &copy
+			cloned := *src
+			*dst = &cloned
 		}
 	}
 	return value
@@ -137,7 +151,7 @@ func cloneMap(value map[string]any) map[string]any {
 		return nil
 	}
 	encoded, _ := json.Marshal(value)
-	var copy map[string]any
-	_ = json.Unmarshal(encoded, &copy)
-	return copy
+	var cloned map[string]any
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
 }

@@ -63,60 +63,98 @@ func (s *Store) Put(ctx context.Context, body []byte) (workflow.ArtifactRef, err
 	digest := hex.EncodeToString(sum[:])
 	ref := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
 	dir := filepath.Join(s.root, digest[:2])
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return workflow.ArtifactRef{}, fmt.Errorf("create artifact shard: %w", err)
-	}
-	if err := rejectLink(dir); err != nil {
+	if err := ensureShard(dir); err != nil {
 		return workflow.ArtifactRef{}, err
 	}
 	target := filepath.Join(dir, digest)
-	if existing, err := s.readPath(ctx, target, digest, s.maxBytes); err == nil {
-		if !bytes.Equal(existing, body) {
-			return workflow.ArtifactRef{}, ErrIntegrity
-		}
+	if exists, err := s.matchesExisting(ctx, target, digest, body); err != nil {
+		return workflow.ArtifactRef{}, err
+	} else if exists {
 		return ref, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	}
+	tmpName, err := writeTemporary(dir, body)
+	if err != nil {
 		return workflow.ArtifactRef{}, err
 	}
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := s.publish(ctx, dir, tmpName, target, digest, body); err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	return ref, nil
+}
+
+func ensureShard(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create artifact shard: %w", err)
+	}
+	return rejectLink(dir)
+}
+
+func (s *Store) matchesExisting(
+	ctx context.Context, target, digest string, body []byte,
+) (bool, error) {
+	existing, err := s.readPath(ctx, target, digest, s.maxBytes)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(existing, body) {
+		return false, ErrIntegrity
+	}
+	return true, nil
+}
+
+func writeTemporary(dir string, body []byte) (string, error) {
 	tmp, err := os.CreateTemp(dir, ".tmp-")
 	if err != nil {
-		return workflow.ArtifactRef{}, fmt.Errorf("create artifact temporary file: %w", err)
+		return "", fmt.Errorf("create artifact temporary file: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return workflow.ArtifactRef{}, err
+		_ = os.Remove(tmpName)
+		return "", err
 	}
 	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
-		return workflow.ArtifactRef{}, fmt.Errorf("write artifact: %w", err)
+		_ = os.Remove(tmpName)
+		return "", fmt.Errorf("write artifact: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return workflow.ArtifactRef{}, fmt.Errorf("sync artifact: %w", err)
+		_ = os.Remove(tmpName)
+		return "", fmt.Errorf("sync artifact: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return workflow.ArtifactRef{}, err
+		_ = os.Remove(tmpName)
+		return "", err
 	}
+	return tmpName, nil
+}
+
+func (s *Store) publish(
+	ctx context.Context, dir, tmpName, target, digest string, body []byte,
+) error {
 	if err := os.Link(tmpName, target); err != nil {
 		if !errors.Is(err, os.ErrExist) {
-			return workflow.ArtifactRef{}, fmt.Errorf("publish artifact: %w", err)
+			return fmt.Errorf("publish artifact: %w", err)
 		}
 		existing, readErr := s.readPath(ctx, target, digest, s.maxBytes)
 		if readErr != nil || !bytes.Equal(existing, body) {
-			return workflow.ArtifactRef{}, ErrIntegrity
+			return ErrIntegrity
 		}
 	}
 	directory, err := os.Open(dir)
 	if err != nil {
-		return workflow.ArtifactRef{}, err
+		return err
 	}
 	defer directory.Close()
 	if err := directory.Sync(); err != nil {
-		return workflow.ArtifactRef{}, fmt.Errorf("sync artifact directory: %w", err)
+		return fmt.Errorf("sync artifact directory: %w", err)
 	}
-	return ref, nil
+	return nil
 }
 
 func (s *Store) Get(ctx context.Context, ref workflow.ArtifactRef) ([]byte, error) {
@@ -133,7 +171,7 @@ func (s *Store) GetLimit(ctx context.Context, ref workflow.ArtifactRef, limit in
 	return s.readPath(ctx, filepath.Join(s.root, ref.Digest[:2], ref.Digest), ref.Digest, limit)
 }
 
-func (s *Store) readPath(ctx context.Context, path, digest string, limit int64) ([]byte, error) {
+func (*Store) readPath(ctx context.Context, path, digest string, limit int64) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
