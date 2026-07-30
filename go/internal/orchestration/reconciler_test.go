@@ -17,6 +17,7 @@ type memoryLedger struct {
 	completed []completeCall
 	retried   []retryCall
 	failed    []failureCall
+	renewals  int
 }
 
 type completeCall struct {
@@ -46,6 +47,10 @@ func (m *memoryLedger) Claim(context.Context, string, time.Time, time.Duration) 
 	}
 	m.found = false
 	return m.job, true, nil
+}
+func (m *memoryLedger) Renew(context.Context, string, string, uint64, time.Time) error {
+	m.renewals++
+	return nil
 }
 func (m *memoryLedger) CompleteAndEnqueue(
 	_ context.Context, jobID, owner string, fence uint64,
@@ -92,12 +97,14 @@ func handlersReturning(err error) map[string]Handler {
 	for _, stage := range orderedStages {
 		handlers[stage] = HandlerFunc(func(
 			_ context.Context, _ runtime.Job, ids Identities,
-		) (workflow.ArtifactRef, error) {
+		) (HandlerResult, error) {
 			if err != nil {
-				return workflow.ArtifactRef{}, err
+				return HandlerResult{}, err
 			}
 			digest := runtime.Digest([]byte(ids.ActivityID))
-			return workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}, nil
+			return HandlerResult{Artifact: workflow.ArtifactRef{
+				URI: "artifact://sha256/" + digest, Digest: digest,
+			}, Continue: true}, nil
 		})
 	}
 	return handlers
@@ -131,6 +138,42 @@ func TestOnceCompletesAndEnqueuesStableNextStage(t *testing.T) {
 	expected := StableID(runID, taskID, "1", StageImplementationRequest, "job")
 	if call.next.ID != expected {
 		t.Fatalf("job id = %s, want %s", call.next.ID, expected)
+	}
+}
+
+func TestOnceHonorsStopDecisionAndRenewsLongClaim(t *testing.T) {
+	runID, taskID, owner := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: runID, TaskID: &taskID, Attempt: 1,
+		Stage: StageVerification, FencingToken: 4,
+	}}
+	handlers := handlersReturning(nil)
+	handlers[StageVerification] = HandlerFunc(func(
+		ctx context.Context, _ runtime.Job, _ Identities,
+	) (HandlerResult, error) {
+		select {
+		case <-ctx.Done():
+			return HandlerResult{}, ctx.Err()
+		case <-time.After(15 * time.Millisecond):
+		}
+		digest := runtime.Digest([]byte("failed-verification"))
+		return HandlerResult{Artifact: workflow.ArtifactRef{
+			URI: "artifact://sha256/" + digest, Digest: digest,
+		}, Continue: false}, nil
+	})
+	reconciler, err := New(Config{
+		OwnerID: owner, ClaimTTL: 30 * time.Millisecond,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Millisecond,
+	}, ledger, &memoryArtifacts{}, handlers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := reconciler.Once(t.Context()); err != nil || !worked {
+		t.Fatalf("once = %v, %v", worked, err)
+	}
+	if ledger.renewals == 0 || len(ledger.completed) != 1 ||
+		ledger.completed[0].next != nil {
+		t.Fatalf("renewals=%d completed=%#v", ledger.renewals, ledger.completed)
 	}
 }
 

@@ -114,7 +114,7 @@ func run(ctx context.Context, value config) error {
 		current := stage
 		handlers[stage] = orchestration.HandlerFunc(func(
 			ctx context.Context, job runtime.Job, ids orchestration.Identities,
-		) (workflow.ArtifactRef, error) {
+		) (orchestration.HandlerResult, error) {
 			body, err := json.Marshal(struct {
 				SchemaVersion string                   `json:"schema_version"`
 				Stage         string                   `json:"stage"`
@@ -122,9 +122,10 @@ func run(ctx context.Context, value config) error {
 				Identities    orchestration.Identities `json:"identities"`
 			}{"runtime_checkpoint.v1", current, job.ID, ids})
 			if err != nil {
-				return workflow.ArtifactRef{}, err
+				return orchestration.HandlerResult{}, err
 			}
-			return artifacts.Put(ctx, body)
+			ref, err := artifacts.Put(ctx, body)
+			return orchestration.HandlerResult{Artifact: ref, Continue: true}, err
 		})
 	}
 	reconciler, err := orchestration.New(orchestration.Config{

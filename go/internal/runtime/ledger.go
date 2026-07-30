@@ -317,6 +317,46 @@ func (l *Ledger) Complete(
 	return nil
 }
 
+func (l *Ledger) Renew(
+	ctx context.Context, jobID, owner string, fence uint64, expires time.Time,
+) error {
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs
+		SET claim_expires_at=$4,updated_at=now()
+		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
+		jobID, owner, fence, expires.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return l.classifyJobUpdate(ctx, jobID)
+	}
+	return nil
+}
+
+func (l *Ledger) CompletedResult(
+	ctx context.Context, runID string, taskID *string, attempt uint32, stage string,
+) (workflow.ArtifactRef, error) {
+	var task any
+	if taskID != nil {
+		task = *taskID
+	}
+	var ref workflow.ArtifactRef
+	err := l.pool.QueryRow(ctx, `SELECT result_uri,result_digest
+		FROM runtime_stage_jobs WHERE run_id=$1 AND task_id IS NOT DISTINCT FROM $2
+		AND attempt=$3 AND stage=$4 AND state='COMPLETED'`,
+		runID, task, attempt, stage).Scan(&ref.URI, &ref.Digest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workflow.ArtifactRef{}, ErrNotFound
+	}
+	if err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	if err := ref.Validate(); err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	return ref, nil
+}
+
 func (l *Ledger) CompleteAndEnqueue(
 	ctx context.Context,
 	jobID, owner string,
