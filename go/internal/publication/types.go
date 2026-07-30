@@ -58,13 +58,13 @@ type Request struct {
 }
 
 type Result struct {
-	PublicationID       string
-	Branch              string
-	CandidateCommit     string
-	PullRequestNumber   int64
-	PullRequestURL      string
-	PublicationArtifact workflow.ArtifactRef
-	Replay              bool
+	PublicationID       string               `json:"publication_id"`
+	Branch              string               `json:"branch"`
+	CandidateCommit     string               `json:"candidate_commit"`
+	PullRequestNumber   int64                `json:"pull_request_number"`
+	PullRequestURL      string               `json:"pull_request_url"`
+	PublicationArtifact workflow.ArtifactRef `json:"publication_artifact"`
+	Replay              bool                 `json:"replay"`
 }
 
 type DraftPullRequest struct {
