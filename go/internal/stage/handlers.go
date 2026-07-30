@@ -300,15 +300,36 @@ func (h *Handlers) execute(
 	if err := proto.Unmarshal(proposalBody, &proposal); err != nil {
 		return orchestration.HandlerResult{}, err
 	}
+	expectedRevision, err := executionExpectedRevision(task)
+	if err != nil {
+		return orchestration.HandlerResult{}, err
+	}
 	result, err := h.execution.Execute(ctx, execution.Request{
-		ExecutionID: ids.ExecutionID, ExecutionTimestamp: h.now(),
-		Implementation: request, Proposal: &proposal, ProposalArtifact: proposalRef,
-		Lease: *task.Lease, ExpectedTaskRevision: task.Revision,
+		ExecutionID:        ids.ExecutionID,
+		ExecutionTimestamp: request.GetEnvelope().GetCreatedAt().AsTime(),
+		Implementation:     request, Proposal: &proposal, ProposalArtifact: proposalRef,
+		Lease: *task.Lease, ExpectedTaskRevision: expectedRevision,
 	})
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
 	return orchestration.HandlerResult{Artifact: result.ReportArtifact, Continue: true}, nil
+}
+
+func executionExpectedRevision(task workflow.Task) (uint64, error) {
+	switch task.State {
+	case workflow.TaskStateReasoning:
+		return task.Revision, nil
+	case workflow.TaskStateExecuting:
+		if task.Revision > 1 {
+			return task.Revision - 1, nil
+		}
+	case workflow.TaskStateVerifying:
+		if task.Revision > 2 {
+			return task.Revision - 2, nil
+		}
+	}
+	return 0, fmt.Errorf("task state %s cannot resume execution", task.State)
 }
 
 func (h *Handlers) verify(

@@ -130,6 +130,18 @@ func (h *memoryExecutionHandle) Replay() (Result, bool) {
 	return cloneResult(*h.replay), true
 }
 
+func (h *memoryExecutionHandle) Abandon(_ context.Context) error {
+	h.ledger.mu.Lock()
+	defer h.ledger.mu.Unlock()
+	record, ok := h.ledger.records[h.executionID]
+	if !ok || record.digest != h.digest || record.owner != h.owner || record.result != nil {
+		return ErrExecutionConflict
+	}
+	record.reservedUntil = h.ledger.now()
+	h.ledger.records[h.executionID] = record
+	return nil
+}
+
 func (h *memoryExecutionHandle) FinalTransitionTime(
 	_ context.Context, value time.Time,
 ) (time.Time, error) {

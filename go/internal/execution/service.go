@@ -157,12 +157,20 @@ func (s *Service) runExecution(ctx context.Context, request Request) (Result, er
 		replay.Replay = true
 		return replay, nil
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			_ = handle.Abandon(context.WithoutCancel(ctx))
+		}
+	}()
 	releaseCapacity, err := s.acquireCapacity(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	defer releaseCapacity()
-	return s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
+	result, err := s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
+	completed = err == nil
+	return result, err
 }
 
 func (s *Service) acquireCapacity(ctx context.Context) (func(), error) {
@@ -203,7 +211,8 @@ func (s *Service) executeReserved(
 	}
 	accepted, err := s.workflow.ExecuteTask(ctx, workflow.AcceptTaskProposal{
 		Meta: s.commandEnvelope(
-			request.ExecutionID, "accept", request.ExpectedTaskRevision, s.now().UTC(),
+			request.ExecutionID, "accept", request.ExpectedTaskRevision,
+			request.ExecutionTimestamp.UTC(),
 		),
 		Run: mappedRequest.Envelope.RunID, ID: mappedRequest.ApprovedTaskID,
 		Proposal: request.ProposalArtifact, Lease: request.Lease,
