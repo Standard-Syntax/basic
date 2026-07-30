@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	AnthropicProvider       = "anthropic"
-	defaultProviderTimeout  = 5 * time.Minute
-	estimatedBytesPerToken  = 4
-	maximumProviderAttempts = 3
+	AnthropicProvider        = "anthropic"
+	MiniMaxAnthropicProvider = "minimax-anthropic"
+	defaultProviderTimeout   = 5 * time.Minute
+	estimatedBytesPerToken   = 4
+	maximumProviderAttempts  = 3
 )
 
 var (
@@ -124,6 +125,12 @@ func withAnthropicMessageSender(sender MessageSender) AnthropicOption {
 	}
 }
 
+func WithMiniMaxCompatibility() AnthropicOption {
+	return func(runtime *anthropicRuntime) {
+		runtime.miniMax = true
+	}
+}
+
 type anthropicRuntime struct {
 	credentials CredentialSource
 	models      CapabilityModelResolver
@@ -133,6 +140,7 @@ type anthropicRuntime struct {
 	sender      MessageSender
 	timeout     time.Duration
 	sleep       func(context.Context, time.Duration) error
+	miniMax     bool
 }
 
 func newAnthropicRuntime(
@@ -240,11 +248,13 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 			anthropic.NewTextBlock(user),
 		)},
 		Temperature: param.NewOpt(agentManifest.Model.Temperature),
-		OutputConfig: anthropic.OutputConfigParam{
+	}
+	if !a.runtime.miniMax {
+		params.OutputConfig = anthropic.OutputConfigParam{
 			Format: anthropic.JSONOutputFormatParam{
 				Schema: implementationOutputSchema(),
 			},
-		},
+		}
 	}
 	message, attempts, err := a.runtime.sendWithRetry(
 		ctx, key, &params,
@@ -262,7 +272,7 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 	response := []byte(message.RawJSON())
 	result := AdapterResult{
 		ProviderResponse: response, ProviderRequestID: message.ID,
-		Provider: AnthropicProvider, Model: string(message.Model),
+		Provider: a.runtime.providerName(), Model: string(message.Model),
 		Usage: Usage{
 			InputTokens: uint64(maxInt64(
 				0, message.Usage.InputTokens+
@@ -531,7 +541,30 @@ func (r *anthropicRuntime) renderImplementation(
 			maximumTokens {
 		return "", "", errors.New("rendered provider context exceeds input token budget")
 	}
-	return string(prompt), string(user), nil
+	system, err := r.systemPrompt(prompt, implementationOutputSchema())
+	if err != nil {
+		return "", "", err
+	}
+	return system, string(user), nil
+}
+
+func (r *anthropicRuntime) providerName() string {
+	if r.miniMax {
+		return MiniMaxAnthropicProvider
+	}
+	return AnthropicProvider
+}
+
+func (r *anthropicRuntime) systemPrompt(prompt []byte, schema map[string]any) (string, error) {
+	if !r.miniMax {
+		return string(prompt), nil
+	}
+	body, err := json.Marshal(schema)
+	if err != nil {
+		return "", err
+	}
+	return string(prompt) + "\n\nReturn exactly one JSON object and no other text. " +
+		"The object must conform to this closed schema:\n" + string(body), nil
 }
 
 func implementationRequestWithoutInlineContext(

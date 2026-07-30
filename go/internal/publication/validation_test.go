@@ -5,7 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
+	"google.golang.org/protobuf/proto"
 )
 
 type boundedArtifactStore struct {
@@ -45,5 +47,20 @@ func TestLoadArtifactDelegatesLimitBeforeMaterialization(t *testing.T) {
 	}
 	if store.requestedLimit != limit {
 		t.Fatalf("requested limit = %d", store.requestedLimit)
+	}
+}
+
+func TestSpecificationArtifactAcceptsDeterministicProtobuf(t *testing.T) {
+	body, err := proto.MarshalOptions{Deterministic: true}.Marshal(
+		&reasoningv1.SpecificationProposal{Title: "Approved protobuf specification"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validSpecificationArtifact(body) {
+		t.Fatal("deterministic Protobuf specification artifact rejected")
+	}
+	if title := specificationTitle(body); title != "Approved protobuf specification" {
+		t.Fatalf("specification title = %q", title)
 	}
 }

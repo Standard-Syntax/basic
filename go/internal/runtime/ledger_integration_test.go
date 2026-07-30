@@ -4,8 +4,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -167,4 +170,136 @@ func TestPostgresCompleteAndEnqueueIsAtomic(t *testing.T) {
 	if sourceState != "COMPLETED" || nextState != "READY" {
 		t.Fatalf("states = %q, %q", sourceState, nextState)
 	}
+}
+
+func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	if err := workflow.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
+		Meta: workflow.CommandEnvelope{
+			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
+			Timestamp: at, CorrelationID: commandID, CausationID: commandID,
+		},
+		ID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := NewBindingRepository(pool)
+	intake := artifactRef("intake")
+	binding := RunBinding{
+		RunID: runID, Intake: intake,
+		BaseCommit: "0123456789012345678901234567890123456789", CreatedAt: at,
+	}
+	if err := repository.CreateRun(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.CreateRun(ctx, binding); err != nil {
+		t.Fatalf("exact intake replay: %v", err)
+	}
+	repositoryMap := artifactRef("repository")
+	if err := repository.CheckpointRepository(ctx, runID, repositoryMap); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.CheckpointRepository(ctx, runID, repositoryMap); err != nil {
+		t.Fatalf("exact checkpoint replay: %v", err)
+	}
+	if err := repository.CheckpointRepository(ctx, runID, artifactRef("changed")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed checkpoint = %v", err)
+	}
+	got, err := repository.GetRun(ctx, runID)
+	if err != nil || got.RepositoryMap == nil || *got.RepositoryMap != repositoryMap {
+		t.Fatalf("binding = %#v, %v", got, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM runtime_run_bindings WHERE run_id=$1`, runID); err == nil {
+		t.Fatal("binding deletion succeeded")
+	}
+}
+
+func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	if err := workflow.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ledger := NewLedger(pool)
+	request := IdempotencyRequest{
+		Key: uuid.NewString(), Method: "POST", Target: "/v1/runs",
+		PrincipalID: uuid.NewString(), RequestDigest: Digest([]byte("request")),
+	}
+	first, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || first.Replay || first.FencingToken != 1 {
+		t.Fatalf("initial reservation = %#v, %v", first, err)
+	}
+	if _, err := ledger.BeginIdempotency(ctx, request); !errors.Is(err, ErrInProgress) {
+		t.Fatalf("live reservation = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE runtime_api_idempotency
+		SET reservation_expires_at=now()-interval '1 second'
+		WHERE idempotency_key=$1`, request.Key); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || recovered.Replay || recovered.FencingToken != 2 {
+		t.Fatalf("recovered reservation = %#v, %v", recovered, err)
+	}
+	if err := ledger.AbandonIdempotency(
+		ctx, request.Key, first.FencingToken,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale abandon = %v", err)
+	}
+	if err := ledger.AbandonIdempotency(
+		ctx, request.Key, recovered.FencingToken,
+	); err != nil {
+		t.Fatalf("current abandon = %v", err)
+	}
+	current, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || current.Replay || current.FencingToken != 3 {
+		t.Fatalf("post-abandon reservation = %#v, %v", current, err)
+	}
+	response := json.RawMessage(`{"ok":true}`)
+	if err := ledger.CompleteIdempotency(
+		ctx, request.Key, recovered.FencingToken, http.StatusCreated, response,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale completion = %v", err)
+	}
+	if err := ledger.CompleteIdempotency(
+		ctx, request.Key, current.FencingToken, http.StatusCreated, response,
+	); err != nil {
+		t.Fatalf("current completion = %v", err)
+	}
+	replay, err := ledger.BeginIdempotency(ctx, request)
+	var gotResponse, wantResponse any
+	gotJSONErr := json.Unmarshal(replay.Response, &gotResponse)
+	wantJSONErr := json.Unmarshal(response, &wantResponse)
+	if err != nil || gotJSONErr != nil || wantJSONErr != nil || !replay.Replay ||
+		replay.StatusCode != http.StatusCreated || !reflect.DeepEqual(gotResponse, wantResponse) {
+		t.Fatalf("completed replay = %#v, %v", replay, err)
+	}
+}
+
+func artifactRef(value string) workflow.ArtifactRef {
+	digest := Digest([]byte(value))
+	return workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
 }

@@ -109,12 +109,11 @@ func TestPostgresExecutionReservationRecoveryAndConcurrentMigration(t *testing.T
 		RequestDigest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 		Timestamp:     time.Now().UTC(), ReservationTTL: time.Minute,
 	}
-	if _, err := ledger.Begin(t.Context(), start); err != nil {
+	reserved, err := ledger.Begin(t.Context(), start)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(t.Context(), `UPDATE execution_ledger
-		SET reserved_until=clock_timestamp()-interval '1 second'
-		WHERE execution_id=$1`, start.ExecutionID); err != nil {
+	if err := reserved.Abandon(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	recovered, err := ledger.Begin(t.Context(), start)

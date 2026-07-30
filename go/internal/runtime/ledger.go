@@ -45,9 +45,18 @@ type IdempotencyRequest struct {
 }
 
 type IdempotencyResult struct {
-	StatusCode int
-	Response   json.RawMessage
-	Replay     bool
+	StatusCode   int
+	Response     json.RawMessage
+	Replay       bool
+	FencingToken uint64
+}
+
+type idempotencyReservation struct {
+	method, target, principal, digest string
+	status                            *int
+	response                          []byte
+	reservedUntil                     time.Time
+	fencingToken                      uint64
 }
 
 type Ledger struct{ pool *pgxpool.Pool }
@@ -63,41 +72,104 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 	if _, err := uuid.Parse(request.Key); err != nil {
 		return nil, fmt.Errorf("%w: idempotency key", ErrConflict)
 	}
-	tag, err := l.pool.Exec(ctx, `INSERT INTO runtime_api_idempotency
-		(idempotency_key,method,target,principal_id,request_digest)
-		VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-		request.Key, request.Method, request.Target, request.PrincipalID, request.RequestDigest)
+	now := time.Now().UTC()
+	tx, err := l.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if tag.RowsAffected() == 1 {
-		return nil, nil
-	}
-	var method, target, principal, digest string
-	var status *int
-	var response []byte
-	err = l.pool.QueryRow(ctx, `SELECT method,target,principal_id::text,request_digest,
-		status_code,response FROM runtime_api_idempotency WHERE idempotency_key=$1`,
-		request.Key).Scan(&method, &target, &principal, &digest, &status, &response)
+	defer func() { _ = tx.Rollback(ctx) }()
+	inserted, err := insertIdempotencyReservation(ctx, tx, request, now)
 	if err != nil {
 		return nil, err
 	}
-	if method != request.Method || target != request.Target ||
-		principal != request.PrincipalID || digest != request.RequestDigest {
+	if inserted {
+		return commitIdempotencyResult(ctx, tx, &IdempotencyResult{FencingToken: 1})
+	}
+	reservation, err := loadIdempotencyReservation(ctx, tx, request.Key)
+	if err != nil {
+		return nil, err
+	}
+	if !reservation.matches(request) {
 		return nil, ErrConflict
 	}
-	if status == nil {
+	if reservation.status != nil {
+		return commitIdempotencyResult(ctx, tx, &IdempotencyResult{
+			StatusCode: *reservation.status, Response: reservation.response, Replay: true,
+			FencingToken: reservation.fencingToken,
+		})
+	}
+	if reservation.reservedUntil.After(now) {
 		return nil, ErrInProgress
 	}
-	return &IdempotencyResult{StatusCode: *status, Response: response, Replay: true}, nil
+	reservation.fencingToken++
+	if err := reclaimIdempotencyReservation(ctx, tx, request.Key, reservation.fencingToken, now); err != nil {
+		return nil, err
+	}
+	return commitIdempotencyResult(ctx, tx, &IdempotencyResult{
+		FencingToken: reservation.fencingToken,
+	})
+}
+
+func insertIdempotencyReservation(
+	ctx context.Context, tx pgx.Tx, request IdempotencyRequest, now time.Time,
+) (bool, error) {
+	tag, err := tx.Exec(ctx, `INSERT INTO runtime_api_idempotency
+		(idempotency_key,method,target,principal_id,request_digest,
+		 reservation_expires_at,reservation_generation)
+		VALUES ($1,$2,$3,$4,$5,$6,1) ON CONFLICT DO NOTHING`,
+		request.Key, request.Method, request.Target, request.PrincipalID,
+		request.RequestDigest, now.Add(30*time.Second))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func loadIdempotencyReservation(
+	ctx context.Context, tx pgx.Tx, key string,
+) (idempotencyReservation, error) {
+	var reservation idempotencyReservation
+	err := tx.QueryRow(ctx, `SELECT method,target,principal_id::text,request_digest,
+		status_code,response,reservation_expires_at,reservation_generation
+		FROM runtime_api_idempotency
+		WHERE idempotency_key=$1 FOR UPDATE`, key).Scan(
+		&reservation.method, &reservation.target, &reservation.principal,
+		&reservation.digest, &reservation.status, &reservation.response,
+		&reservation.reservedUntil, &reservation.fencingToken)
+	return reservation, err
+}
+
+func (r idempotencyReservation) matches(request IdempotencyRequest) bool {
+	return r.method == request.Method && r.target == request.Target &&
+		r.principal == request.PrincipalID && r.digest == request.RequestDigest
+}
+
+func reclaimIdempotencyReservation(
+	ctx context.Context, tx pgx.Tx, key string, fencingToken uint64, now time.Time,
+) error {
+	_, err := tx.Exec(ctx, `UPDATE runtime_api_idempotency
+		SET reservation_expires_at=$2,reservation_generation=$3
+		WHERE idempotency_key=$1`,
+		key, now.Add(30*time.Second), fencingToken)
+	return err
+}
+
+func commitIdempotencyResult(
+	ctx context.Context, tx pgx.Tx, result *IdempotencyResult,
+) (*IdempotencyResult, error) {
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (l *Ledger) CompleteIdempotency(
-	ctx context.Context, key string, status int, response json.RawMessage,
+	ctx context.Context, key string, fencingToken uint64, status int, response json.RawMessage,
 ) error {
 	tag, err := l.pool.Exec(ctx, `UPDATE runtime_api_idempotency
-		SET status_code=$2,response=$3,completed_at=now()
-		WHERE idempotency_key=$1 AND completed_at IS NULL`, key, status, response)
+		SET status_code=$3,response=$4,completed_at=now()
+		WHERE idempotency_key=$1 AND reservation_generation=$2
+		  AND completed_at IS NULL`, key, fencingToken, status, response)
 	if err != nil {
 		return err
 	}
@@ -117,6 +189,38 @@ func (l *Ledger) CompleteIdempotency(
 		}
 	}
 	return nil
+}
+
+func (l *Ledger) AbandonIdempotency(
+	ctx context.Context, key string, fencingToken uint64,
+) error {
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_api_idempotency
+		SET reservation_expires_at=clock_timestamp()
+		WHERE idempotency_key=$1 AND reservation_generation=$2
+		  AND completed_at IS NULL`, key, fencingToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var generation uint64
+	var completedAt *time.Time
+	err = l.pool.QueryRow(ctx, `SELECT reservation_generation,completed_at
+		FROM runtime_api_idempotency WHERE idempotency_key=$1`, key).
+		Scan(&generation, &completedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return err
+	case completedAt != nil:
+		return ErrTerminal
+	case generation != fencingToken:
+		return ErrConflict
+	default:
+		return ErrConflict
+	}
 }
 
 func (l *Ledger) Enqueue(ctx context.Context, job Job) error {
@@ -211,6 +315,46 @@ func (l *Ledger) Complete(
 		return l.classifyJobUpdate(ctx, jobID)
 	}
 	return nil
+}
+
+func (l *Ledger) Renew(
+	ctx context.Context, jobID, owner string, fence uint64, expires time.Time,
+) error {
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs
+		SET claim_expires_at=$4,updated_at=now()
+		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
+		jobID, owner, fence, expires.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return l.classifyJobUpdate(ctx, jobID)
+	}
+	return nil
+}
+
+func (l *Ledger) CompletedResult(
+	ctx context.Context, runID string, taskID *string, attempt uint32, stage string,
+) (workflow.ArtifactRef, error) {
+	var task any
+	if taskID != nil {
+		task = *taskID
+	}
+	var ref workflow.ArtifactRef
+	err := l.pool.QueryRow(ctx, `SELECT result_uri,result_digest
+		FROM runtime_stage_jobs WHERE run_id=$1 AND task_id IS NOT DISTINCT FROM $2
+		AND attempt=$3 AND stage=$4 AND state='COMPLETED'`,
+		runID, task, attempt, stage).Scan(&ref.URI, &ref.Digest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return workflow.ArtifactRef{}, ErrNotFound
+	}
+	if err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	if err := ref.Validate(); err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	return ref, nil
 }
 
 func (l *Ledger) CompleteAndEnqueue(

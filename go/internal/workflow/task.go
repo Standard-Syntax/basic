@@ -558,7 +558,8 @@ func (t Task) rejectProposal(command RejectTaskProposal) (taskTransition, error)
 	if t.State != TaskStateReasoning {
 		return taskTransition{}, ErrInvalidTransition
 	}
-	if command.Meta.Actor.Kind != ActorHuman {
+	if command.Meta.Actor.Kind != ActorHuman &&
+		command.Meta.Actor.Kind != ActorReasoningService {
 		return taskTransition{}, ErrUnauthorized
 	}
 	if err := command.Proposal.Validate(); err != nil {

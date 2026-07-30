@@ -86,6 +86,7 @@ type ExecutionStart struct {
 
 type ExecutionHandle interface {
 	Replay() (Result, bool)
+	Abandon(context.Context) error
 	FinalTransitionTime(context.Context, time.Time) (time.Time, error)
 	Complete(context.Context, Result) error
 }

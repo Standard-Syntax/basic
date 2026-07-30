@@ -10,12 +10,14 @@ import (
 	"io"
 	"strings"
 
+	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/review"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 )
 
 type validatedInputs struct {
@@ -60,8 +62,7 @@ func validateArtifacts(
 	if err != nil {
 		return validatedInputs{}, err
 	}
-	var spec map[string]json.RawMessage
-	if err := decodeJSON(specification, &spec); err != nil || len(spec) == 0 {
+	if !validSpecificationArtifact(specification) {
 		return validatedInputs{}, fmt.Errorf("%w: approved specification", ErrArtifactIntegrity)
 	}
 	implementation, err := loadArtifact(
@@ -102,6 +103,16 @@ func validateArtifacts(
 		return validatedInputs{}, fmt.Errorf("%w: upstream bindings", ErrInvalidRequest)
 	}
 	return inputs, nil
+}
+
+func validSpecificationArtifact(body []byte) bool {
+	var proposal reasoningv1.SpecificationProposal
+	if err := proto.Unmarshal(body, &proposal); err == nil &&
+		strings.TrimSpace(proposal.GetTitle()) != "" {
+		return true
+	}
+	var legacy map[string]json.RawMessage
+	return decodeJSON(body, &legacy) == nil && len(legacy) > 0
 }
 
 func artifactsMatch(request Request, inputs validatedInputs) bool {

@@ -19,6 +19,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const executionCleanupTimeout = 5 * time.Second
+
 type Service struct {
 	config     Config
 	artifacts  ArtifactStore
@@ -157,12 +159,28 @@ func (s *Service) runExecution(ctx context.Context, request Request) (Result, er
 		replay.Replay = true
 		return replay, nil
 	}
+	completed := false
+	defer func() {
+		if !completed {
+			abandonExecutionReservation(ctx, handle, executionCleanupTimeout)
+		}
+	}()
 	releaseCapacity, err := s.acquireCapacity(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 	defer releaseCapacity()
-	return s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
+	result, err := s.executeReserved(ctx, request, mappedRequest, mappedProposal, handle)
+	completed = err == nil
+	return result, err
+}
+
+func abandonExecutionReservation(
+	ctx context.Context, handle ExecutionHandle, timeout time.Duration,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	_ = handle.Abandon(cleanupCtx)
 }
 
 func (s *Service) acquireCapacity(ctx context.Context) (func(), error) {
@@ -203,7 +221,8 @@ func (s *Service) executeReserved(
 	}
 	accepted, err := s.workflow.ExecuteTask(ctx, workflow.AcceptTaskProposal{
 		Meta: s.commandEnvelope(
-			request.ExecutionID, "accept", request.ExpectedTaskRevision, s.now().UTC(),
+			request.ExecutionID, "accept", request.ExpectedTaskRevision,
+			request.ExecutionTimestamp.UTC(),
 		),
 		Run: mappedRequest.Envelope.RunID, ID: mappedRequest.ApprovedTaskID,
 		Proposal: request.ProposalArtifact, Lease: request.Lease,

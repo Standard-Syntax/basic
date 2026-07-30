@@ -8,6 +8,7 @@ import (
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
+	"google.golang.org/protobuf/proto"
 )
 
 func renderPullRequest(
@@ -72,6 +73,11 @@ func renderPullRequest(
 }
 
 func specificationTitle(encoded []byte) string {
+	var proposal reasoningv1.SpecificationProposal
+	if err := proto.Unmarshal(encoded, &proposal); err == nil &&
+		strings.TrimSpace(proposal.GetTitle()) != "" {
+		return strings.TrimSpace(proposal.GetTitle())
+	}
 	var value map[string]json.RawMessage
 	if err := json.Unmarshal(encoded, &value); err != nil {
 		return ""

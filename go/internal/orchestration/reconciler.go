@@ -31,6 +31,7 @@ var orderedStages = []string{
 
 type JobLedger interface {
 	Claim(context.Context, string, time.Time, time.Duration) (runtime.Job, bool, error)
+	Renew(context.Context, string, string, uint64, time.Time) error
 	CompleteAndEnqueue(
 		context.Context, string, string, uint64, workflow.ArtifactRef, *runtime.Job, time.Time,
 	) error
@@ -43,14 +44,19 @@ type ArtifactStore interface {
 }
 
 type Handler interface {
-	Handle(context.Context, runtime.Job, Identities) (workflow.ArtifactRef, error)
+	Handle(context.Context, runtime.Job, Identities) (HandlerResult, error)
 }
 
-type HandlerFunc func(context.Context, runtime.Job, Identities) (workflow.ArtifactRef, error)
+type HandlerResult struct {
+	Artifact workflow.ArtifactRef
+	Continue bool
+}
+
+type HandlerFunc func(context.Context, runtime.Job, Identities) (HandlerResult, error)
 
 func (f HandlerFunc) Handle(
 	ctx context.Context, job runtime.Job, ids Identities,
-) (workflow.ArtifactRef, error) {
+) (HandlerResult, error) {
 	return f(ctx, job, ids)
 }
 
@@ -127,7 +133,15 @@ func (r *Reconciler) Once(ctx context.Context) (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
-	ids := StableIdentities(job)
+	logger := r.jobLogger(job)
+	result, handleErr := r.handle(ctx, job)
+	if handleErr == nil {
+		return true, r.complete(ctx, job, result, logger)
+	}
+	return true, r.handleFailure(ctx, job, handleErr, logger)
+}
+
+func (r *Reconciler) jobLogger(job runtime.Job) *slog.Logger {
 	logger := r.logger.With(
 		"run_id", job.RunID, "stage", job.Stage, "attempt", job.Attempt,
 		"job_id", job.ID, "fencing_token", job.FencingToken,
@@ -135,35 +149,52 @@ func (r *Reconciler) Once(ctx context.Context) (bool, error) {
 	if job.TaskID != nil {
 		logger = logger.With("task_id", *job.TaskID)
 	}
-	var result workflow.ArtifactRef
-	var handleErr error
+	return logger
+}
+
+func (r *Reconciler) handle(ctx context.Context, job runtime.Job) (HandlerResult, error) {
 	handler, ok := r.handlers[job.Stage]
 	if !ok {
-		handleErr = fmt.Errorf("no handler registered for stage %q", job.Stage)
-	} else {
-		handlerCtx, cancel := context.WithTimeout(ctx, r.config.ClaimTTL)
-		result, handleErr = handler.Handle(handlerCtx, job, ids)
-		cancel()
+		return HandlerResult{}, fmt.Errorf("no handler registered for stage %q", job.Stage)
 	}
-	if handleErr == nil {
-		var nextJob *runtime.Job
-		if next, ok := nextStage(job.Stage); ok {
-			nextJob = &runtime.Job{
-				ID:    StableID(job.RunID, taskValue(job.TaskID), fmt.Sprint(job.Attempt), next, "job"),
-				RunID: job.RunID, TaskID: job.TaskID, Attempt: job.Attempt,
-				Stage: next, AvailableAt: r.now().UTC(),
-			}
-		}
-		if err := r.ledger.CompleteAndEnqueue(
-			ctx, job.ID, r.config.OwnerID, job.FencingToken, result, nextJob, r.now(),
-		); err != nil {
-			return true, err
-		}
-		logger.Info("runtime stage completed", "result_digest", result.Digest)
-		return true, nil
+	handlerCtx, cancel := context.WithCancel(ctx)
+	heartbeatDone := make(chan error, 1)
+	go r.heartbeat(handlerCtx, cancel, job, heartbeatDone)
+	result, handleErr := handler.Handle(handlerCtx, job, StableIdentities(job))
+	cancel()
+	heartbeatErr := <-heartbeatDone
+	if handleErr == nil && heartbeatErr != nil {
+		handleErr = heartbeatErr
 	}
+	return result, handleErr
+}
+
+func (r *Reconciler) complete(
+	ctx context.Context, job runtime.Job, result HandlerResult, logger *slog.Logger,
+) error {
+	var nextJob *runtime.Job
+	if next, ok := nextStage(job.Stage); result.Continue && ok {
+		nextJob = &runtime.Job{
+			ID:    StableID(job.RunID, taskValue(job.TaskID), fmt.Sprint(job.Attempt), next, "job"),
+			RunID: job.RunID, TaskID: job.TaskID, Attempt: job.Attempt,
+			Stage: next, AvailableAt: r.now().UTC(),
+		}
+	}
+	if err := r.ledger.CompleteAndEnqueue(
+		ctx, job.ID, r.config.OwnerID, job.FencingToken, result.Artifact, nextJob, r.now(),
+	); err != nil {
+		return err
+	}
+	logger.Info("runtime stage completed", "result_digest", result.Artifact.Digest,
+		"continue", result.Continue)
+	return nil
+}
+
+func (r *Reconciler) handleFailure(
+	ctx context.Context, job runtime.Job, handleErr error, logger *slog.Logger,
+) error {
 	if errors.Is(handleErr, context.Canceled) || errors.Is(handleErr, context.DeadlineExceeded) {
-		return true, handleErr
+		return handleErr
 	}
 	if job.RetryCount+1 < r.config.MaxRetries {
 		backoff := r.config.InitialBackoff << job.RetryCount
@@ -174,27 +205,61 @@ func (r *Reconciler) Once(ctx context.Context) (bool, error) {
 			ctx, job.ID, r.config.OwnerID, job.FencingToken, r.now().Add(backoff),
 		)
 		logger.Warn("runtime stage scheduled for retry", "error", handleErr, "backoff", backoff)
-		return true, err
+		return err
 	}
+	return r.fail(ctx, job, handleErr, logger)
+}
+
+func (r *Reconciler) fail(
+	ctx context.Context, job runtime.Job, handleErr error, logger *slog.Logger,
+) error {
 	body, marshalErr := json.Marshal(struct {
 		SchemaVersion string      `json:"schema_version"`
 		Job           runtime.Job `json:"job"`
 		Error         string      `json:"error"`
 	}{SchemaVersion: "runtime_failure.v1", Job: job, Error: handleErr.Error()})
 	if marshalErr != nil {
-		return true, marshalErr
+		return marshalErr
 	}
 	failure, err := r.artifacts.Put(ctx, body)
 	if err != nil {
-		return true, err
+		return err
 	}
 	if err := r.ledger.Fail(
 		ctx, job.ID, r.config.OwnerID, job.FencingToken, failure, r.now(),
 	); err != nil {
-		return true, err
+		return err
 	}
 	logger.Error("runtime stage exhausted retries", "failure_digest", failure.Digest)
-	return true, nil
+	return nil
+}
+
+func (r *Reconciler) heartbeat(
+	ctx context.Context, cancel context.CancelFunc, job runtime.Job, done chan<- error,
+) {
+	interval := r.config.ClaimTTL / 3
+	timer := time.NewTicker(interval)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			done <- nil
+			return
+		case <-timer.C:
+			expires := r.now().UTC().Add(r.config.ClaimTTL)
+			if err := r.ledger.Renew(
+				ctx, job.ID, r.config.OwnerID, job.FencingToken, expires,
+			); err != nil {
+				if ctx.Err() != nil {
+					done <- nil
+					return
+				}
+				cancel()
+				done <- err
+				return
+			}
+		}
+	}
 }
 
 func StableIdentities(job runtime.Job) Identities {

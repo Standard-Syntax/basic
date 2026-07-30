@@ -116,6 +116,21 @@ func (h *postgresExecutionHandle) Replay() (Result, bool) {
 	return cloneResult(*h.replay), true
 }
 
+func (h *postgresExecutionHandle) Abandon(ctx context.Context) error {
+	tag, err := h.ledger.pool.Exec(ctx, `UPDATE execution_ledger
+		SET reserved_until=clock_timestamp()
+		WHERE execution_id=$1 AND request_digest=$2 AND owner_id=$3 AND state='reserved'`,
+		h.executionID, h.digest, h.owner,
+	)
+	if err != nil {
+		return fmt.Errorf("abandon execution reservation: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrExecutionConflict
+	}
+	return nil
+}
+
 func (h *postgresExecutionHandle) FinalTransitionTime(
 	ctx context.Context, value time.Time,
 ) (time.Time, error) {

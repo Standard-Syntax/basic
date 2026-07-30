@@ -188,9 +188,9 @@ func TestImplementationRequestRejectsUntrustedRepositoryContext(t *testing.T) {
 	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
 		t.Fatal(err)
 	}
-	request.RepositoryContext[0].Path = "go/gen/secret.go"
+	request.RepositoryContext[0].Path = "docs/secret.go"
 	if _, err := MapImplementationRequest(&request); err == nil {
-		t.Fatal("prohibited repository context accepted")
+		t.Fatal("repository context outside readable scope accepted")
 	}
 	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
 		t.Fatal(err)
@@ -198,6 +198,25 @@ func TestImplementationRequestRejectsUntrustedRepositoryContext(t *testing.T) {
 	request.Envelope.InputArtifacts = request.Envelope.InputArtifacts[:1]
 	if _, err := MapImplementationRequest(&request); err == nil {
 		t.Fatal("repository context without envelope artifact binding accepted")
+	}
+}
+
+func TestImplementationRequestAllowsProtectedReadableContext(t *testing.T) {
+	var request reasoningv1.ImplementationRequest
+	if err := proto.Unmarshal(implementationFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	protectedPath := request.RepositoryContext[0].GetPath()
+	request.WritablePaths = []string{"go/internal/reasoning/other.go"}
+	request.ProhibitedPaths = append(request.ProhibitedPaths, protectedPath)
+
+	mapped, err := MapImplementationRequest(&request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mapped.RepositoryContext) != 1 ||
+		mapped.RepositoryContext[0].Path != protectedPath {
+		t.Fatal("protected readable repository context was discarded")
 	}
 }
 
