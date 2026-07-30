@@ -3,39 +3,34 @@
   "checkpoint_id": "01KYRJ0ZH9NM9RGRC757ZVD3VY",
   "session_id": "019fb117-3a56-72c1-b4e2-2cb18d07b44e",
   "strategy": "manual-commit",
-  "created_at": "2026-07-30T03:45:25.216435639Z",
+  "created_at": "2026-07-30T03:45:32.366009498Z",
   "branch": "phase12/stage-composition",
   "checkpoints_count": 1,
+  "save_step_count": 1,
   "files_touched": [
-    "go/internal/orchestration/reconciler.go",
-    "go/internal/orchestration/reconciler_test.go",
-    "go/internal/runtime/ledger.go",
-    "go/internal/stage/handlers.go",
-    "go/internal/workflow/task.go"
+    "go/cmd/workflow-service/main.go"
   ],
   "agent": "Codex",
   "model": "gpt-5.6-sol",
   "turn_id": "0e3b50308ac1",
-  "checkpoint_transcript_start": 117,
-  "transcript_lines_at_start": 117,
-  "compact_transcript_start": 23,
+  "compact_transcript_start": 0,
   "token_usage": {
-    "input_tokens": 49948,
+    "input_tokens": 186728,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 3278848,
-    "output_tokens": 12125,
-    "api_call_count": 24
+    "cache_read_tokens": 5387520,
+    "output_tokens": 27169,
+    "api_call_count": 48
   },
   "initial_attribution": {
-    "calculated_at": "2026-07-30T03:45:25.164382153Z",
-    "agent_lines": 650,
-    "agent_removed": 12,
-    "human_added": 0,
+    "calculated_at": "2026-07-30T03:45:32.313704898Z",
+    "agent_lines": 4,
+    "agent_removed": 3,
+    "human_added": 650,
     "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 650,
-    "total_lines_changed": 662,
-    "agent_percentage": 100,
+    "total_committed": 654,
+    "total_lines_changed": 669,
+    "agent_percentage": 1.046337817638266,
     "metric_version": 2
   }
 }

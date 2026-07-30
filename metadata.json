@@ -5,11 +5,7 @@
   "branch": "phase12/stage-composition",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/orchestration/reconciler.go",
-    "go/internal/orchestration/reconciler_test.go",
-    "go/internal/runtime/ledger.go",
-    "go/internal/stage/handlers.go",
-    "go/internal/workflow/task.go"
+    "go/cmd/workflow-service/main.go"
   ],
   "sessions": [
     {
@@ -21,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 49948,
+    "input_tokens": 186728,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 3278848,
-    "output_tokens": 12125,
-    "api_call_count": 24
+    "cache_read_tokens": 5387520,
+    "output_tokens": 27169,
+    "api_call_count": 48
   }
 }
