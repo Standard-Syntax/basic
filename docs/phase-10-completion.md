@@ -25,6 +25,8 @@ choices behind the same consumer-owned gateway seams.
 - Model IDs are capability configuration, never manifest or model output.
 - Prompt and input artifacts are SHA-256 verified and secret guarded.
 - Requests are non-streaming, tool-free, single-turn Messages calls.
+- Golden `1.1.0` prompt request capabilities remain kernel-mediated and are
+  unavailable inside those tool-free calls.
 - Provider schemas are internal, closed, and exclude trusted identity.
 - At most three network attempts fit within request count, lifetime, caller,
   and configured timeout.
@@ -58,6 +60,9 @@ The real-provider smoke is separate and explicit:
 ANTHROPIC_API_KEY='...' ANTHROPIC_MODEL='...' make provider-smoke
 ```
 
-It performs one live implementation and one live review request and fails
-instead of skipping if credentials, model configuration, provider responses,
-or unchanged kernel validation fail.
+It loads the committed implementation and review prompts, performs one live
+request for each stage, and fails instead of skipping if credentials, model
+configuration, closed-schema decoding, or unchanged kernel validation fail.
+The implementation input includes adversarial scope/schema instructions. The
+review input conflicts an implementation narrative with independent evidence
+and requires the evidence hierarchy to win.

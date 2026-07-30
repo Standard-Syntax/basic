@@ -42,6 +42,25 @@ projections containing only model-owned proposal fields. The adapter injects
 `ProposalIdentity`, approved task/specification bindings, manifest digest, and
 input-artifact digests from the trusted request. Valid projections must still
 pass the same `MapImplementationProposal` or `MapReviewProposal` validators.
+Provider prompts therefore instruct models to populate only fields exposed by
+the provider-supplied closed schema. Trusted Go, not the model, injects request,
+task, specification, manifest, candidate, and artifact identities before
+kernel validation.
+
+Matched prompt protocol `1.1.0` applies one proposal-only authority and evidence
+discipline across all four v1 stages while using only fields each stage
+actually supports. Specification uses blocking `questions`; planning uses
+`unresolved_scope_questions`; implementation uses `unresolved_questions` and
+an advisory `scope_change_request`; review uses `rework_required`, assumptions,
+and residual risks when evidence cannot support evaluation. Review findings may
+reference only supplied independent evidence IDs, and blocking recommendations
+remain derived from the trusted review policy.
+
+V1 has no universal blocker or evidence-request result structure. In
+particular, a scope-change-only or otherwise incomplete implementation
+proposal can fail required-coverage validation and leave workflow state
+unchanged. Universal blocker handling, generic tool loops, and live provider
+adapters for specification and planning remain deferred.
 
 Malformed complete provider responses are typed adapter results that only the
 gateway translates to `SCHEMA_INVALID` and persists with the exact raw
