@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYRJ0ZH9NM9RGRC757ZVD3VY",
+  "strategy": "manual-commit",
+  "branch": "phase12/stage-composition",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/orchestration/reconciler.go",
+    "go/internal/orchestration/reconciler_test.go",
+    "go/internal/runtime/ledger.go",
+    "go/internal/stage/handlers.go",
+    "go/internal/workflow/task.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 49948,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3278848,
+    "output_tokens": 12125,
+    "api_call_count": 24
+  }
+}
