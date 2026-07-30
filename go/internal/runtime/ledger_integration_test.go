@@ -4,7 +4,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"sync"
 	"testing"
@@ -245,8 +247,9 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 		Key: uuid.NewString(), Method: "POST", Target: "/v1/runs",
 		PrincipalID: uuid.NewString(), RequestDigest: Digest([]byte("request")),
 	}
-	if replay, err := ledger.BeginIdempotency(ctx, request); err != nil || replay != nil {
-		t.Fatalf("initial reservation = %#v, %v", replay, err)
+	first, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || first.Replay || first.FencingToken != 1 {
+		t.Fatalf("initial reservation = %#v, %v", first, err)
 	}
 	if _, err := ledger.BeginIdempotency(ctx, request); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("live reservation = %v", err)
@@ -256,8 +259,25 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 		WHERE idempotency_key=$1`, request.Key); err != nil {
 		t.Fatal(err)
 	}
-	if replay, err := ledger.BeginIdempotency(ctx, request); err != nil || replay != nil {
-		t.Fatalf("recovered reservation = %#v, %v", replay, err)
+	recovered, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || recovered.Replay || recovered.FencingToken != 2 {
+		t.Fatalf("recovered reservation = %#v, %v", recovered, err)
+	}
+	response := json.RawMessage(`{"ok":true}`)
+	if err := ledger.CompleteIdempotency(
+		ctx, request.Key, first.FencingToken, http.StatusCreated, response,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale completion = %v", err)
+	}
+	if err := ledger.CompleteIdempotency(
+		ctx, request.Key, recovered.FencingToken, http.StatusCreated, response,
+	); err != nil {
+		t.Fatalf("current completion = %v", err)
+	}
+	replay, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || !replay.Replay || replay.StatusCode != http.StatusCreated ||
+		string(replay.Response) != string(response) {
+		t.Fatalf("completed replay = %#v, %v", replay, err)
 	}
 }
 

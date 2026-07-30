@@ -51,7 +51,7 @@ type WorkflowStore interface {
 
 type IdempotencyLedger interface {
 	BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error)
-	CompleteIdempotency(context.Context, string, int, json.RawMessage) error
+	CompleteIdempotency(context.Context, string, uint64, int, json.RawMessage) error
 	Enqueue(context.Context, runtime.Job) error
 	CancelRun(context.Context, string, time.Time) error
 }
@@ -278,14 +278,14 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		Key: key, Method: request.Method, Target: request.URL.RequestURI(),
 		PrincipalID: principal.ID, RequestDigest: runtime.Digest(raw),
 	}
-	replay, err := s.runtime.BeginIdempotency(request.Context(), idem)
+	reservation, err := s.runtime.BeginIdempotency(request.Context(), idem)
 	if err != nil {
 		s.writeDomainError(w, err)
 		return
 	}
-	if replay != nil {
+	if reservation.Replay {
 		w.Header().Set("Idempotent-Replay", "true")
-		writeRawJSON(w, replay.StatusCode, replay.Response)
+		writeRawJSON(w, reservation.StatusCode, reservation.Response)
 		return
 	}
 	status, response, err := s.applyMutation(request, principal, key, body)
@@ -297,7 +297,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 			return
 		}
 		if completeErr := s.runtime.CompleteIdempotency(
-			request.Context(), key, status, encoded,
+			request.Context(), key, reservation.FencingToken, status, encoded,
 		); completeErr != nil {
 			s.writeDomainError(w, completeErr)
 			return
@@ -310,7 +310,9 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeError(w, http.StatusInternalServerError, "internal", "encode response")
 		return
 	}
-	if err := s.runtime.CompleteIdempotency(request.Context(), key, status, encoded); err != nil {
+	if err := s.runtime.CompleteIdempotency(
+		request.Context(), key, reservation.FencingToken, status, encoded,
+	); err != nil {
 		s.writeDomainError(w, err)
 		return
 	}

@@ -7,14 +7,24 @@ ALTER TABLE runtime_run_bindings
     CHECK ((repository_map_uri IS NULL) = (repository_map_digest IS NULL));
 
 ALTER TABLE runtime_api_idempotency
-    ADD COLUMN reservation_expires_at timestamptz;
+    ADD COLUMN reservation_expires_at timestamptz,
+    ADD COLUMN reservation_generation bigint;
 
 UPDATE runtime_api_idempotency
-SET reservation_expires_at = COALESCE(completed_at, created_at)
-WHERE reservation_expires_at IS NULL;
+SET reservation_expires_at = CASE
+        WHEN status_code IS NULL AND completed_at IS NULL
+            THEN now() + interval '30 seconds'
+        ELSE COALESCE(completed_at, created_at)
+    END,
+    reservation_generation = 1
+WHERE reservation_expires_at IS NULL
+   OR reservation_generation IS NULL;
 
 ALTER TABLE runtime_api_idempotency
-    ALTER COLUMN reservation_expires_at SET NOT NULL;
+    ALTER COLUMN reservation_expires_at SET NOT NULL,
+    ALTER COLUMN reservation_generation SET NOT NULL,
+    ADD CONSTRAINT runtime_idempotency_generation_positive
+        CHECK (reservation_generation > 0);
 
 CREATE FUNCTION protect_runtime_run_binding()
 RETURNS trigger

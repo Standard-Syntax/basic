@@ -45,9 +45,10 @@ type IdempotencyRequest struct {
 }
 
 type IdempotencyResult struct {
-	StatusCode int
-	Response   json.RawMessage
-	Replay     bool
+	StatusCode   int
+	Response     json.RawMessage
+	Replay       bool
+	FencingToken uint64
 }
 
 type Ledger struct{ pool *pgxpool.Pool }
@@ -70,24 +71,31 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx, `INSERT INTO runtime_api_idempotency
-		(idempotency_key,method,target,principal_id,request_digest,reservation_expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+		(idempotency_key,method,target,principal_id,request_digest,
+		 reservation_expires_at,reservation_generation)
+		VALUES ($1,$2,$3,$4,$5,$6,1) ON CONFLICT DO NOTHING`,
 		request.Key, request.Method, request.Target, request.PrincipalID,
 		request.RequestDigest, now.Add(30*time.Second))
 	if err != nil {
 		return nil, err
 	}
 	if tag.RowsAffected() == 1 {
-		return nil, tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return &IdempotencyResult{FencingToken: 1}, nil
 	}
 	var method, target, principal, digest string
 	var status *int
 	var response []byte
 	var reservedUntil time.Time
+	var fencingToken uint64
 	err = tx.QueryRow(ctx, `SELECT method,target,principal_id::text,request_digest,
-		status_code,response,reservation_expires_at FROM runtime_api_idempotency
+		status_code,response,reservation_expires_at,reservation_generation
+		FROM runtime_api_idempotency
 		WHERE idempotency_key=$1 FOR UPDATE`, request.Key).Scan(
-		&method, &target, &principal, &digest, &status, &response, &reservedUntil)
+		&method, &target, &principal, &digest, &status, &response, &reservedUntil,
+		&fencingToken)
 	if err != nil {
 		return nil, err
 	}
@@ -99,26 +107,35 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 		if reservedUntil.After(now) {
 			return nil, ErrInProgress
 		}
+		fencingToken++
 		_, err = tx.Exec(ctx, `UPDATE runtime_api_idempotency
-			SET reservation_expires_at=$2 WHERE idempotency_key=$1`,
-			request.Key, now.Add(30*time.Second))
+			SET reservation_expires_at=$2,reservation_generation=$3
+			WHERE idempotency_key=$1`,
+			request.Key, now.Add(30*time.Second), fencingToken)
 		if err != nil {
 			return nil, err
 		}
-		return nil, tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return &IdempotencyResult{FencingToken: fencingToken}, nil
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	return &IdempotencyResult{StatusCode: *status, Response: response, Replay: true}, nil
+	return &IdempotencyResult{
+		StatusCode: *status, Response: response, Replay: true,
+		FencingToken: fencingToken,
+	}, nil
 }
 
 func (l *Ledger) CompleteIdempotency(
-	ctx context.Context, key string, status int, response json.RawMessage,
+	ctx context.Context, key string, fencingToken uint64, status int, response json.RawMessage,
 ) error {
 	tag, err := l.pool.Exec(ctx, `UPDATE runtime_api_idempotency
-		SET status_code=$2,response=$3,completed_at=now()
-		WHERE idempotency_key=$1 AND completed_at IS NULL`, key, status, response)
+		SET status_code=$3,response=$4,completed_at=now()
+		WHERE idempotency_key=$1 AND reservation_generation=$2
+		  AND completed_at IS NULL`, key, fencingToken, status, response)
 	if err != nil {
 		return err
 	}

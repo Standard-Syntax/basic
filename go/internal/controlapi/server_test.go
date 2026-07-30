@@ -52,9 +52,11 @@ type fakeRuntime struct {
 
 func (f *fakeRuntime) BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error) {
 	f.begins++
-	return nil, nil
+	return &runtime.IdempotencyResult{FencingToken: 1}, nil
 }
-func (f *fakeRuntime) CompleteIdempotency(context.Context, string, int, json.RawMessage) error {
+func (f *fakeRuntime) CompleteIdempotency(
+	context.Context, string, uint64, int, json.RawMessage,
+) error {
 	f.completes++
 	return nil
 }
