@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYSW5F1HJDPFNFYFWEWGR0KH",
+  "session_id": "019fb35a-9601-7722-8de4-0e54f4756fd2",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-30T16:01:52.382038242Z",
+  "branch": "prompt-protocol/v1.1.0",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "docs/agent-manifest.md",
+    "docs/phase-10-completion.md",
+    "docs/reasoning-contracts.md",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/provider_smoke_test.go",
+    "python/agents/implementation.json",
+    "python/agents/planning.json",
+    "python/agents/review.json",
+    "python/agents/specification.json",
+    "python/prompts/implementation.md",
+    "python/prompts/planning.md",
+    "python/prompts/review.md",
+    "python/prompts/specification.md",
+    "python/src/harness_agents/prompt_protocol.py",
+    "python/tests/test_prompt_protocol.py",
+    "scripts/generate-check.sh",
+    "scripts/generate_prompts.py",
+    "scripts/generate_proto.py",
+    "tests/contracts/v1/manifest/implementation.json",
+    "tests/contracts/v1/manifest/implementation.sha256",
+    "tests/contracts/v1/manifest/planning.json",
+    "tests/contracts/v1/manifest/planning.sha256",
+    "tests/contracts/v1/manifest/review.json",
+    "tests/contracts/v1/manifest/review.sha256",
+    "tests/contracts/v1/manifest/specification.json",
+    "tests/contracts/v1/manifest/specification.sha256",
+    "tests/prompts/v1/conformance.json"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "339b3000ea3f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 379724,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6812928,
+    "output_tokens": 24117,
+    "api_call_count": 78
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-30T16:01:52.335158812Z",
+    "agent_lines": 1117,
+    "agent_removed": 52,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1117,
+    "total_lines_changed": 1169,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1117,
+      "agent_lines_removed": 52,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}

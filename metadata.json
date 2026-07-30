@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYSW5F1HJDPFNFYFWEWGR0KH",
+  "strategy": "manual-commit",
+  "branch": "prompt-protocol/v1.1.0",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/agent-manifest.md",
+    "docs/phase-10-completion.md",
+    "docs/reasoning-contracts.md",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/provider_smoke_test.go",
+    "python/agents/implementation.json",
+    "python/agents/planning.json",
+    "python/agents/review.json",
+    "python/agents/specification.json",
+    "python/prompts/implementation.md",
+    "python/prompts/planning.md",
+    "python/prompts/review.md",
+    "python/prompts/specification.md",
+    "python/src/harness_agents/prompt_protocol.py",
+    "python/tests/test_prompt_protocol.py",
+    "scripts/generate-check.sh",
+    "scripts/generate_prompts.py",
+    "scripts/generate_proto.py",
+    "tests/contracts/v1/manifest/implementation.json",
+    "tests/contracts/v1/manifest/implementation.sha256",
+    "tests/contracts/v1/manifest/planning.json",
+    "tests/contracts/v1/manifest/planning.sha256",
+    "tests/contracts/v1/manifest/review.json",
+    "tests/contracts/v1/manifest/review.sha256",
+    "tests/contracts/v1/manifest/specification.json",
+    "tests/contracts/v1/manifest/specification.sha256",
+    "tests/prompts/v1/conformance.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 379724,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6812928,
+    "output_tokens": 24117,
+    "api_call_count": 78
+  }
+}
