@@ -31,6 +31,7 @@ type config struct {
 	ServiceActorID   string                 `json:"service_actor_id"`
 	MaxArtifactBytes int64                  `json:"max_artifact_bytes"`
 	MaxBodyBytes     int64                  `json:"max_body_bytes"`
+	TrustedChecks    []string               `json:"trusted_checks"`
 	Principals       []controlapi.Principal `json:"principals"`
 }
 
@@ -118,8 +119,10 @@ func run(ctx context.Context, value config) error {
 	defer artifacts.Close()
 	handler, err := controlapi.New(controlapi.Config{
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
-		MaxBodyBytes: value.MaxBodyBytes,
-	}, workflow.NewStore(pool), runtime.NewLedger(pool), artifacts, slog.Default())
+		MaxBodyBytes:  value.MaxBodyBytes,
+		TrustedChecks: value.TrustedChecks,
+	}, workflow.NewStore(pool), runtime.NewLedger(pool), artifacts,
+		runtime.NewBindingRepository(pool), slog.Default())
 	if err != nil {
 		return err
 	}

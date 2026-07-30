@@ -71,6 +71,28 @@ func (fakeArtifacts) Put(_ context.Context, body []byte) (workflow.ArtifactRef, 
 	digest := runtime.Digest(body)
 	return workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}, nil
 }
+func (fakeArtifacts) Get(_ context.Context, ref workflow.ArtifactRef) ([]byte, error) {
+	return []byte(ref.Digest), nil
+}
+
+type fakeBindings struct {
+	runs []runtime.RunBinding
+}
+
+func (f *fakeBindings) CreateRun(_ context.Context, binding runtime.RunBinding) error {
+	f.runs = append(f.runs, binding)
+	return nil
+}
+func (*fakeBindings) CheckpointSpecification(
+	context.Context, string, workflow.ArtifactRef,
+) error {
+	return nil
+}
+func (*fakeBindings) CheckpointTaskGraph(
+	context.Context, string, workflow.ArtifactRef, runtime.TaskBinding,
+) error {
+	return nil
+}
 
 func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRuntime, string) {
 	t.Helper()
@@ -83,8 +105,9 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		Principals: []Principal{{
 			ID: uuid.NewString(), TokenSHA256: hex.EncodeToString(digest[:]), Roles: roles,
 		}},
-		MaxBodyBytes: 512,
-	}, workflowStore, runtimeLedger, fakeArtifacts{}, nil)
+		MaxBodyBytes:  512,
+		TrustedChecks: []string{"make-check-v1"},
+	}, workflowStore, runtimeLedger, fakeArtifacts{}, &fakeBindings{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +136,8 @@ func TestHealthAndAuthentication(t *testing.T) {
 func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
 	runID, key := uuid.NewString(), uuid.NewString()
-	body := `{"run_id":"` + runID + `","decision_timestamp":"2026-07-29T12:00:00Z"}`
+	body := `{"run_id":"` + runID + `","base_commit":"0123456789012345678901234567890123456789",` +
+		`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Idempotency-Key", key)
@@ -144,7 +168,9 @@ func TestCreateRunRejectsMissingKeyAndWrongRole(t *testing.T) {
 	for _, roles := range [][]Role{{RoleOperator}, {RoleApprover}} {
 		server, _, _, token := testServer(t, roles...)
 		request := httptest.NewRequest(http.MethodPost, "/v1/runs",
-			strings.NewReader(`{"run_id":"`+uuid.NewString()+`","decision_timestamp":"2026-07-29T12:00:00Z"}`))
+			strings.NewReader(`{"run_id":"`+uuid.NewString()+
+				`","base_commit":"0123456789012345678901234567890123456789",`+
+				`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`))
 		request.Header.Set("Authorization", "Bearer "+token)
 		if roles[0] == RoleApprover {
 			request.Header.Set("Idempotency-Key", uuid.NewString())
