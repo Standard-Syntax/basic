@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYRMM7A623XHSCMGEHN0EZN2",
+  "strategy": "manual-commit",
+  "branch": "phase12/mvp-e2e",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/internal/runtime/process_e2e_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 672292,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 43582208,
+    "output_tokens": 86807,
+    "api_call_count": 291
+  }
+}
