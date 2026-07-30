@@ -63,22 +63,31 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 	if _, err := uuid.Parse(request.Key); err != nil {
 		return nil, fmt.Errorf("%w: idempotency key", ErrConflict)
 	}
-	tag, err := l.pool.Exec(ctx, `INSERT INTO runtime_api_idempotency
-		(idempotency_key,method,target,principal_id,request_digest)
-		VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-		request.Key, request.Method, request.Target, request.PrincipalID, request.RequestDigest)
+	now := time.Now().UTC()
+	tx, err := l.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `INSERT INTO runtime_api_idempotency
+		(idempotency_key,method,target,principal_id,request_digest,reservation_expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+		request.Key, request.Method, request.Target, request.PrincipalID,
+		request.RequestDigest, now.Add(30*time.Second))
 	if err != nil {
 		return nil, err
 	}
 	if tag.RowsAffected() == 1 {
-		return nil, nil
+		return nil, tx.Commit(ctx)
 	}
 	var method, target, principal, digest string
 	var status *int
 	var response []byte
-	err = l.pool.QueryRow(ctx, `SELECT method,target,principal_id::text,request_digest,
-		status_code,response FROM runtime_api_idempotency WHERE idempotency_key=$1`,
-		request.Key).Scan(&method, &target, &principal, &digest, &status, &response)
+	var reservedUntil time.Time
+	err = tx.QueryRow(ctx, `SELECT method,target,principal_id::text,request_digest,
+		status_code,response,reservation_expires_at FROM runtime_api_idempotency
+		WHERE idempotency_key=$1 FOR UPDATE`, request.Key).Scan(
+		&method, &target, &principal, &digest, &status, &response, &reservedUntil)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +96,19 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 		return nil, ErrConflict
 	}
 	if status == nil {
-		return nil, ErrInProgress
+		if reservedUntil.After(now) {
+			return nil, ErrInProgress
+		}
+		_, err = tx.Exec(ctx, `UPDATE runtime_api_idempotency
+			SET reservation_expires_at=$2 WHERE idempotency_key=$1`,
+			request.Key, now.Add(30*time.Second))
+		if err != nil {
+			return nil, err
+		}
+		return nil, tx.Commit(ctx)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
 	}
 	return &IdempotencyResult{StatusCode: *status, Response: response, Replay: true}, nil
 }
