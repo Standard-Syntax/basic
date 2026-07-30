@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -48,6 +49,7 @@ func (*fakeWorkflow) ListPendingApprovals(context.Context) ([]workflow.PendingAp
 type fakeRuntime struct {
 	begins    int
 	completes int
+	abandons  int
 }
 
 func (f *fakeRuntime) BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error) {
@@ -60,14 +62,21 @@ func (f *fakeRuntime) CompleteIdempotency(
 	f.completes++
 	return nil
 }
+func (f *fakeRuntime) AbandonIdempotency(context.Context, string, uint64) error {
+	f.abandons++
+	return nil
+}
 func (*fakeRuntime) Enqueue(context.Context, runtime.Job) error { return nil }
 func (*fakeRuntime) CancelRun(context.Context, string, time.Time) error {
 	return nil
 }
 
-type fakeArtifacts struct{}
+type fakeArtifacts struct{ putErr error }
 
-func (fakeArtifacts) Put(_ context.Context, body []byte) (workflow.ArtifactRef, error) {
+func (f fakeArtifacts) Put(_ context.Context, body []byte) (workflow.ArtifactRef, error) {
+	if f.putErr != nil {
+		return workflow.ArtifactRef{}, f.putErr
+	}
 	digest := runtime.Digest(body)
 	return workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}, nil
 }
@@ -77,9 +86,13 @@ func (fakeArtifacts) Get(_ context.Context, ref workflow.ArtifactRef) ([]byte, e
 
 type fakeBindings struct {
 	runs []runtime.RunBinding
+	err  error
 }
 
 func (f *fakeBindings) CreateRun(_ context.Context, binding runtime.RunBinding) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.runs = append(f.runs, binding)
 	return nil
 }
@@ -161,6 +174,52 @@ func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	server.Handler().ServeHTTP(badResponse, bad)
 	if badResponse.Code != http.StatusBadRequest {
 		t.Fatalf("strict JSON status = %d: %s", badResponse.Code, badResponse.Body)
+	}
+}
+
+func TestCreateRunAbandonsRecoverablePartialFailures(t *testing.T) {
+	body := `{"run_id":"` + uuid.NewString() +
+		`","base_commit":"0123456789012345678901234567890123456789",` +
+		`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`
+	tests := []struct {
+		name             string
+		configure        func(*Server)
+		wantRunCommands  int
+		wantBindingCount int
+	}{
+		{
+			name: "artifact",
+			configure: func(server *Server) {
+				server.artifacts = fakeArtifacts{putErr: errors.New("artifact unavailable")}
+			},
+		},
+		{
+			name: "binding", wantRunCommands: 1,
+			configure: func(server *Server) {
+				server.bindings.(*fakeBindings).err = errors.New("binding unavailable")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
+			test.configure(server)
+			request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("Idempotency-Key", uuid.NewString())
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusInternalServerError ||
+				runtimeLedger.abandons != 1 || runtimeLedger.completes != 0 ||
+				len(workflowStore.runCommands) != test.wantRunCommands ||
+				len(server.bindings.(*fakeBindings).runs) != test.wantBindingCount {
+				t.Fatalf(
+					"status=%d runtime=%#v commands=%d bindings=%d",
+					response.Code, runtimeLedger, len(workflowStore.runCommands),
+					len(server.bindings.(*fakeBindings).runs),
+				)
+			}
+		})
 	}
 }
 

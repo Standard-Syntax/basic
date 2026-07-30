@@ -191,6 +191,38 @@ func (l *Ledger) CompleteIdempotency(
 	return nil
 }
 
+func (l *Ledger) AbandonIdempotency(
+	ctx context.Context, key string, fencingToken uint64,
+) error {
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_api_idempotency
+		SET reservation_expires_at=clock_timestamp()
+		WHERE idempotency_key=$1 AND reservation_generation=$2
+		  AND completed_at IS NULL`, key, fencingToken)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var generation uint64
+	var completedAt *time.Time
+	err = l.pool.QueryRow(ctx, `SELECT reservation_generation,completed_at
+		FROM runtime_api_idempotency WHERE idempotency_key=$1`, key).
+		Scan(&generation, &completedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return err
+	case completedAt != nil:
+		return ErrTerminal
+	case generation != fencingToken:
+		return ErrConflict
+	default:
+		return ErrConflict
+	}
+}
+
 func (l *Ledger) Enqueue(ctx context.Context, job Job) error {
 	var task any
 	if job.TaskID != nil {

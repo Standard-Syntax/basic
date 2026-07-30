@@ -263,14 +263,28 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	if err != nil || recovered.Replay || recovered.FencingToken != 2 {
 		t.Fatalf("recovered reservation = %#v, %v", recovered, err)
 	}
+	if err := ledger.AbandonIdempotency(
+		ctx, request.Key, first.FencingToken,
+	); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale abandon = %v", err)
+	}
+	if err := ledger.AbandonIdempotency(
+		ctx, request.Key, recovered.FencingToken,
+	); err != nil {
+		t.Fatalf("current abandon = %v", err)
+	}
+	current, err := ledger.BeginIdempotency(ctx, request)
+	if err != nil || current.Replay || current.FencingToken != 3 {
+		t.Fatalf("post-abandon reservation = %#v, %v", current, err)
+	}
 	response := json.RawMessage(`{"ok":true}`)
 	if err := ledger.CompleteIdempotency(
-		ctx, request.Key, first.FencingToken, http.StatusCreated, response,
+		ctx, request.Key, recovered.FencingToken, http.StatusCreated, response,
 	); !errors.Is(err, ErrConflict) {
 		t.Fatalf("stale completion = %v", err)
 	}
 	if err := ledger.CompleteIdempotency(
-		ctx, request.Key, recovered.FencingToken, http.StatusCreated, response,
+		ctx, request.Key, current.FencingToken, http.StatusCreated, response,
 	); err != nil {
 		t.Fatalf("current completion = %v", err)
 	}

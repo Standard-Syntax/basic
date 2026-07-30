@@ -55,6 +55,7 @@ type WorkflowStore interface {
 type IdempotencyLedger interface {
 	BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error)
 	CompleteIdempotency(context.Context, string, uint64, int, json.RawMessage) error
+	AbandonIdempotency(context.Context, string, uint64) error
 	Enqueue(context.Context, runtime.Job) error
 	CancelRun(context.Context, string, time.Time) error
 }
@@ -315,6 +316,16 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	status, response, err := s.applyMutation(request, principal, key, body)
 	if err != nil {
 		status, response = s.domainError(err)
+		if status >= http.StatusInternalServerError {
+			if abandonErr := s.runtime.AbandonIdempotency(
+				request.Context(), key, reservation.FencingToken,
+			); abandonErr != nil {
+				s.writeDomainError(w, abandonErr)
+				return
+			}
+			writeJSON(w, status, response)
+			return
+		}
 		encoded, marshalErr := json.Marshal(response)
 		if marshalErr != nil {
 			writeError(w, http.StatusInternalServerError, "internal", "encode response")
@@ -389,14 +400,14 @@ func (s *Server) createRun(
 			return 0, nil, workflow.ErrInvalid
 		}
 	}
+	intake, err := s.artifacts.Put(ctx, body.Content)
+	if err != nil {
+		return http.StatusCreated, nil, err
+	}
 	result, err := s.workflow.ExecuteRun(ctx, workflow.CreateRun{
 		Meta: s.envelope(key, principal.ID, workflow.ActorHuman, 0, body.DecisionTime),
 		ID:   body.RunID,
 	})
-	if err != nil {
-		return http.StatusCreated, result, err
-	}
-	intake, err := s.artifacts.Put(ctx, body.Content)
 	if err != nil {
 		return http.StatusCreated, result, err
 	}
