@@ -131,6 +131,89 @@ func TestAnthropicReviewMalformedOutputIsTypedResult(t *testing.T) {
 	}
 }
 
+func TestAnthropicReviewPreservesPolicyBoundReworkAndUnexpectedPaths(t *testing.T) {
+	value := reviewProjection{
+		Recommendation: "rework_required",
+		Findings: []reviewFindingProjection{{
+			FindingID: "FINDING-BLOCKING", Severity: "high", Category: "correctness",
+			Summary:            "Independent evidence establishes a blocking defect.",
+			EvidenceReferences: []string{"EVIDENCE-001"},
+		}},
+		RequiredActions: []requiredActionProjection{{
+			ActionID: "ACTION-001", FindingID: "FINDING-BLOCKING",
+			Description: "Correct the defect and produce new independent evidence.",
+		}},
+		UnrequestedChanges: []string{"go/internal/unexpected.go"},
+		ResidualRisks: []residualRiskProjection{{
+			RiskID: "RISK-001", Description: "The implementation narrative is unverified.",
+			Severity: "medium",
+		}},
+		Assumptions: []string{"Implementation claims were not treated as execution evidence."},
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &captureMessageSender{reply: anthropicMessage(t, string(body))}
+	adapter, agentManifest, request := anthropicReviewFixture(t, sender)
+	result, err := adapter.ProposeReview(t.Context(), agentManifest, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposal.GetRecommendation() !=
+		reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED ||
+		result.Proposal.GetUnrequestedChanges()[0] != "go/internal/unexpected.go" ||
+		result.Proposal.GetFindings()[0].GetEvidenceReferences()[0] != "EVIDENCE-001" {
+		t.Fatalf("review policy, scope, or evidence projection was lost: %+v", result.Proposal)
+	}
+	mapped, err := contracts.MapReviewRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contracts.MapReviewProposal(result.Proposal, mapped); err != nil {
+		t.Fatalf("policy-derived rework failed unchanged kernel validator: %v", err)
+	}
+
+	result.Proposal.Recommendation =
+		reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT
+	if _, err := contracts.MapReviewProposal(result.Proposal, mapped); err == nil {
+		t.Fatal("advisory accept with policy-blocking finding passed kernel validation")
+	}
+}
+
+func TestAnthropicReviewRepresentsInsufficientEvidenceWithoutFabricatedFinding(t *testing.T) {
+	value := reviewProjection{
+		Recommendation: "rework_required",
+		ResidualRisks: []residualRiskProjection{{
+			RiskID: "RISK-EVIDENCE", Description: "Independent evidence is insufficient.",
+			Severity: "high",
+		}},
+		Assumptions: []string{"No implementation narrative was accepted as proof."},
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &captureMessageSender{reply: anthropicMessage(t, string(body))}
+	adapter, agentManifest, request := anthropicReviewFixture(t, sender)
+	result, err := adapter.ProposeReview(t.Context(), agentManifest, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Proposal.GetFindings()) != 0 ||
+		result.Proposal.GetRecommendation() !=
+			reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED {
+		t.Fatalf("insufficient evidence was converted into a fabricated finding: %+v", result.Proposal)
+	}
+	mapped, err := contracts.MapReviewRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contracts.MapReviewProposal(result.Proposal, mapped); err != nil {
+		t.Fatalf("unsupported evaluation representation failed kernel validator: %v", err)
+	}
+}
+
 func TestAnthropicReviewLoopbackUsesReviewSchema(t *testing.T) {
 	var requestBody []byte
 	reply := anthropicMessage(t, validReviewProjection(t))

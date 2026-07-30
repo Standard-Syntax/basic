@@ -15,6 +15,7 @@ import (
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
+	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -188,6 +189,29 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 	}
 	assertImplementationResult(t, result, sender)
 	assertImplementationRequest(t, &sender.params, request, result.Proposal)
+	mappedRequest, err := contracts.MapImplementationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappedProposal, err := contracts.MapImplementationProposal(result.Proposal, mappedRequest)
+	if err != nil {
+		t.Fatalf("proposal failed unchanged kernel validator: %v", err)
+	}
+	expected := gatewayProposal(t)
+	if len(mappedProposal.Changes) != len(expected.GetChanges()) ||
+		len(mappedProposal.RequestedDeclaredCheckIDs) != 1 ||
+		mappedProposal.RequestedDeclaredCheckIDs[0] != request.GetAvailableCheckIds()[0] {
+		t.Fatalf("mapped proposal lost scoped changes or declared checks: %+v", mappedProposal)
+	}
+	for index, change := range result.Proposal.GetChanges() {
+		if change.GetPath() != expected.GetChanges()[index].GetPath() ||
+			change.GetReplacementContent() != expected.GetChanges()[index].GetReplacementContent() ||
+			change.GetExpectedOriginalSha256() !=
+				expected.GetChanges()[index].GetExpectedOriginalSha256() ||
+			len(change.GetAcceptanceCriterionIds()) == 0 {
+			t.Fatalf("change %d lost complete-file, digest, or criterion data: %+v", index, change)
+		}
+	}
 }
 
 func assertImplementationResult(
@@ -245,6 +269,41 @@ func TestAnthropicImplementationRejectsUnknownOutputFieldsDeterministically(t *t
 	if result.MalformedOutput == nil || result.Proposal != nil ||
 		len(result.ProviderResponse) == 0 {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAnthropicImplementationPreservesScopeChangeOnlyProjection(t *testing.T) {
+	value := implementationProjection{
+		Summary:             "Approved scope is insufficient for a safe proposal.",
+		UnresolvedQuestions: []string{"May the generated package be changed?"},
+		ScopeChangeRequest: &scopeChangeProjection{
+			Summary:                "The required generated file is outside writable scope.",
+			RequestedReadablePaths: []string{"go/gen"},
+			RequestedWritablePaths: []string{"go/gen"},
+			RequestedCheckIDs:      []string{"CHECK-GO-TEST"},
+		},
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := &captureMessageSender{reply: anthropicMessage(t, string(body))}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+	result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Proposal == nil || len(result.Proposal.GetChanges()) != 0 ||
+		result.Proposal.GetScopeChangeRequest().GetRequestedWritablePaths()[0] != "go/gen" ||
+		result.Proposal.GetIdentity().GetRequestId() != request.GetEnvelope().GetRequestId() {
+		t.Fatalf("scope-change-only projection was not faithfully mapped: %+v", result)
+	}
+	mappedRequest, err := contracts.MapImplementationRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := contracts.MapImplementationProposal(result.Proposal, mappedRequest); err == nil {
+		t.Fatal("incomplete v1 scope-change-only proposal unexpectedly advanced kernel validation")
 	}
 }
 

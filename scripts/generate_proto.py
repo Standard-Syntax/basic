@@ -61,6 +61,11 @@ def main() -> int:
         check=True,
     )
     subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "generate_prompts.py")],
+        check=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "generate_contract_fixtures.py")],
         check=True,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},

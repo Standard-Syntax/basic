@@ -27,6 +27,17 @@ digest sidecar only after the definition and prompt validate completely.
 Definitions and prompts for all four stages live in `python/agents` and
 `python/prompts`. Their generated fixtures live in
 `tests/contracts/v1/manifest` and are covered by `make generate-check`.
+The four golden definitions use matched prompt protocol `1.1.0`. Shared
+fragments are rendered deterministically into the checked-in UTF-8/LF prompt
+artifacts before manifests are compiled. Generation rejects missing fragments,
+unknown placeholders or fragments, duplicate sections, invalid line endings,
+and repeat-render drift. `make generate-check` compares the rendered prompts as
+well as the compiled manifest fixtures.
+
+Prompt bytes are part of immutable agent identity through their digest. Any
+prompt-byte change requires a new semantic agent version; it must never rewrite
+an already registered `(name, version)`. The `1.1.0` definitions leave existing
+registered `1.0.0` records untouched.
 
 ## Registry boundary
 
@@ -45,3 +56,7 @@ network transport or runtime provider behavior.
 No manifest field grants shell, network, file-write, credential, workflow,
 approval, publication, registration, or task-specific scope authority. A
 manifest is immutable configuration evidence, not permission to perform work.
+Manifest `allowed_requests` describe kernel-mediated capabilities. The current
+Anthropic implementation and review adapters are single-turn and tool-free, so
+those requests are unavailable during a provider call and cannot be smuggled as
+prose around the final structured response.
