@@ -1,12 +1,12 @@
 # Agent Harness
 
-This repository contains the Phase 0–10 kernel and the Phase 11 durable-runtime
-foundation for a kernel-driven agent harness.
+This repository contains the Phase 0–10 kernel and the Phase 12 executable
+first-slice runtime for a kernel-driven agent harness.
 Go is the trusted control-plane language; Python is limited to declarative agent
 configuration. Reasoning outputs are untrusted, provider-neutral proposals.
-Phase 11 adds a loopback authenticated HTTP API, a durable PostgreSQL
-reconciler, and a filesystem SHA-256 content-addressed store. Full in-process
-stage composition and the full lifecycle process E2E remain pending.
+The runtime adds a loopback authenticated HTTP API, a durable PostgreSQL
+reconciler, a filesystem SHA-256 content-addressed store, closed MiniMax-M3
+provider configuration, and a full first-slice process E2E.
 
 The trusted Go kernel now makes transactional run and task lifecycle decisions
 with append-only PostgreSQL events. Leases and artifact, execution,
@@ -23,10 +23,11 @@ stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
 reader independently enforces the same v1 stage/output and safety policy.
 
 The in-process Go reasoning gateway executes implementation and review stages
-through deterministic fake adapters. It resolves exact registered manifest
+through deterministic fake adapters by default or the runtime's closed
+MiniMax-M3 adapter in explicit live mode. It resolves exact registered manifest
 digests, validates proposals into five stable rejection codes, stores payloads
 through a content-addressed artifact interface, and records immutable
-PostgreSQL invocation metadata. It starts no listener and calls no model.
+PostgreSQL invocation metadata. The gateway starts no listener of its own.
 
 The Go execution library revalidates accepted proposals, fences them to the
 active lease, applies them in a network-disabled unprivileged container, creates
@@ -62,3 +63,5 @@ make integration-test
 
 See [docs/development.md](docs/development.md) for exact commands and
 [docs/architecture.md](docs/architecture.md) for the trust boundaries.
+For a real provider-backed acceptance run, follow
+[docs/live-harness.md](docs/live-harness.md) exactly.
