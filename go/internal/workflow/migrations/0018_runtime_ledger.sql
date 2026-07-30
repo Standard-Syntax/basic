@@ -18,11 +18,12 @@ CREATE TABLE runtime_run_bindings (
 );
 
 CREATE TABLE runtime_task_bindings (
-    task_id uuid PRIMARY KEY REFERENCES workflow_tasks(task_id),
+    task_id uuid PRIMARY KEY,
     run_id uuid NOT NULL REFERENCES workflow_runs(run_id),
     approved_task_uri text NOT NULL,
     approved_task_digest text NOT NULL CHECK (approved_task_digest ~ '^[a-f0-9]{64}$'),
-    UNIQUE (run_id, task_id)
+    UNIQUE (run_id, task_id),
+    FOREIGN KEY (run_id, task_id) REFERENCES workflow_tasks(run_id, task_id)
 );
 
 CREATE TABLE runtime_api_idempotency (
@@ -41,7 +42,7 @@ CREATE TABLE runtime_api_idempotency (
 CREATE TABLE runtime_stage_jobs (
     job_id uuid PRIMARY KEY,
     run_id uuid NOT NULL REFERENCES workflow_runs(run_id),
-    task_id uuid REFERENCES workflow_tasks(task_id),
+    task_id uuid,
     attempt integer NOT NULL CHECK (attempt > 0),
     stage text NOT NULL,
     state text NOT NULL CHECK (state IN ('READY','CLAIMED','RETRY','COMPLETED','FAILED','CANCELLED')),
@@ -57,6 +58,7 @@ CREATE TABLE runtime_stage_jobs (
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     UNIQUE (run_id, task_id, attempt, stage),
+    FOREIGN KEY (run_id, task_id) REFERENCES workflow_tasks(run_id, task_id),
     CHECK ((claim_owner IS NULL) = (claim_expires_at IS NULL)),
     CHECK ((result_uri IS NULL) = (result_digest IS NULL)),
     CHECK ((failure_uri IS NULL) = (failure_digest IS NULL))
@@ -70,8 +72,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF OLD.state IN ('COMPLETED','FAILED','CANCELLED') AND NEW IS DISTINCT FROM OLD THEN
+    IF OLD.state IN ('COMPLETED','FAILED','CANCELLED') THEN
         RAISE EXCEPTION 'terminal runtime jobs are immutable';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
     END IF;
     RETURN NEW;
 END;

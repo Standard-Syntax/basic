@@ -18,6 +18,7 @@ import (
 
 var (
 	ErrConflict   = errors.New("runtime identity conflicts with existing content")
+	ErrInProgress = errors.New("runtime request is still processing")
 	ErrNotFound   = errors.New("runtime record not found")
 	ErrStaleFence = errors.New("stale runtime fencing token")
 	ErrTerminal   = errors.New("runtime job is terminal")
@@ -86,7 +87,7 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 		return nil, ErrConflict
 	}
 	if status == nil {
-		return nil, ErrConflict
+		return nil, ErrInProgress
 	}
 	return &IdempotencyResult{StatusCode: *status, Response: response, Replay: true}, nil
 }
@@ -101,7 +102,19 @@ func (l *Ledger) CompleteIdempotency(
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return ErrConflict
+		var completedAt *time.Time
+		err := l.pool.QueryRow(ctx, `SELECT completed_at FROM runtime_api_idempotency
+			WHERE idempotency_key=$1`, key).Scan(&completedAt)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrNotFound
+		case err != nil:
+			return err
+		case completedAt != nil:
+			return ErrTerminal
+		default:
+			return ErrConflict
+		}
 	}
 	return nil
 }
@@ -160,6 +173,12 @@ func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl tim
 		return Job{}, false, err
 	}
 	job.TaskID = taskID
+	if resultURI != nil && resultDigest != nil {
+		job.Result = &workflow.ArtifactRef{URI: *resultURI, Digest: *resultDigest}
+	}
+	if failureURI != nil && failureDigest != nil {
+		job.Failure = &workflow.ArtifactRef{URI: *failureURI, Digest: *failureDigest}
+	}
 	expires := now.UTC().Add(ttl)
 	job.FencingToken++
 	tag, err := tx.Exec(ctx, `UPDATE runtime_stage_jobs SET state='CLAIMED',
@@ -189,7 +208,7 @@ func (l *Ledger) Complete(
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return ErrStaleFence
+		return l.classifyJobUpdate(ctx, jobID)
 	}
 	return nil
 }
@@ -206,7 +225,22 @@ func (l *Ledger) Retry(
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return ErrStaleFence
+		return l.classifyJobUpdate(ctx, jobID)
 	}
 	return nil
+}
+
+func (l *Ledger) classifyJobUpdate(ctx context.Context, jobID string) error {
+	var state string
+	err := l.pool.QueryRow(ctx, `SELECT state FROM runtime_stage_jobs WHERE job_id=$1`, jobID).Scan(&state)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrNotFound
+	case err != nil:
+		return err
+	case state == "COMPLETED" || state == "FAILED" || state == "CANCELLED":
+		return ErrTerminal
+	default:
+		return ErrStaleFence
+	}
 }
