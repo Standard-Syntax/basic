@@ -1,0 +1,153 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Phase 12 Plan: MiniMax-M3 MVP Runtime
+
+## Summary
+
+Complete the already-initialized Phase 12 stack so the harness can run one bounded coding task end to end using:
+
+- Anthropic-compatible base URL `https://api.minimax.io/anthropic`
+- Exact model ID `MiniMax-M3`
+- API key read per invocation from `ANTHROPIC_API_KEY`
+- MiniMax for both implementation and independent review
+- Isolated execution and verification against a disposable fixture repository
+- Human approval followed by publication to a local bare remote and loopback draft-PR API
+
+MiniMax documents this base URL, model, and Anthropic Messages compatibility in its [official Anthropic SDK guide](https://platform.minimax.io/docs/api-reference/text-anthropic-api). The first live target will be a disposable repository; real GitHub mutation, merge, and deployment remain out of scope.
+
+## Implementation Changes
+
+### 1. `phase12/runtime-bindings`
+
+- Add a recoverable runtime binding repository over the existing run/task binding tables. Persist immutable intake, base commit, repository snapshot, approved specification, approved task graph, and approved task references.
+- Add a forward-only migration that supports staged null-to-value checkpointing, exact replay, and database rejection of changed or deleted established bindings.
+- Make API idempotency reservations recoverable after process interruption instead of leaving incomplete requests permanently `in_progress`.
+- Change run intake to require `run_id`, `base_commit`, `content`, and `decision_timestamp`.
+- Make specification and task-graph submission accept typed `{request, proposal}` pairs using Protobuf JSON. Validate them with the existing contract mappings before storing deterministic Protobuf artifacts.
+- Derive the single task and dependencies from the validated task-graph proposal; remove caller-supplied duplicate `tasks` and `dependencies` data from approval.
+- Preserve the one dependency-free task restriction.
+
+### 2. `phase12/request-construction`
+
+- Extend the runtime builder to create exact implementation and review requests from persisted approved artifacts rather than caller-assembled data.
+- At the start stage:
+  - resolve and verify the requested base commit;
+  - snapshot raw committed repository objects;
+  - store the repository map;
+  - start the run;
+  - acquire a deterministic 30-minute task lease with the attempt-bound fencing token.
+- Build the implementation envelope with configured manifest digest, proposal-only authority, bounded token/request budgets, approved specification/task identities, trusted scope, `make-check-v1`, and repository context read from the base commit.
+- Store every selected context file in the CAS and bind it in `input_artifacts`; inline content must match its artifact digest.
+- Build the review request from the actual execution diff, exact verification report, criterion coverage, candidate commit, authorized paths, and immutable upstream references.
+- Add runtime-ledger queries for loading the exact completed output of an earlier stage; handlers must never infer inputs from mutable files or “latest” rows.
+
+### 3. `phase12/stage-composition`
+
+- Replace `runtime_checkpoint.v1` handlers with injected handlers that invoke the existing gateway, execution, verification, and review services.
+- Apply all owning-package migrations at service startup and construct PostgreSQL repositories for registry, reasoning, execution, verification, review, and runtime state.
+- Bootstrap the implementation and review manifests from configured absolute paths. Register their canonical bytes and seed the exact prompt bytes into the CAS after digest verification.
+- Change the orchestration handler result to carry an artifact plus an explicit continuation decision:
+  - accepted reasoning advances to execution;
+  - provider or policy rejection records `PROPOSAL_REJECTED` and stops;
+  - successful verification advances to review;
+  - failed verification stops in `REWORK_REQUIRED`;
+  - advisory review advances to awaiting approval;
+  - blocking review stops in `REWORK_REQUIRED`;
+  - awaiting approval never auto-advances.
+- Authorize reasoning-service proposal rejection in the workflow kernel; model rejection must not require a forged human actor.
+- Add runtime job-claim heartbeats at one-third of the claim TTL. Losing renewal cancels stage work, and stale fencing prevents completion.
+- Keep task lease expiry long enough for the bounded provider, execution, and verification stages; expired leases fail closed and require operator retry.
+- Retain an explicit fake provider mode for deterministic tests, but default normal workflow-service configuration to MiniMax.
+
+### 4. `phase12/anthropic-runtime`
+
+Add strict provider configuration:
+
+```json
+{
+  "provider": {
+    "mode": "minimax_anthropic",
+    "base_url": "https://api.minimax.io/anthropic",
+    "model": "MiniMax-M3",
+    "api_key_env": "ANTHROPIC_API_KEY"
+  }
+}
+```
+
+- Omitted provider values resolve to these MiniMax defaults. `fake` remains the only alternate mode.
+- Reject arbitrary MiniMax endpoints, non-HTTPS URLs, other model IDs, raw API keys in JSON, unknown fields, and ambiguous credential sources.
+- Read `ANTHROPIC_API_KEY` for every invocation without caching it. Missing or empty credentials fail startup/readiness; provider errors remain redacted.
+- Resolve both `strong_coding` and `independent_review` capabilities to `MiniMax-M3`.
+- Add a MiniMax compatibility profile to the existing Anthropic Messages adapter:
+  - omit Anthropic `output_config`, which MiniMax does not document as supported;
+  - append the closed projection schema and “one JSON object only” requirement to the trusted system prompt;
+  - omit `thinking`, leaving MiniMax-M3 thinking disabled;
+  - send no tools, streaming, images, or arbitrary metadata;
+  - require exactly one complete text block and strictly decode it with unknown fields and trailing JSON rejected.
+- Preserve trusted identity injection, unchanged kernel validation, bounded retries/timeouts, raw-response artifacts, token accounting, replay, and secret scanning.
+- Record provider metadata as `minimax-anthropic` with model `MiniMax-M3`.
+
+### 5. `phase12/approval-publication`
+
+- Replace the API’s ad hoc composite approval artifact with `approval.Service`.
+- Build approval requests from persisted approved task/specification bindings and exact implementation, execution, verification, and review artifacts.
+- Map authenticated API roles into approval principals; retain elevated-path/resource enforcement.
+- After task approval, aggregate execution, verification, and review to the run and issue the human run approval using the same immutable approval artifact.
+- Inject an optional publication service into the API. When configured, synchronously publish after successful approval and return the branch, candidate, draft number, URL, and replay state.
+- Preserve `configuration_blocked` when publication is absent.
+- The canonical MVP run uses a local bare remote plus loopback GitHub-compatible API. Real GitHub credentials or repositories are not required.
+
+### 6. `phase12/mvp-e2e`
+
+- Replace the package-only runtime target with an actual-process test that launches PostgreSQL, API service, workflow service, CAS, execution worker, verification worker, bare Git remote, and loopback draft-PR server.
+- Use a disposable Go fixture whose `Add(a, b)` implementation is intentionally wrong while its committed tests and `Makefile` define `make check`.
+- Scope the task so MiniMax may read the implementation and tests but may modify only the implementation file; prohibit changes to tests, `go.mod`, and `Makefile`.
+- Keep `make runtime-e2e` deterministic with fake adapters and exercise worker/API restart recovery without repeating completed effects.
+- Add `make minimax-live-e2e` that:
+  - requires `ANTHROPIC_API_KEY` and fails rather than skips;
+  - uses the actual MiniMax endpoint for exactly one implementation and one review invocation;
+  - requires a non-empty validated implementation proposal;
+  - produces a candidate commit different from the base;
+  - proves only the authorized file changed;
+  - passes independent `make check` verification;
+  - receives advisory review acceptance;
+  - records human approval;
+  - pushes the exact candidate to the bare remote and creates one loopback draft PR.
+- Persist and assert provider request IDs, model, usage, raw responses, proposal artifacts, candidate, evidence, review, approval, publication, and append-only workflow events.
+- Scan configuration, logs, artifacts, and PostgreSQL evidence to prove the API key was not persisted or logged.
+
+## Public Interfaces and Configuration
+
+- `POST /v1/runs` gains required `base_commit` and `content`.
+- Specification and task-graph proposal endpoints accept typed request/proposal pairs; task definitions are derived rather than duplicated.
+- Workflow configuration gains repository/workspace roots, worker images, service actor IDs, manifest/prompt paths, context limits, lease duration, and the strict provider block.
+- Orchestration handlers return an explicit continuation outcome instead of only an artifact.
+- Runtime bindings and job results gain read/checkpoint interfaces required for restart-safe stage composition.
+- No Protobuf field numbers, manifest-v1 schema, rejection codes, authority model, or proposal formats change.
+
+## Acceptance Gates
+
+All of the following must pass:
+
+```text
+uv sync --frozen
+make generate-check
+make check
+make integration-test
+make runtime-e2e
+ANTHROPIC_API_KEY=... make minimax-live-e2e
+git diff --check
+gh stack view --json
+```
+
+MVP is reached only when the live gate demonstrates real MiniMax-M3 code output becoming the exact independently verified candidate and locally simulated draft PR. Provider smoke success alone is insufficient.
+
+## Assumptions and Boundaries
+
+- The six Phase 12 branches are already initialized from `main` at `1c2032c`.
+- MiniMax is the default runtime provider; fake mode is explicit and retained for deterministic tests.
+- Both implementation and review use separate MiniMax-M3 invocations.
+- The API key comes only from `ANTHROPIC_API_KEY`; it is never accepted in JSON.
+- The initial runtime remains single-repository, single-task, local-CAS, and draft-only.
+- Specification and planning remain human/API supplied; real model use is limited to implementation and review.
+- No arbitrary shell, model-selected commands, provider fallback, streaming, automatic merge, deployment, or real GitHub mutation is added.

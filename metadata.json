@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYRHM09H9WEJR4R575B2GPQX",
+  "strategy": "manual-commit",
+  "branch": "phase12/runtime-bindings",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/ledger.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/workflow/migrations/0019_runtime_bindings.sql"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 112756,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 803840,
+    "output_tokens": 7807,
+    "api_call_count": 13
+  }
+}
