@@ -135,51 +135,53 @@ func TestOnceCompletesAndEnqueuesStableNextStage(t *testing.T) {
 }
 
 func TestOnceRetriesThenPersistsFailureEvidence(t *testing.T) {
-	for _, test := range []struct {
-		retries uint32
-		retried int
-		failed  int
-	}{{0, 1, 0}, {2, 0, 1}} {
-		ledger := &memoryLedger{found: true, job: runtime.Job{
-			ID: uuid.NewString(), RunID: uuid.NewString(), Attempt: 1,
-			Stage: StageReasoning, FencingToken: 1, RetryCount: test.retries,
-		}}
-		artifacts := &memoryArtifacts{}
-		fixedNow := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
-		owner := uuid.NewString()
-		reconciler, err := New(Config{
-			OwnerID: owner, ClaimTTL: time.Minute,
-			PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Second,
-		}, ledger, artifacts, handlersReturning(errors.New("injected")), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		reconciler.now = func() time.Time { return fixedNow }
-		if _, err := reconciler.Once(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if len(ledger.retried) != test.retried || len(ledger.failed) != test.failed {
-			t.Fatalf("retry=%d ledger=%#v", test.retries, ledger)
-		}
-		if test.retried == 1 {
-			call := ledger.retried[0]
-			if call.jobID != ledger.job.ID || call.owner != owner ||
-				call.fence != ledger.job.FencingToken ||
-				!call.available.Equal(fixedNow.Add(time.Second)) {
-				t.Fatalf("retry call = %#v", call)
-			}
-		}
-		if test.failed == 1 {
-			if len(artifacts.bodies) != 1 {
-				t.Fatalf("failure evidence bodies = %d", len(artifacts.bodies))
-			}
-			call := ledger.failed[0]
-			if call.jobID != ledger.job.ID || call.owner != owner ||
-				call.fence != ledger.job.FencingToken ||
-				call.failure.Digest != runtime.Digest(artifacts.bodies[0]) ||
-				!call.at.Equal(fixedNow) {
-				t.Fatalf("failure call = %#v", call)
-			}
-		}
+	ledger, _, owner, fixedNow := runFailureCase(t, 0)
+	if len(ledger.retried) != 1 || len(ledger.failed) != 0 {
+		t.Fatalf("ledger = %#v", ledger)
 	}
+	call := ledger.retried[0]
+	if call.jobID != ledger.job.ID || call.owner != owner ||
+		call.fence != ledger.job.FencingToken ||
+		!call.available.Equal(fixedNow.Add(time.Second)) {
+		t.Fatalf("retry call = %#v", call)
+	}
+}
+
+func TestOncePersistsFailureEvidenceAfterRetryExhaustion(t *testing.T) {
+	ledger, artifacts, owner, fixedNow := runFailureCase(t, 2)
+	if len(ledger.retried) != 0 || len(ledger.failed) != 1 || len(artifacts.bodies) != 1 {
+		t.Fatalf("ledger=%#v bodies=%d", ledger, len(artifacts.bodies))
+	}
+	call := ledger.failed[0]
+	if call.jobID != ledger.job.ID || call.owner != owner ||
+		call.fence != ledger.job.FencingToken ||
+		call.failure.Digest != runtime.Digest(artifacts.bodies[0]) ||
+		!call.at.Equal(fixedNow) {
+		t.Fatalf("failure call = %#v", call)
+	}
+}
+
+func runFailureCase(
+	t *testing.T, retries uint32,
+) (*memoryLedger, *memoryArtifacts, string, time.Time) {
+	t.Helper()
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: uuid.NewString(), Attempt: 1,
+		Stage: StageReasoning, FencingToken: 1, RetryCount: retries,
+	}}
+	artifacts := &memoryArtifacts{}
+	fixedNow := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+	owner := uuid.NewString()
+	reconciler, err := New(Config{
+		OwnerID: owner, ClaimTTL: time.Minute,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Second,
+	}, ledger, artifacts, handlersReturning(errors.New("injected")), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler.now = func() time.Time { return fixedNow }
+	if _, err := reconciler.Once(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return ledger, artifacts, owner, fixedNow
 }
