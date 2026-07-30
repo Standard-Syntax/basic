@@ -714,21 +714,21 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		{workflow.RunStateExecuting, func(value workflow.Run) workflow.RunCommand {
 			return workflow.RecordRunExecution{
 				Meta: s.envelope(stableStepID(key, "aggregate-execution"), s.config.ServiceActorID,
-					workflow.ActorWorkflowService, value.Revision, at),
+					workflow.ActorExecutionService, value.Revision, at),
 				ID: value.ID, Execution: *task.Execution, CandidateCommit: task.CandidateCommit,
 			}
 		}},
 		{workflow.RunStateVerifying, func(value workflow.Run) workflow.RunCommand {
 			return workflow.RecordRunVerification{
 				Meta: s.envelope(stableStepID(key, "aggregate-verification"), s.config.ServiceActorID,
-					workflow.ActorWorkflowService, value.Revision, at),
+					workflow.ActorVerificationService, value.Revision, at),
 				ID: value.ID, CandidateCommit: task.CandidateCommit, Evidence: *task.Verification,
 			}
 		}},
 		{workflow.RunStateReviewing, func(value workflow.Run) workflow.RunCommand {
 			return workflow.RecordRunReview{
 				Meta: s.envelope(stableStepID(key, "aggregate-review"), s.config.ServiceActorID,
-					workflow.ActorWorkflowService, value.Revision, at),
+					workflow.ActorReviewService, value.Revision, at),
 				ID: value.ID, CandidateCommit: task.CandidateCommit, Review: *task.Review,
 			}
 		}},
