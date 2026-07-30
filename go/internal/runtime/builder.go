@@ -119,8 +119,8 @@ type ReviewInput struct {
 	Budget                                   ReasoningLimits
 }
 
-func BuildReviewRequest(input ReviewInput) (*reasoningv1.ReviewRequest, error) {
-	if !input.Verification.Passed ||
+func BuildReviewRequest(input *ReviewInput) (*reasoningv1.ReviewRequest, error) {
+	if input == nil || !input.Verification.Passed ||
 		input.Execution.CandidateCommit != input.Verification.CandidateCommit ||
 		input.Execution.CandidateCommit == "" {
 		return nil, ErrScope
