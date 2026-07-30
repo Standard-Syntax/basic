@@ -262,8 +262,7 @@ func validateImplementationRequestScope(value *reasoningv1.ImplementationRequest
 	}
 	for _, file := range value.GetRepositoryContext() {
 		if !validRepoPath(file.GetPath()) ||
-			!pathWithin(file.GetPath(), value.GetReadablePaths()) ||
-			pathIsProhibited(file.GetPath(), value.GetProhibitedPaths()) {
+			!pathWithin(file.GetPath(), value.GetReadablePaths()) {
 			return validationFailure(
 				reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
 				"request.repository_context.path", "repository context is outside readable scope",
@@ -356,9 +355,6 @@ func mapRepositoryContextFile(
 	if !validRepoPath(file.GetPath()) || !pathWithin(file.GetPath(), request.GetReadablePaths()) ||
 		!digestPattern.MatchString(file.GetSha256()) {
 		return RepositoryContextFile{}, errors.New("invalid repository context")
-	}
-	if pathIsProhibited(file.GetPath(), request.GetProhibitedPaths()) {
-		return RepositoryContextFile{}, errors.New("repository context targets prohibited path")
 	}
 	sum := sha256.Sum256([]byte(file.GetContent()))
 	if hex.EncodeToString(sum[:]) != file.GetSha256() {
