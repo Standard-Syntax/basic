@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYRMH6WZMYGQEJKT90YNSAMT",
+  "strategy": "manual-commit",
+  "branch": "phase12/approval-publication",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/publication/render.go",
+    "go/internal/publication/validation.go",
+    "go/internal/publication/validation_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 650566,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 40915200,
+    "output_tokens": 84942,
+    "api_call_count": 277
+  }
+}
