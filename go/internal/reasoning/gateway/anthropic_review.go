@@ -65,7 +65,7 @@ func (a *AnthropicReviewAdapter) ProposeReview(
 	}
 	if !a.runtime.miniMax {
 		params.OutputConfig = anthropic.OutputConfigParam{
-			Format: anthropic.JSONOutputFormatParam{Schema: reviewOutputSchema()},
+			Format: anthropic.JSONOutputFormatParam{Schema: reviewOutputSchema(request)},
 		}
 	}
 	message, attempts, err := a.runtime.sendWithRetry(
@@ -161,7 +161,7 @@ func (r *anthropicRuntime) renderReview(
 			maximumTokens {
 		return "", "", errors.New("rendered provider context exceeds input token budget")
 	}
-	system, err := r.systemPrompt(prompt, reviewOutputSchema())
+	system, err := r.systemPrompt(prompt, reviewOutputSchema(request))
 	if err != nil {
 		return "", "", err
 	}
@@ -295,8 +295,20 @@ func findingCategoryFromString(value string) reasoningv1.FindingCategory {
 	return values[value]
 }
 
-func reviewOutputSchema() map[string]any {
+func reviewOutputSchema(request *reasoningv1.ReviewRequest) map[string]any {
 	stringArray := map[string]any{"type": "array", "items": stringSchema()}
+	evidenceReference := stringSchema()
+	if request != nil && len(request.GetIndependentEvidence()) > 0 {
+		identifiers := make([]string, 0, len(request.GetIndependentEvidence()))
+		for _, evidence := range request.GetIndependentEvidence() {
+			if evidence.GetEvidenceId() != "" {
+				identifiers = append(identifiers, evidence.GetEvidenceId())
+			}
+		}
+		if len(identifiers) > 0 {
+			evidenceReference = map[string]any{"type": "string", "enum": identifiers}
+		}
+	}
 	severity := map[string]any{
 		"type": "string",
 		"enum": []string{"info", "low", "medium", "high", "critical"},
@@ -310,7 +322,10 @@ func reviewOutputSchema() map[string]any {
 				"maintainability", "compatibility",
 			},
 		},
-		"summary": stringSchema(), "evidence_references": stringArray,
+		"summary": stringSchema(),
+		"evidence_references": map[string]any{
+			"type": "array", "items": evidenceReference,
+		},
 	}, []string{"finding_id", "severity", "category", "summary", "evidence_references"})
 	action := closedObject(map[string]any{
 		"action_id": stringSchema(), "finding_id": stringSchema(),

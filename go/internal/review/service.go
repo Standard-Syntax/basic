@@ -57,8 +57,16 @@ func (s *Service) Review(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("propose advisory review: %w", err)
 	}
-	if outcome.Rejection != nil || outcome.Proposal == nil {
-		return Result{}, fmt.Errorf("%w: reviewer rejected request", ErrInvalidRequest)
+	if outcome.Rejection != nil {
+		return Result{}, fmt.Errorf(
+			"%w: reviewer rejected request: code=%s summary=%q",
+			ErrInvalidRequest,
+			outcome.Rejection.GetCode().String(),
+			outcome.Rejection.GetSummary(),
+		)
+	}
+	if outcome.Proposal == nil {
+		return Result{}, fmt.Errorf("%w: reviewer returned no proposal", ErrInvalidRequest)
 	}
 	proposal, err := contracts.MapReviewProposal(outcome.Proposal, mapped)
 	if err != nil {

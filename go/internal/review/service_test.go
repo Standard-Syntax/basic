@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,14 +49,20 @@ func (s *memoryStore) Get(_ context.Context, ref workflow.ArtifactRef) ([]byte, 
 }
 
 type fakeGateway struct {
-	proposal *reasoningv1.ReviewProposal
-	calls    int
+	proposal  *reasoningv1.ReviewProposal
+	rejection *reasoningv1.ProposalRejection
+	calls     int
 }
 
 func (g *fakeGateway) ProposeReview(
 	_ context.Context, request *reasoningv1.ReviewRequest,
 ) (gateway.ReviewOutcome, error) {
 	g.calls++
+	if g.rejection != nil {
+		return gateway.ReviewOutcome{
+			Rejection: proto.Clone(g.rejection).(*reasoningv1.ProposalRejection),
+		}, nil
+	}
 	proposal := proto.Clone(g.proposal).(*reasoningv1.ReviewProposal)
 	proposal.Identity = &reasoningv1.ProposalIdentity{
 		SchemaVersion: request.GetEnvelope().GetSchemaVersion(),
@@ -291,6 +298,27 @@ func TestForgedExecutionEvidenceCausesNoReviewOrTransition(t *testing.T) {
 	}
 	if gatewayPort.calls != 0 || workflowPort.calls != 0 {
 		t.Fatal("forged evidence reached reviewer or workflow")
+	}
+}
+
+func TestReviewRejectionPreservesStableReason(t *testing.T) {
+	proposal := &reasoningv1.ReviewProposal{
+		Recommendation: reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT,
+	}
+	service, request, gatewayPort, workflowPort, _ := fixture(t, proposal)
+	gatewayPort.rejection = &reasoningv1.ProposalRejection{
+		Code:    reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+		Summary: "provider response is not valid review JSON",
+	}
+
+	_, err := service.Review(t.Context(), request)
+	if !errors.Is(err, ErrInvalidRequest) ||
+		!strings.Contains(err.Error(), "REJECTION_CODE_SCHEMA_INVALID") ||
+		!strings.Contains(err.Error(), "provider response is not valid review JSON") {
+		t.Fatalf("review rejection err=%v", err)
+	}
+	if gatewayPort.calls != 1 || workflowPort.calls != 0 {
+		t.Fatal("review rejection reached workflow")
 	}
 }
 

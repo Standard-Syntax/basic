@@ -167,4 +167,16 @@ func TestAnthropicReviewLoopbackUsesReviewSchema(t *testing.T) {
 	if properties["recommendation"] == nil || properties["findings"] == nil {
 		t.Fatalf("review schema missing from request: %+v", schema)
 	}
+	finding := properties["findings"].(map[string]any)["items"].(map[string]any)
+	findingProperties := finding["properties"].(map[string]any)
+	evidenceItems := findingProperties["evidence_references"].(map[string]any)["items"].(map[string]any)
+	identifiers := evidenceItems["enum"].([]any)
+	if len(identifiers) != len(request.GetIndependentEvidence()) {
+		t.Fatalf("evidence enum=%v request evidence=%v", identifiers, request.GetIndependentEvidence())
+	}
+	for index, evidence := range request.GetIndependentEvidence() {
+		if identifiers[index] != evidence.GetEvidenceId() {
+			t.Fatalf("evidence enum[%d]=%v want %q", index, identifiers[index], evidence.GetEvidenceId())
+		}
+	}
 }
