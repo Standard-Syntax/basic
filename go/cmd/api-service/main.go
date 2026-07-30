@@ -17,8 +17,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
 	"github.com/Standard-Syntax/basic/go/internal/controlapi"
+	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,6 +35,20 @@ type config struct {
 	MaxBodyBytes     int64                  `json:"max_body_bytes"`
 	TrustedChecks    []string               `json:"trusted_checks"`
 	Principals       []controlapi.Principal `json:"principals"`
+	Publication      *publicationConfig     `json:"publication,omitempty"`
+}
+
+type publicationConfig struct {
+	RepositoryRoot  string `json:"repository_root"`
+	RepositoryOwner string `json:"repository_owner"`
+	RepositoryName  string `json:"repository_name"`
+	Remote          string `json:"remote"`
+	BaseBranch      string `json:"base_branch"`
+	BranchPrefix    string `json:"branch_prefix"`
+	ActorID         string `json:"actor_id"`
+	APIEndpoint     string `json:"api_endpoint"`
+	APIVersion      string `json:"api_version"`
+	TokenFile       string `json:"token_file"`
 }
 
 func main() {
@@ -97,6 +113,12 @@ func loadConfig(path string) (config, error) {
 func run(ctx context.Context, value config) error {
 	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
 	err := workflow.Migrate(migrateCtx, value.DatabaseURL)
+	if err == nil {
+		err = approval.Migrate(migrateCtx, value.DatabaseURL)
+	}
+	if err == nil {
+		err = publication.Migrate(migrateCtx, value.DatabaseURL)
+	}
 	cancelMigrate()
 	if err != nil {
 		return fmt.Errorf("migrate workflow: %w", err)
@@ -117,12 +139,24 @@ func run(ctx context.Context, value config) error {
 		return err
 	}
 	defer artifacts.Close()
+	approvalLedger, err := approval.NewPostgresApprovalRepository(pool)
+	if err != nil {
+		return err
+	}
+	approvalService, err := approval.NewService(artifacts, workflow.NewStore(pool), approvalLedger)
+	if err != nil {
+		return err
+	}
+	publicationService, err := buildPublication(value.Publication, artifacts, pool)
+	if err != nil {
+		return err
+	}
 	handler, err := controlapi.New(controlapi.Config{
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
 		MaxBodyBytes:  value.MaxBodyBytes,
 		TrustedChecks: value.TrustedChecks,
 	}, workflow.NewStore(pool), runtime.NewLedger(pool), artifacts,
-		runtime.NewBindingRepository(pool), slog.Default())
+		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
 	if err != nil {
 		return err
 	}
@@ -147,4 +181,41 @@ func run(ctx context.Context, value config) error {
 		}
 		return err
 	}
+}
+
+func buildPublication(
+	value *publicationConfig, artifacts *artifact.Store, pool *pgxpool.Pool,
+) (*publication.Service, error) {
+	if value == nil {
+		return nil, nil
+	}
+	gitPublisher, err := publication.NewGitCommandPublisher(
+		value.RepositoryRoot, value.Remote, value.BaseBranch,
+	)
+	if err != nil {
+		return nil, err
+	}
+	credential, err := publication.NewFileCredential(value.TokenFile)
+	if err != nil {
+		return nil, err
+	}
+	pulls, err := publication.NewGitHubRESTClient(
+		value.APIEndpoint, value.APIVersion, publication.DefaultMaxBodyBytes,
+		publication.DefaultTimeout, credential,
+	)
+	if err != nil {
+		return nil, err
+	}
+	ledger, err := publication.NewPostgresPublicationRepository(pool)
+	if err != nil {
+		return nil, err
+	}
+	return publication.NewService(publication.Config{
+		RepositoryRoot: value.RepositoryRoot, RepositoryOwner: value.RepositoryOwner,
+		RepositoryName: value.RepositoryName, Remote: value.Remote,
+		BaseBranch: value.BaseBranch, BranchPrefix: value.BranchPrefix,
+		ActorID: value.ActorID, APIEndpoint: value.APIEndpoint,
+		APIVersion: value.APIVersion,
+	}, artifact.Publication{Store: artifacts}, workflow.NewStore(pool),
+		gitPublisher, pulls, ledger)
 }

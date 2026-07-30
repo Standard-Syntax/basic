@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Standard-Syntax/basic/go/internal/approval"
+	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
@@ -96,6 +98,12 @@ func (f *fakeBindings) CreateRun(_ context.Context, binding runtime.RunBinding) 
 	f.runs = append(f.runs, binding)
 	return nil
 }
+func (*fakeBindings) GetRun(context.Context, string) (runtime.RunBinding, error) {
+	return runtime.RunBinding{}, runtime.ErrNotFound
+}
+func (*fakeBindings) GetTask(context.Context, string, string) (runtime.TaskBinding, error) {
+	return runtime.TaskBinding{}, runtime.ErrNotFound
+}
 func (*fakeBindings) CheckpointSpecification(
 	context.Context, string, workflow.ArtifactRef,
 ) error {
@@ -105,6 +113,23 @@ func (*fakeBindings) CheckpointTaskGraph(
 	context.Context, string, workflow.ArtifactRef, runtime.TaskBinding,
 ) error {
 	return nil
+}
+func (*fakeBindings) CheckpointApproval(context.Context, string, workflow.ArtifactRef) error {
+	return nil
+}
+
+type fakeApproval struct{}
+
+func (fakeApproval) ApproveTask(context.Context, approval.Request) (approval.Result, error) {
+	return approval.Result{}, nil
+}
+
+type fakePublication struct{}
+
+func (fakePublication) Publish(
+	context.Context, publication.Request,
+) (publication.Result, error) {
+	return publication.Result{}, nil
 }
 
 func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRuntime, string) {
@@ -120,7 +145,8 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		}},
 		MaxBodyBytes:  512,
 		TrustedChecks: []string{"make-check-v1"},
-	}, workflowStore, runtimeLedger, fakeArtifacts{}, &fakeBindings{}, nil)
+	}, workflowStore, runtimeLedger, fakeArtifacts{}, &fakeBindings{},
+		fakeApproval{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
