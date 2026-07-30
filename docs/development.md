@@ -54,8 +54,15 @@ make test
 make build
 make integration-test
 make runtime-e2e
+make minimax-live-e2e # requires a MiniMax ANTHROPIC_API_KEY
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
+
+`make runtime-e2e` is deterministic and uses fake reasoning adapters.
+`make minimax-live-e2e` runs the same disposable process harness with two real
+MiniMax-M3 reasoning invocations. Follow
+[Run the agent harness live](live-harness.md) for its prerequisites, credential
+handling, acceptance evidence, and cleanup.
 
 ## Installed manifest compiler
 
@@ -232,8 +239,9 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
 `If-Match: "<revision>"`. Run `make runtime-e2e` for disposable PostgreSQL
-runtime recovery coverage. Keep `make provider-smoke` separate: live provider
-success is not deterministic runtime-E2E evidence.
+runtime recovery coverage. Run `make minimax-live-e2e` for the corresponding
+MiniMax-backed acceptance path. Keep `make provider-smoke` separate: it uses the
+generic Anthropic endpoint and is not MiniMax runtime-E2E evidence.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed
