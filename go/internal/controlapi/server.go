@@ -120,15 +120,47 @@ func New(
 	artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
 	publicationService PublicationService, logger *slog.Logger,
 ) (*Server, error) {
+	normalized, err := normalizeServerConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	principals, err := compilePrincipals(normalized.Principals)
+	if err != nil {
+		return nil, err
+	}
+	if len(principals) == 0 || bindings == nil || artifacts == nil ||
+		approvalService == nil {
+		return nil, errors.New("at least one principal is required")
+	}
+	checks, err := compileTrustedChecks(normalized.TrustedChecks)
+	if err != nil {
+		return nil, err
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Server{
+		config: normalized, workflow: workflowStore, runtime: runtimeLedger,
+		artifacts: artifacts, bindings: bindings, approval: approvalService,
+		publication: publicationService, principals: principals,
+		checks: checks, logger: logger,
+	}, nil
+}
+
+func normalizeServerConfig(config Config) (Config, error) {
 	if _, err := uuid.Parse(config.ServiceActorID); err != nil {
-		return nil, errors.New("invalid service actor ID")
+		return Config{}, errors.New("invalid service actor ID")
 	}
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = DefaultMaxBodyBytes
 	}
+	return config, nil
+}
+
+func compilePrincipals(values []Principal) ([]principalDigest, error) {
 	seen := make(map[string]struct{})
-	principals := make([]principalDigest, 0, len(config.Principals))
-	for _, principal := range config.Principals {
+	principals := make([]principalDigest, 0, len(values))
+	for _, principal := range values {
 		if _, err := uuid.Parse(principal.ID); err != nil {
 			return nil, errors.New("invalid principal ID")
 		}
@@ -144,26 +176,18 @@ func New(
 		copy(digest[:], decoded)
 		principals = append(principals, principalDigest{principal: principal, digest: digest})
 	}
-	if len(principals) == 0 || bindings == nil || artifacts == nil ||
-		approvalService == nil {
-		return nil, errors.New("at least one principal is required")
-	}
-	checks := make(map[string]struct{}, len(config.TrustedChecks))
-	for _, check := range config.TrustedChecks {
+	return principals, nil
+}
+
+func compileTrustedChecks(values []string) (map[string]struct{}, error) {
+	checks := make(map[string]struct{}, len(values))
+	for _, check := range values {
 		if check == "" {
 			return nil, errors.New("trusted check IDs must be non-empty")
 		}
 		checks[check] = struct{}{}
 	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &Server{
-		config: config, workflow: workflowStore, runtime: runtimeLedger,
-		artifacts: artifacts, bindings: bindings, approval: approvalService,
-		publication: publicationService, principals: principals,
-		checks: checks, logger: logger,
-	}, nil
+	return checks, nil
 }
 
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
