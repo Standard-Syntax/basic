@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check format-check lint type-check test check integration-test runtime-e2e provider-smoke clean
+.PHONY: build tools generate generate-check format-check lint type-check test check integration-test runtime-e2e minimax-live-e2e provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -58,14 +58,26 @@ integration-test:
 	exit $$status
 
 runtime-e2e:
+	docker compose down --volumes
+	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
+	docker build -f Dockerfile.verification-worker -t basic-verification-worker:runtime .
+	mkdir -p .tools/runtime
+	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
+	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
+		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
 		go test -tags=integration -count=1 \
-			./internal/runtime ./internal/controlapi ./internal/orchestration \
-			./internal/publication || status=$$?; \
+			-run '^TestRuntimeProcessesCompleteDisposableFixture$$' \
+			./internal/runtime || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
+
+minimax-live-e2e:
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
+	MINIMAX_LIVE_E2E=1 $(MAKE) runtime-e2e
 
 provider-smoke:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
