@@ -24,39 +24,40 @@ type ProviderConfig struct {
 }
 
 func (c ProviderConfig) Normalize() (ProviderConfig, error) {
-	if c.Mode == "" {
-		c.Mode = MiniMaxMode
+	normalized := c
+	if normalized.Mode == "" {
+		normalized.Mode = MiniMaxMode
 	}
-	if c.Mode == FakeProviderMode {
-		if c.BaseURL != "" || c.Model != "" || c.APIKeyEnv != "" {
+	if normalized.Mode == FakeProviderMode {
+		if normalized.BaseURL != "" || normalized.Model != "" || normalized.APIKeyEnv != "" {
 			return ProviderConfig{}, errors.New("fake provider does not accept remote configuration")
 		}
-		return c, nil
+		return normalized, nil
 	}
-	if c.Mode != MiniMaxMode {
+	if normalized.Mode != MiniMaxMode {
 		return ProviderConfig{}, errors.New("provider mode must be minimax_anthropic or fake")
 	}
-	if c.BaseURL == "" {
-		c.BaseURL = MiniMaxBaseURL
+	if normalized.BaseURL == "" {
+		normalized.BaseURL = MiniMaxBaseURL
 	}
-	if c.Model == "" {
-		c.Model = MiniMaxModel
+	if normalized.Model == "" {
+		normalized.Model = MiniMaxModel
 	}
-	if c.APIKeyEnv == "" {
-		c.APIKeyEnv = MiniMaxAPIKeyEnv
+	if normalized.APIKeyEnv == "" {
+		normalized.APIKeyEnv = MiniMaxAPIKeyEnv
 	}
-	parsed, err := url.Parse(c.BaseURL)
+	parsed, err := url.Parse(normalized.BaseURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" ||
-		c.BaseURL != MiniMaxBaseURL {
+		normalized.BaseURL != MiniMaxBaseURL {
 		return ProviderConfig{}, errors.New("MiniMax base URL must use the approved HTTPS endpoint")
 	}
-	if c.Model != MiniMaxModel {
+	if normalized.Model != MiniMaxModel {
 		return ProviderConfig{}, errors.New("MiniMax model must be MiniMax-M3")
 	}
-	if c.APIKeyEnv != MiniMaxAPIKeyEnv {
+	if normalized.APIKeyEnv != MiniMaxAPIKeyEnv {
 		return ProviderConfig{}, errors.New("MiniMax credential source must be ANTHROPIC_API_KEY")
 	}
-	return c, nil
+	return normalized, nil
 }
 
 type EnvironmentCredentialSource struct {
