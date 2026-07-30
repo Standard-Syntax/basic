@@ -134,6 +134,23 @@ immutable invocation outcome. Malformed complete responses become replayable
 `SCHEMA_INVALID`; provider, transport, credential, refusal, and timeout errors
 roll back the unfinished reservation.
 
-No HTTP/gRPC execution, verification, review, approval, or publication server,
-runtime Python agent, merge operation, or deployment exists.
-`MERGED` still records an already completed, approval-bound external fact.
+Phase 11 adds HTTP only at `api-service`; execution, verification, review,
+approval, and publication remain in-process application boundaries behind the
+PostgreSQL workflow worker. No runtime Python agent, merge operation, or
+deployment exists. `MERGED` still records an already completed,
+approval-bound external fact.
+
+## Phase 11 durable first-slice runtime
+
+`api-service` and `workflow-service` are the two runnable control-plane
+processes. The API authenticates configured principals and enforces roles,
+idempotency, and revision preconditions. The worker claims deterministic stage
+jobs with `FOR UPDATE SKIP LOCKED`; claim expiry permits takeover while fencing
+tokens prevent stale completion.
+
+Migration `0018` adds immutable runtime bindings, API idempotency, and stage
+jobs. A local SHA-256 CAS stores bounded durable evidence. Repository context is
+built from raw objects at the approved base commit, never mutable worktree
+contents. The first slice accepts one dependency-free task and pauses at one
+composite human approval. Publication remains draft-only and
+configuration-gated; an unconfigured run stays `MERGE_READY`.

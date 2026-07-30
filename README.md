@@ -1,8 +1,12 @@
 # Agent Harness
 
-This repository is the Phase 0–9 foundation for a kernel-driven agent harness.
+This repository contains the Phase 0–10 kernel and the Phase 11 durable-runtime
+foundation for a kernel-driven agent harness.
 Go is the trusted control-plane language; Python is limited to declarative agent
 configuration. Reasoning outputs are untrusted, provider-neutral proposals.
+Phase 11 adds a loopback authenticated HTTP API, a durable PostgreSQL
+reconciler, and a filesystem SHA-256 content-addressed store. Full in-process
+stage composition and the full lifecycle process E2E remain pending.
 
 The trusted Go kernel now makes transactional run and task lifecycle decisions
 with append-only PostgreSQL events. Leases and artifact, execution,

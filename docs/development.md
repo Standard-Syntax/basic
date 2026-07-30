@@ -53,6 +53,7 @@ make type-check
 make test
 make build
 make integration-test
+make runtime-e2e
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
@@ -212,6 +213,27 @@ remote and `httptest`; they do not contact GitHub.
 `make integration-test` also applies migration `0013` and runs publication
 checkpoint, conflict, rollback, concurrency, migration-digest, trigger, bare
 Git, and loopback REST tests.
+
+## Phase 11 processes
+
+Both processes accept `-config /absolute/path/config.json`. Configuration is
+strict JSON: unknown fields and trailing documents are rejected. The API
+configuration includes a loopback listener, PostgreSQL URL, absolute CAS root,
+service actor UUID, body limits, and principals with UUID identity, SHA-256
+token digest, and roles. Workflow configuration includes the PostgreSQL URL,
+absolute CAS root, worker-owner UUID, and artifact limit.
+
+```bash
+cd go
+go run ./cmd/api-service -config /absolute/path/api.json
+go run ./cmd/workflow-service -config /absolute/path/workflow.json
+```
+
+Every mutation supplies `Authorization: Bearer ...`, a UUID
+`Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
+`If-Match: "<revision>"`. Run `make runtime-e2e` for disposable PostgreSQL
+runtime recovery coverage. Keep `make provider-smoke` separate: live provider
+success is not deterministic runtime-E2E evidence.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

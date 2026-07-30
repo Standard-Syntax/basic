@@ -68,3 +68,12 @@ tools, fallback models, and multi-turn continuation remain out of scope.
 The pinned SDK increases offline Go compile/vet working data; the verification
 image seeds those caches and the isolated worker limit is therefore 2 GiB
 memory with 1 GiB tmpfs.
+
+## Phase 11 runtime
+
+API request bodies and CAS objects default to 1 MiB. Repository implementation
+context has explicit file and byte ceilings. The PostgreSQL worker holds one
+short claim transaction, then performs work outside that transaction; retries
+are bounded and back off to at most one minute. The first slice schedules one
+task, so it introduces no cross-task leasing or unbounded queue fan-out.
+External metrics and tracing backends remain deferred.

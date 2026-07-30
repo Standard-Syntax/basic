@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check format-check lint type-check test check integration-test provider-smoke clean
+.PHONY: build tools generate generate-check format-check lint type-check test check integration-test runtime-e2e provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -53,6 +53,16 @@ integration-test:
 		go test -tags=integration -count=1 \
 			./internal/workflow ./internal/registry ./internal/reasoning/gateway \
 			./internal/execution ./internal/verification ./internal/approval \
+			./internal/publication || status=$$?; \
+	docker compose down --volumes; \
+	exit $$status
+
+runtime-e2e:
+	docker compose up -d --wait postgres
+	@status=0; \
+	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+		go test -tags=integration -count=1 \
+			./internal/runtime ./internal/controlapi ./internal/orchestration \
 			./internal/publication || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
