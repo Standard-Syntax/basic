@@ -53,14 +53,16 @@ make type-check
 make test
 make build
 make integration-test
+make runtime-e2e      # credential-free PostgreSQL/CAS/reconciler recovery
+make beta-live-e2e    # requires ANTHROPIC_API_KEY; complete live process gate
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
-The historical `make runtime-e2e` and `make minimax-live-e2e` targets still
-contain the pre-beta mixed fake/live process fixture. They are not supported
-Beta Slice 1 evidence: strict production configuration rejects the fake path,
-and Slice 2 owns the live fixture and target redesign. See
-[Run the agent harness live](live-harness.md).
+`make runtime-e2e` is deterministic infrastructure evidence only. It recovers
+an expired PostgreSQL stage claim through the reconciler, consumes a
+pre-existing integrity-checked CAS artifact, and makes no reasoning-provider
+request. It is not beta lifecycle completion. See
+[Run the agent harness live](live-harness.md) for the credentialed gate.
 
 ## Installed manifest compiler
 
@@ -245,10 +247,13 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
-`If-Match: "<revision>"`. The old process-E2E targets are historical until
-Beta Slice 2 replaces their mixed fake/live fixture. Keep `make provider-smoke`
-separate: it uses the generic Anthropic endpoint and is not MiniMax
-runtime-E2E evidence.
+`If-Match: "<revision>"`. `make beta-live-e2e` is the full two-process MiniMax
+gate: it builds both service binaries and worker images, starts disposable
+PostgreSQL, uses a disposable Git repository and loopback GitHub publication,
+and exercises implementation, execution, verification, review, restart,
+human approval, draft publication, and exact approval replay. Keep
+`make provider-smoke` separate: it uses the generic Anthropic endpoint and is
+not MiniMax runtime-E2E evidence.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

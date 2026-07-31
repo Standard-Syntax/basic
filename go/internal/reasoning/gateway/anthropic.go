@@ -651,15 +651,12 @@ type scopeChangeProjection struct {
 func decodeImplementationMessage(
 	message *anthropic.Message,
 ) (implementationProjection, *MalformedOutput) {
-	if message == nil || message.StopReason != anthropic.StopReasonEndTurn ||
-		len(message.Content) != 1 || message.Content[0].Type != "text" ||
-		strings.TrimSpace(message.Content[0].Text) == "" {
-		return implementationProjection{}, &MalformedOutput{
-			Message: "provider response must contain one complete text block",
-		}
+	text, malformed := providerText(message)
+	if malformed != nil {
+		return implementationProjection{}, malformed
 	}
 	var projection implementationProjection
-	decoder := json.NewDecoder(strings.NewReader(message.Content[0].Text))
+	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
 		return implementationProjection{}, &MalformedOutput{
@@ -672,6 +669,48 @@ func decodeImplementationMessage(
 		}
 	}
 	return projection, nil
+}
+
+func providerText(message *anthropic.Message) (string, *MalformedOutput) {
+	if message == nil || message.StopReason != anthropic.StopReasonEndTurn {
+		return "", &MalformedOutput{
+			Message: "provider response must contain one complete text block",
+		}
+	}
+	var text string
+	thinkingSeen := false
+	for index := range message.Content {
+		block := &message.Content[index]
+		switch block.Type {
+		case "thinking":
+			if thinkingSeen || text != "" {
+				return "", &MalformedOutput{
+					Message: "provider response must contain one optional thinking block before one text block",
+				}
+			}
+			thinkingSeen = true
+			// MiniMax documents a signed thinking block before its text block.
+			// It stays only in the raw response artifact and is never proposal input.
+			continue
+		case "text":
+			if text != "" || strings.TrimSpace(block.Text) == "" {
+				return "", &MalformedOutput{
+					Message: "provider response must contain one complete text block",
+				}
+			}
+			text = block.Text
+		default:
+			return "", &MalformedOutput{
+				Message: "provider response contains an unsupported content block",
+			}
+		}
+	}
+	if text == "" {
+		return "", &MalformedOutput{
+			Message: "provider response must contain one complete text block",
+		}
+	}
+	return text, nil
 }
 
 func implementationProposalFromProjection(

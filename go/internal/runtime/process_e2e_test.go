@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -25,26 +26,23 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
-	live := os.Getenv("MINIMAX_LIVE_E2E") == "1"
-	apiKey := ""
-	if live {
-		apiKey = strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
-		if apiKey == "" {
-			t.Fatal("ANTHROPIC_API_KEY is required for the live MiniMax E2E")
-		}
+func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
+	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	if apiKey == "" {
+		t.Fatal("ANTHROPIC_API_KEY is required for the beta live E2E")
 	}
 	apiBinary := requireEnvironment(t, "RUNTIME_API_BINARY")
 	workflowBinary := requireEnvironment(t, "RUNTIME_WORKFLOW_BINARY")
 	databaseURL := requireEnvironment(t, "TEST_DATABASE_URL")
 	root := t.TempDir()
-	repository, remote, baseCommit, originalDigest := fixtureRepository(t, root)
+	repository, remote, baseCommit := fixtureRepository(t, root)
 	artifactRoot := filepath.Join(root, "artifacts")
 	worktrees := filepath.Join(root, "worktrees")
 	verificationRoot := filepath.Join(root, "verification")
@@ -53,8 +51,7 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	promptPaths, manifestPaths := runtimeManifests(t, root, live)
-	proposalPaths := fakeProposals(t, root, originalDigest)
+	promptPaths, manifestPaths := runtimeManifests(t, root)
 	token := "runtime-operator-token"
 	tokenDigest := sha256.Sum256([]byte(token))
 	prServer, prState := loopbackPullRequests(t)
@@ -86,13 +83,6 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 		},
 	})
 	workflowConfig := filepath.Join(root, "workflow.json")
-	provider := map[string]any{"mode": "fake"}
-	if live {
-		provider = map[string]any{
-			"mode": "minimax_anthropic", "base_url": "https://api.minimax.io/anthropic",
-			"model": "MiniMax-M3", "api_key_env": "ANTHROPIC_API_KEY",
-		}
-	}
 	workflowValues := map[string]any{
 		"database_url": databaseURL, "artifact_root": artifactRoot,
 		"owner_id": uuid.NewString(), "max_artifact_bytes": 4 << 20,
@@ -110,11 +100,10 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 		"context_max_files": 8, "context_max_bytes": 1 << 20,
 		"task_lease_duration_nanoseconds": int64(30 * time.Minute),
 		"claim_ttl_nanoseconds":           int64(3 * time.Second),
-		"provider":                        provider,
-	}
-	if !live {
-		workflowValues["fake_implementation_proposal_path"] = proposalPaths[0]
-		workflowValues["fake_review_proposal_path"] = proposalPaths[1]
+		"provider": map[string]any{
+			"mode": "minimax_anthropic", "base_url": "https://api.minimax.io/anthropic",
+			"model": "MiniMax-M2.7", "api_key_env": "ANTHROPIC_API_KEY",
+		},
 	}
 	writeJSONFile(t, workflowConfig, workflowValues)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,7 +144,7 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	waitFor(t, 3*time.Minute, func() bool {
+	waitFor(t, 12*time.Minute, func() bool {
 		var state string
 		err := pool.QueryRow(t.Context(), `SELECT state FROM workflow_tasks
 			WHERE run_id=$1 AND task_id=$2`, runID, taskID).Scan(&state)
@@ -166,6 +155,26 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 			ORDER BY updated_at DESC LIMIT 1`, runID, taskID).
 			Scan(&failedStage, &failureDigest); failureErr == nil {
 			t.Fatalf("runtime stage %s failed: artifact digest %s", failedStage, failureDigest)
+		}
+		if state == string(workflow.TaskStateProposalRejected) {
+			var code int
+			var summary, details string
+			if rejectionErr := pool.QueryRow(t.Context(), `SELECT rejection_code,
+				rejection_summary,rejection_details::text
+				FROM reasoning_invocations WHERE run_id=$1 AND task_id=$2
+				AND final_status='rejected' ORDER BY completed_at DESC LIMIT 1`,
+				runID, taskID).Scan(&code, &summary, &details); rejectionErr != nil {
+				t.Fatalf("implementation proposal rejected; evidence unavailable: %v", rejectionErr)
+			}
+			t.Fatalf("implementation proposal rejected: code=%d summary=%s details=%s",
+				code, summary, details)
+		}
+		if state == string(workflow.TaskStateReworkRequired) {
+			var stageName string
+			_ = pool.QueryRow(t.Context(), `SELECT stage FROM runtime_stage_jobs
+				WHERE run_id=$1 AND task_id=$2 AND state='COMPLETED'
+				ORDER BY updated_at DESC LIMIT 1`, runID, taskID).Scan(&stageName)
+			t.Fatalf("task required rework after stage %s", stageName)
 		}
 		return err == nil && state == string(workflow.TaskStateAwaitingApproval)
 	})
@@ -193,10 +202,15 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 			completedBeforeRestart, completedAfterRestart)
 	}
 	workflowProcess.stop(t)
-	approvalResponse := client.mutate(t, "/v1/runs/"+runID+"/approval",
-		client.revision(t, runID), map[string]any{
-			"decision_timestamp": now.Add(10 * time.Minute),
-		}, http.StatusOK)
+	approvalPath := "/v1/runs/" + runID + "/approval"
+	approvalRevision := client.revision(t, runID)
+	approvalKey := uuid.NewString()
+	approvalRequest := map[string]any{
+		"decision_timestamp": now.Add(10 * time.Minute),
+	}
+	approvalResponse := client.mutateWithKey(
+		t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
+	)
 	publicationValue, ok := approvalResponse["publication"].(map[string]any)
 	if !ok || publicationValue["candidate_commit"] == "" ||
 		publicationValue["pull_request_number"] != float64(1) {
@@ -205,6 +219,10 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 	candidate := publicationValue["candidate_commit"].(string)
 	if candidate == baseCommit {
 		t.Fatal("candidate equals base")
+	}
+	branch, ok := publicationValue["branch"].(string)
+	if !ok || branch != "harness/"+runID {
+		t.Fatalf("publication branch = %#v", publicationValue["branch"])
 	}
 	changed := strings.Fields(runGitOutput(t, repository, "diff", "--name-only", baseCommit, candidate))
 	if len(changed) != 1 || changed[0] != "add.go" {
@@ -216,23 +234,41 @@ func TestRuntimeProcessesCompleteDisposableFixture(t *testing.T) {
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("candidate verification: %v: %s", err, output)
 	}
-	prState.mu.Lock()
-	creates := prState.creates
-	prState.mu.Unlock()
-	if creates != 1 {
-		t.Fatalf("draft PR creates = %d", creates)
+	assertPublishedFixture(t, repository, remote, baseCommit, candidate, branch, prState)
+	assertReasoningEvidence(t, pool, artifactRoot, runID)
+	assertDurableOutcome(t, pool, runID, taskID, actorIDs[1], candidate)
+	beforeReplay := snapshotSideEffects(
+		t, pool, repository, remote, runID, taskID, prState,
+	)
+
+	api.stop(t)
+	api = startProcess(t, ctx, apiBinary, apiConfig)
+	processes = append(processes, api)
+	waitHTTP(t, "http://"+apiAddress+"/healthz", "", http.StatusOK)
+	replayedApproval := client.mutateWithKey(
+		t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
+	)
+	if !reflect.DeepEqual(replayedApproval, approvalResponse) {
+		t.Fatalf("approval replay changed response: first=%#v replay=%#v",
+			approvalResponse, replayedApproval)
 	}
-	assertReasoningEvidence(t, pool, runID, live)
-	assertDurableOutcome(t, pool, runID, taskID, candidate)
+	afterReplay := snapshotSideEffects(
+		t, pool, repository, remote, runID, taskID, prState,
+	)
+	if afterReplay != beforeReplay {
+		t.Fatalf("approval replay repeated a side effect: before=%#v after=%#v",
+			beforeReplay, afterReplay)
+	}
 	var events int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM workflow_events
 		WHERE aggregate_id IN ($1,$2)`, runID, taskID).Scan(&events); err != nil || events < 10 {
 		t.Fatalf("events = %d, %v", events, err)
 	}
-	if live {
-		assertSecretAbsent(t, apiKey, databaseURL, artifactRoot,
-			[]string{apiConfig, workflowConfig, promptPaths[0], promptPaths[1]}, processes)
-	}
+	assertSecretAbsent(t, apiKey, pool, artifactRoot, repository,
+		[]string{
+			apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
+			manifestPaths[0], manifestPaths[1],
+		}, processes)
 }
 
 type process struct {
@@ -251,7 +287,11 @@ func startProcess(t *testing.T, ctx context.Context, binary, config string) *pro
 	result := &process{command: command, logs: logs}
 	t.Cleanup(func() {
 		if t.Failed() && logs.Len() > 0 {
-			t.Logf("%s logs:\n%s", filepath.Base(binary), logs.String())
+			sanitized := logs.String()
+			if secret := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); secret != "" {
+				sanitized = strings.ReplaceAll(sanitized, secret, "[REDACTED]")
+			}
+			t.Logf("%s logs:\n%s", filepath.Base(binary), sanitized)
 		}
 	})
 	return result
@@ -285,13 +325,20 @@ func (c runtimeClient) mutate(
 	t *testing.T, path, revision string, body any, status int,
 ) map[string]any {
 	t.Helper()
+	return c.mutateWithKey(t, path, revision, uuid.NewString(), body, status)
+}
+
+func (c runtimeClient) mutateWithKey(
+	t *testing.T, path, revision, idempotencyKey string, body any, status int,
+) map[string]any {
+	t.Helper()
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	request, _ := http.NewRequest(http.MethodPost, c.base+path, bytes.NewReader(encoded))
 	request.Header.Set("Authorization", "Bearer "+c.token)
-	request.Header.Set("Idempotency-Key", uuid.NewString())
+	request.Header.Set("Idempotency-Key", idempotencyKey)
 	if revision != "" {
 		request.Header.Set("If-Match", revision)
 	}
@@ -332,7 +379,7 @@ func (c runtimeClient) revision(t *testing.T, runID string) string {
 	return fmt.Sprintf("\"%.0f\"", run["revision"].(float64))
 }
 
-func fixtureRepository(t *testing.T, root string) (string, string, string, string) {
+func fixtureRepository(t *testing.T, root string) (string, string, string) {
 	t.Helper()
 	repository := filepath.Join(root, "repository")
 	remote := filepath.Join(root, "remote.git")
@@ -352,25 +399,22 @@ func fixtureRepository(t *testing.T, root string) (string, string, string, strin
 	runGitE2E(t, repository, "remote", "add", "origin", remote)
 	runGitE2E(t, repository, "push", "-q", "origin", "main:main")
 	base := strings.TrimSpace(runGitOutput(t, repository, "rev-parse", "HEAD"))
-	body, err := os.ReadFile(filepath.Join(repository, "add.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return repository, "origin", base, Digest(body)
+	return repository, "origin", base
 }
 
-func runtimeManifests(t *testing.T, root string, live bool) ([2]string, [2]string) {
+func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 	t.Helper()
 	var prompts [2]string
 	var manifests [2]string
 	for index, stageName := range []string{"implementation", "review"} {
-		prompt := "Return a bounded " + stageName + " proposal."
-		if live && stageName == "implementation" {
-			prompt = "Correct the approved coding task using only authorized writable paths. " +
-				"Use the committed tests as read-only evidence, request make-check-v1, and return " +
-				"a non-empty implementation proposal that replaces the complete add.go file."
-		}
-		if live && stageName == "review" {
+		prompt := "Return only a valid implementation_proposal.v1 JSON object for the " +
+			"approved task. Set a non-empty summary and exactly one changes item: path add.go, " +
+			"operation update, expected_original_sha256 equal to the supplied add.go digest, " +
+			"replacement_content equal to the complete add.go file with Add returning a + b, " +
+			"a non-empty rationale, and acceptance_criterion_ids exactly [\"AC-001\"]. " +
+			"Set requested_declared_check_ids exactly [\"make-check-v1\"]. Do not request a " +
+			"scope change and do not change tests or any other file."
+		if stageName == "review" {
 			prompt = "Independently review the exact candidate diff and verification evidence. " +
 				"Return advisory accept only when the candidate is in scope and all assigned " +
 				"acceptance criteria are proven by the trusted check."
@@ -404,34 +448,6 @@ func runtimeManifests(t *testing.T, root string, live bool) ([2]string, [2]strin
 		writeJSONFile(t, manifests[index], value)
 	}
 	return prompts, manifests
-}
-
-func fakeProposals(t *testing.T, root, originalDigest string) [2]string {
-	t.Helper()
-	replacement := "package fixture\n\nfunc Add(a, b int) int { return a + b }\n"
-	implementation := &reasoningv1.ImplementationProposal{
-		Summary: "Correct addition", Changes: []*reasoningv1.FileChange{{
-			Path: "add.go", Operation: reasoningv1.FileOperation_FILE_OPERATION_UPDATE,
-			ExpectedOriginalSha256: originalDigest, ReplacementContent: &replacement,
-			Rationale:              "Implement the approved behavior",
-			AcceptanceCriterionIds: []string{"AC-001"},
-		}},
-		RequestedDeclaredCheckIds: []string{"make-check-v1"},
-	}
-	review := &reasoningv1.ReviewProposal{
-		Recommendation: reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_ADVISORY_ACCEPT,
-	}
-	paths := [2]string{filepath.Join(root, "implementation.proposal.json"), filepath.Join(root, "review.proposal.json")}
-	for index, value := range []proto.Message{implementation, review} {
-		body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(paths[index], body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return paths
 }
 
 func specificationPair(
@@ -652,10 +668,10 @@ func requireEnvironment(t *testing.T, name string) string {
 }
 
 func assertReasoningEvidence(
-	t *testing.T, pool *pgxpool.Pool, runID string, live bool,
+	t *testing.T, pool *pgxpool.Pool, artifactRoot, runID string,
 ) {
 	t.Helper()
-	rows, err := pool.Query(t.Context(), `SELECT stage,provider,model,input_tokens,
+	rows, err := pool.Query(t.Context(), `SELECT request_id,stage,provider,model,input_tokens,
 		output_tokens,provider_requests,COALESCE(provider_request_id,''),
 		proposal_artifact_uri,provider_response_artifact_uri,final_status
 		FROM reasoning_invocations WHERE run_id=$1 ORDER BY stage`, runID)
@@ -664,17 +680,18 @@ func assertReasoningEvidence(
 	}
 	defer rows.Close()
 	type evidence struct {
-		stage, provider, model, requestID, proposalURI, responseURI, status string
-		input, output                                                       int64
-		requests                                                            int
+		requestIdentity, stage, provider, model, providerRequestID string
+		proposalURI, responseURI, status                           string
+		input, output                                              int64
+		requests                                                   int
 	}
 	var values []evidence
 	for rows.Next() {
 		var value evidence
 		if err := rows.Scan(
-			&value.stage, &value.provider, &value.model, &value.input, &value.output,
-			&value.requests, &value.requestID, &value.proposalURI, &value.responseURI,
-			&value.status,
+			&value.requestIdentity, &value.stage, &value.provider, &value.model,
+			&value.input, &value.output, &value.requests, &value.providerRequestID,
+			&value.proposalURI, &value.responseURI, &value.status,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -686,24 +703,24 @@ func assertReasoningEvidence(
 	if len(values) != 2 {
 		t.Fatalf("reasoning invocations = %d; want exactly implementation and review", len(values))
 	}
+	if values[0].stage != "implementation" || values[1].stage != "review" ||
+		values[0].requestIdentity == values[1].requestIdentity {
+		t.Fatalf("reasoning stage identities = %#v", values)
+	}
 	for _, value := range values {
-		wantProvider, wantModel := "deterministic-fake", "fake-"+value.stage
-		if live {
-			wantProvider, wantModel = "minimax-anthropic", "MiniMax-M3"
-		}
-		if value.provider != wantProvider || value.model != wantModel ||
+		if value.provider != "minimax-anthropic" || value.model != "MiniMax-M2.7" ||
 			value.requests != 1 || value.proposalURI == "" || value.responseURI == "" ||
-			value.status != "accepted" {
-			t.Fatalf("reasoning evidence for %s = %#v", value.stage, value)
+			value.status != "accepted" || value.providerRequestID == "" ||
+			value.input <= 0 || value.output <= 0 {
+			t.Fatalf("live reasoning evidence for %s = %#v", value.stage, value)
 		}
-		if live && (value.requestID == "" || value.input <= 0 || value.output <= 0) {
-			t.Fatalf("live provider evidence for %s is incomplete: %#v", value.stage, value)
-		}
+		assertArtifactIntegrity(t, artifactRoot, value.proposalURI)
+		assertArtifactIntegrity(t, artifactRoot, value.responseURI)
 	}
 }
 
 func assertDurableOutcome(
-	t *testing.T, pool *pgxpool.Pool, runID, taskID, candidate string,
+	t *testing.T, pool *pgxpool.Pool, runID, taskID, approverID, candidate string,
 ) {
 	t.Helper()
 	queries := []struct {
@@ -715,7 +732,8 @@ func assertDurableOutcome(
 		{"review", `SELECT count(*) FROM workflow_tasks WHERE run_id=$1 AND task_id=$2
 			AND review_uri IS NOT NULL AND review_digest IS NOT NULL`, []any{runID, taskID}},
 		{"approval", `SELECT count(*) FROM task_approvals WHERE run_id=$1 AND task_id=$2
-			AND candidate_commit=$3 AND state='completed'`, []any{runID, taskID, candidate}},
+			AND principal_id=$3 AND candidate_commit=$4 AND decision='approve'
+			AND state='completed'`, []any{runID, taskID, approverID, candidate}},
 		{"publication", `SELECT count(*) FROM draft_pull_request_publications
 			WHERE published_candidate_commit=$1 AND state='completed'`, []any{candidate}},
 	}
@@ -727,9 +745,102 @@ func assertDurableOutcome(
 	}
 }
 
+func assertArtifactIntegrity(t *testing.T, artifactRoot, uri string) {
+	t.Helper()
+	const prefix = "artifact://sha256/"
+	digest := strings.TrimPrefix(uri, prefix)
+	if len(digest) != 64 || prefix+digest != uri {
+		t.Fatalf("invalid artifact URI %q", uri)
+	}
+	body, err := os.ReadFile(filepath.Join(artifactRoot, digest[:2], digest))
+	if err != nil {
+		t.Fatalf("read artifact %s: %v", uri, err)
+	}
+	if Digest(body) != digest {
+		t.Fatalf("artifact integrity mismatch for %s", uri)
+	}
+}
+
+func assertPublishedFixture(
+	t *testing.T, repository, remote, base, candidate, branch string,
+	state *pullRequestState,
+) {
+	t.Helper()
+	remoteHead := strings.Fields(runGitOutput(
+		t, repository, "ls-remote", "--heads", remote, "refs/heads/"+branch,
+	))
+	if len(remoteHead) != 2 || remoteHead[0] != candidate ||
+		remoteHead[1] != "refs/heads/"+branch {
+		t.Fatalf("remote harness branch = %v", remoteHead)
+	}
+	harnessHeads := strings.Fields(runGitOutput(
+		t, repository, "ls-remote", "--heads", remote, "refs/heads/harness/*",
+	))
+	if len(harnessHeads) != 2 || harnessHeads[0] != candidate ||
+		harnessHeads[1] != "refs/heads/"+branch {
+		t.Fatalf("remote harness branches = %v", harnessHeads)
+	}
+	remoteBase := strings.Fields(runGitOutput(
+		t, repository, "ls-remote", "--heads", remote, "refs/heads/main",
+	))
+	if len(remoteBase) != 2 || remoteBase[0] != base ||
+		remoteBase[1] != "refs/heads/main" {
+		t.Fatalf("remote base branch = %v", remoteBase)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.creates != 1 || state.created == nil ||
+		state.created["state"] != "open" || state.created["draft"] != true {
+		t.Fatalf("draft PR state = creates:%d value:%#v", state.creates, state.created)
+	}
+	head, _ := state.created["head"].(map[string]any)
+	baseValue, _ := state.created["base"].(map[string]any)
+	if head["ref"] != branch || baseValue["ref"] != "main" {
+		t.Fatalf("draft PR bindings = head:%#v base:%#v candidate:%s expected-base:%s",
+			head, baseValue, candidate, base)
+	}
+}
+
+type sideEffects struct {
+	reasoning, approvals, publications, pullRequests int
+	remoteRefs                                       string
+}
+
+func snapshotSideEffects(
+	t *testing.T, pool *pgxpool.Pool, repository, remote, runID, taskID string,
+	state *pullRequestState,
+) sideEffects {
+	t.Helper()
+	var value sideEffects
+	queries := []struct {
+		target *int
+		query  string
+		args   []any
+	}{
+		{&value.reasoning, `SELECT count(*) FROM reasoning_invocations WHERE run_id=$1`,
+			[]any{runID}},
+		{&value.approvals, `SELECT count(*) FROM task_approvals
+			WHERE run_id=$1 AND task_id=$2`, []any{runID, taskID}},
+		{&value.publications, `SELECT count(*) FROM draft_pull_request_publications
+			WHERE published_branch=$1`, []any{"harness/" + runID}},
+	}
+	for _, query := range queries {
+		if err := pool.QueryRow(t.Context(), query.query, query.args...).Scan(query.target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state.mu.Lock()
+	value.pullRequests = state.creates
+	state.mu.Unlock()
+	value.remoteRefs = runGitOutput(t, repository, "ls-remote", "--heads", remote)
+	return value
+}
+
 func assertSecretAbsent(
 	t *testing.T,
-	secret, databaseURL, artifactRoot string,
+	secret string,
+	pool *pgxpool.Pool,
+	artifactRoot, repository string,
 	configPaths []string,
 	processes []*process,
 ) {
@@ -768,10 +879,61 @@ func assertSecretAbsent(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("pg_dump", "--no-owner", "--no-privileges", databaseURL)
-	dump, err := command.Output()
+	rows, err := pool.Query(t.Context(), `SELECT schemaname, tablename
+		FROM pg_catalog.pg_tables
+		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY schemaname, tablename`)
 	if err != nil {
-		t.Fatalf("dump PostgreSQL secret evidence: %v", err)
+		t.Fatalf("list PostgreSQL evidence tables: %v", err)
 	}
-	check("PostgreSQL evidence", dump)
+	tables, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Schema string
+		Table  string
+	}])
+	if err != nil {
+		t.Fatalf("collect PostgreSQL evidence tables: %v", err)
+	}
+	connection, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("acquire PostgreSQL evidence connection: %v", err)
+	}
+	defer connection.Release()
+	for _, table := range tables {
+		var dump bytes.Buffer
+		name := pgx.Identifier{table.Schema, table.Table}.Sanitize()
+		if _, err := connection.Conn().PgConn().CopyTo(
+			t.Context(), &dump, "COPY "+name+" TO STDOUT WITH (FORMAT csv, HEADER true)",
+		); err != nil {
+			t.Fatalf("export PostgreSQL evidence table %s: %v", name, err)
+		}
+		check("PostgreSQL evidence table "+name, dump.Bytes())
+	}
+	assertSecretAbsentFromGit(t, secret, repository)
+}
+
+func assertSecretAbsentFromGit(t *testing.T, secret, repository string) {
+	t.Helper()
+	objectLines := strings.Split(
+		runGitOutput(t, repository, "rev-list", "--objects", "--all"), "\n",
+	)
+	seen := make(map[string]struct{}, len(objectLines))
+	for _, line := range objectLines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		objectID := fields[0]
+		if _, ok := seen[objectID]; ok {
+			continue
+		}
+		seen[objectID] = struct{}{}
+		command := exec.Command("git", "-C", repository, "cat-file", "-p", objectID)
+		body, err := command.Output()
+		if err != nil {
+			t.Fatalf("inspect reachable fixture Git object %s: %v", objectID, err)
+		}
+		if bytes.Contains(body, []byte(secret)) {
+			t.Fatalf("ANTHROPIC_API_KEY persisted in reachable fixture Git object %s", objectID)
+		}
+	}
 }
