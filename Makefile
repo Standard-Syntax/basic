@@ -28,6 +28,14 @@ generate-check:
 
 no-fake-provider-adapters:
 	./scripts/no-fake-provider-adapters.sh
+	@status=0; \
+	./scripts/no-fake-provider-adapters.sh \
+		scripts/testdata/no-fake-provider-adapters/split-provider-mode.go \
+		>/dev/null 2>&1 || status=$$?; \
+	if ((status != 1)); then \
+		echo "multiline alternate-provider regression fixture was not rejected" >&2; \
+		exit 1; \
+	fi
 
 format-check:
 	test -z "$$(gofmt -l go)"
