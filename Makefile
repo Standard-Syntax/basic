@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-live-e2e beta-canary-e2e beta-canary-cleanup provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-canary-e2e beta-canary-cleanup provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -83,8 +83,60 @@ beta-preflight:
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-preflight -config "$(BETA_CONFIG)"
 
+beta-images:
+	$(eval SOURCE_REVISION := $(shell git rev-parse HEAD))
+	docker build -f Dockerfile.execution-worker -t basic-execution-worker:beta .
+	docker build -f Dockerfile.verification-worker -t basic-verification-worker:beta .
+	docker build --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
+		-f Dockerfile.api-service -t basic-api-service:beta .
+	docker build --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
+		-f Dockerfile.workflow-service -t basic-workflow-service:beta .
+	SOURCE_REVISION="$(SOURCE_REVISION)" ./scripts/inspect-beta-images.sh
+
+beta-deploy-smoke: beta-images
+	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
+	@mkdir -p .tools/beta
+	@env_file=$$(mktemp); status=0; \
+		trap 'docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" down --volumes >/dev/null 2>&1 || true; rm -f "$$env_file"' EXIT; \
+		cd go && go run ./cmd/beta-compose-env -config "$(BETA_CONFIG)" >"$$env_file"; cd ..; \
+		docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" \
+			up -d --wait beta-postgres api-service workflow-service || status=$$?; \
+		if ((status == 0)); then \
+			claimed=$$(docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" \
+				exec -T beta-postgres psql -U workflow -d workflow -Atc \
+				"SELECT count(*) FROM runtime_stage_jobs WHERE state='CLAIMED'"); \
+			test "$$claimed" = 0 || status=1; \
+		fi; \
+		if ((status == 0)); then \
+			cd go && go run ./cmd/beta-deployment-record -config "$(BETA_CONFIG)" \
+				-output "$(CURDIR)/.tools/beta/deployment-record.json" || status=$$?; \
+		fi; \
+		exit $$status
+
 beta-live-e2e:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
+
+ifneq ($(strip $(BETA_CONFIG)),)
+	@set -e; \
+		$(MAKE) beta-images; \
+		env_file=$$(mktemp); trap 'rm -f "$$env_file"' EXIT; \
+		cd go && go run ./cmd/beta-compose-env -config "$(BETA_CONFIG)" >"$$env_file"; cd ..; \
+		set -a; source "$$env_file"; set +a; \
+		test "$$(docker image inspect --format '{{.Id}}' basic-api-service:beta)" = "$$BETA_API_IMAGE"; \
+		test "$$(docker image inspect --format '{{.Id}}' basic-workflow-service:beta)" = "$$BETA_WORKFLOW_IMAGE"; \
+		test "$$(docker image inspect --format '{{.Id}}' basic-execution-worker:beta)" = "$$BETA_EXECUTION_IMAGE"; \
+		test "$$(docker image inspect --format '{{.Id}}' basic-verification-worker:beta)" = "$$BETA_VERIFICATION_IMAGE"; \
+		docker compose down --volumes; docker compose up -d --wait postgres; status=0; \
+		cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+			RUNTIME_PACKAGED=1 RUNTIME_API_BINARY="$$BETA_API_IMAGE" \
+			RUNTIME_WORKFLOW_BINARY="$$BETA_WORKFLOW_IMAGE" \
+			RUNTIME_EXECUTION_IMAGE="$$BETA_EXECUTION_IMAGE" \
+			RUNTIME_VERIFICATION_IMAGE="$$BETA_VERIFICATION_IMAGE" \
+			RUNTIME_DOCKER_GID="$$BETA_DOCKER_GID" \
+			go test -v -tags=integration -count=1 -run '^TestBetaLiveProcessesCompleteDisposableFixture$$' \
+			./internal/runtime || status=$$?; cd ..; \
+		docker compose down --volumes; exit $$status
+else
 	docker compose down --volumes
 	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
 	docker build -f Dockerfile.verification-worker -t basic-verification-worker:runtime .
@@ -101,6 +153,7 @@ beta-live-e2e:
 			./internal/runtime || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
+endif
 
 beta-canary-e2e:
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }

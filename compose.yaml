@@ -21,10 +21,10 @@ services:
     environment:
       POSTGRES_DB: workflow
       POSTGRES_USER: workflow
-      POSTGRES_PASSWORD_FILE: ${BETA_POSTGRES_PASSWORD_FILE:?required}
+      POSTGRES_PASSWORD_FILE: ${BETA_POSTGRES_PASSWORD_FILE:-/dev/null}
     volumes:
       - beta-postgres-data:/var/lib/postgresql
-      - ${BETA_POSTGRES_PASSWORD_FILE:?required}:${BETA_POSTGRES_PASSWORD_FILE:?required}:ro
+      - ${BETA_POSTGRES_CREDENTIAL_ROOT:-/tmp}:${BETA_POSTGRES_CREDENTIAL_ROOT:-/tmp}:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U workflow -d workflow"]
       interval: 2s
@@ -32,6 +32,7 @@ services:
       retries: 30
     read_only: true
     cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"]
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /run:size=8m,noexec,nosuid,nodev
@@ -40,18 +41,18 @@ services:
 
   api-service:
     profiles: ["beta"]
-    image: ${BETA_API_IMAGE:?required}
-    command: ["-config", "${BETA_API_CONFIG:?required}"]
+    image: ${BETA_API_IMAGE:-scratch}
+    command: ["-config", "${BETA_API_CONFIG:-/dev/null}"]
     depends_on:
       beta-postgres:
         condition: service_healthy
     ports:
       - "127.0.0.1:${BETA_API_PORT:-8080}:8080"
     volumes:
-      - ${BETA_API_CONFIG:?required}:${BETA_API_CONFIG:?required}:ro
-      - ${BETA_REPOSITORY_ROOT:?required}:${BETA_REPOSITORY_ROOT:?required}:ro
-      - ${BETA_CAS_ROOT:?required}:${BETA_CAS_ROOT:?required}
-      - ${BETA_CONFIGURATION_ROOT:?required}:${BETA_CONFIGURATION_ROOT:?required}:ro
+      - ${BETA_API_CONFIG:-/dev/null}:${BETA_API_CONFIG:-/dev/null}:ro
+      - ${BETA_REPOSITORY_ROOT:-/tmp}:${BETA_REPOSITORY_ROOT:-/tmp}:ro
+      - ${BETA_CAS_ROOT:-/tmp}:${BETA_CAS_ROOT:-/tmp}
+      - ${BETA_CONFIGURATION_ROOT:-/tmp}:${BETA_CONFIGURATION_ROOT:-/tmp}:ro
       - ${BETA_GITHUB_CREDENTIAL_FILE:-/dev/null}:${BETA_GITHUB_CREDENTIAL_FILE:-/dev/null}:ro
       - ${BETA_GIT_PUSH_CREDENTIAL_FILE:-/dev/null}:${BETA_GIT_PUSH_CREDENTIAL_FILE:-/dev/null}:ro
     healthcheck:
@@ -69,24 +70,24 @@ services:
 
   workflow-service:
     profiles: ["beta"]
-    image: ${BETA_WORKFLOW_IMAGE:?required}
-    command: ["-config", "${BETA_WORKFLOW_CONFIG:?required}"]
+    image: ${BETA_WORKFLOW_IMAGE:-scratch}
+    command: ["-config", "${BETA_WORKFLOW_CONFIG:-/dev/null}"]
     depends_on:
       beta-postgres:
         condition: service_healthy
     expose: ["8081"]
-    group_add: ["${BETA_DOCKER_GID:?required}"]
+    group_add: ["${BETA_DOCKER_GID:-0}"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${BETA_WORKFLOW_CONFIG:?required}:${BETA_WORKFLOW_CONFIG:?required}:ro
-      - ${BETA_REPOSITORY_ROOT:?required}:${BETA_REPOSITORY_ROOT:?required}
-      - ${BETA_CAS_ROOT:?required}:${BETA_CAS_ROOT:?required}
-      - ${BETA_WORKTREE_ROOT:?required}:${BETA_WORKTREE_ROOT:?required}
-      - ${BETA_VERIFICATION_ROOT:?required}:${BETA_VERIFICATION_ROOT:?required}
-      - ${BETA_MANIFEST_ROOT:?required}:${BETA_MANIFEST_ROOT:?required}:ro
-      - ${BETA_PROMPT_ROOT:?required}:${BETA_PROMPT_ROOT:?required}:ro
-      - ${BETA_CONFIGURATION_ROOT:?required}:${BETA_CONFIGURATION_ROOT:?required}:ro
-      - ${BETA_MINIMAX_CREDENTIAL_FILE:?required}:${BETA_MINIMAX_CREDENTIAL_FILE:?required}:ro
+      - ${BETA_WORKFLOW_CONFIG:-/dev/null}:${BETA_WORKFLOW_CONFIG:-/dev/null}:ro
+      - ${BETA_REPOSITORY_ROOT:-/tmp}:${BETA_REPOSITORY_ROOT:-/tmp}
+      - ${BETA_CAS_ROOT:-/tmp}:${BETA_CAS_ROOT:-/tmp}
+      - ${BETA_WORKTREE_ROOT:-/tmp}:${BETA_WORKTREE_ROOT:-/tmp}
+      - ${BETA_VERIFICATION_ROOT:-/tmp}:${BETA_VERIFICATION_ROOT:-/tmp}
+      - ${BETA_MANIFEST_ROOT:-/tmp}:${BETA_MANIFEST_ROOT:-/tmp}:ro
+      - ${BETA_PROMPT_ROOT:-/tmp}:${BETA_PROMPT_ROOT:-/tmp}:ro
+      - ${BETA_CONFIGURATION_ROOT:-/tmp}:${BETA_CONFIGURATION_ROOT:-/tmp}:ro
+      - ${BETA_MINIMAX_CREDENTIAL_ROOT:-/tmp}:${BETA_MINIMAX_CREDENTIAL_ROOT:-/tmp}:ro
     healthcheck:
       test: ["CMD", "/workflow-service", "-healthcheck", "http://127.0.0.1:8081/readyz"]
       interval: 2s

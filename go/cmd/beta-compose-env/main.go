@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/Standard-Syntax/basic/go/internal/beta"
@@ -22,13 +23,16 @@ func main() {
 	}
 	values := map[string]string{
 		"BETA_API_IMAGE": value.Images.API, "BETA_WORKFLOW_IMAGE": value.Images.Workflow,
+		"BETA_EXECUTION_IMAGE": value.Images.Execution, "BETA_VERIFICATION_IMAGE": value.Images.Verification,
 		"BETA_API_CONFIG": value.Services.APIConfig, "BETA_WORKFLOW_CONFIG": value.Services.WorkflowConfig,
 		"BETA_REPOSITORY_ROOT": value.Mounts.Repository, "BETA_CAS_ROOT": value.Mounts.CAS,
 		"BETA_WORKTREE_ROOT": value.Mounts.Worktrees, "BETA_VERIFICATION_ROOT": value.Mounts.Verification,
 		"BETA_MANIFEST_ROOT": value.Mounts.Manifests, "BETA_PROMPT_ROOT": value.Mounts.Prompts,
 		"BETA_CONFIGURATION_ROOT":       value.Mounts.Configuration,
 		"BETA_MINIMAX_CREDENTIAL_FILE":  value.Credentials.MiniMax,
+		"BETA_MINIMAX_CREDENTIAL_ROOT":  filepath.Dir(value.Credentials.MiniMax),
 		"BETA_POSTGRES_PASSWORD_FILE":   value.Credentials.DatabasePassword,
+		"BETA_POSTGRES_CREDENTIAL_ROOT": filepath.Dir(value.Credentials.DatabasePassword),
 		"BETA_GITHUB_CREDENTIAL_FILE":   value.Credentials.GitHub,
 		"BETA_GIT_PUSH_CREDENTIAL_FILE": value.Credentials.GitPush,
 		"BETA_DOCKER_GID":               fmt.Sprint(value.DockerSocketGroup),
