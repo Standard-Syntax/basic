@@ -91,3 +91,9 @@ live reservation and do not multiply repository snapshots after completion.
 Operators must include repository-map objects in CAS retention sizing; unbound
 objects from failed pre-transaction staging are safe garbage-collection
 candidates.
+
+Each accepted beta run additionally binds one small canonical policy object.
+Execution is capped by changed-file, per-file, and total-byte ceilings;
+execution and verification concurrency are independently bounded. The current
+one-task scheduler prevents task fan-out from multiplying worktrees or provider
+requests.

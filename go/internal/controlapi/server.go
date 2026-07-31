@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/approval"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
@@ -29,7 +31,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-const DefaultMaxBodyBytes int64 = 1 << 20
+const (
+	DefaultMaxBodyBytes int64 = 1 << 20
+	runIntakeTimeout          = 30 * time.Second
+)
 
 type Role string
 
@@ -92,6 +97,7 @@ type Config struct {
 	ServiceActorID string
 	MaxBodyBytes   int64
 	TrustedChecks  []string
+	Policy         beta.Policy
 }
 
 type Server struct {
@@ -137,6 +143,12 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	if err := normalized.Policy.Validate(); err != nil {
+		return nil, err
+	}
+	if !slices.Equal(normalized.TrustedChecks, normalized.Policy.TrustedChecks) {
+		return nil, errors.New("trusted checks do not match beta policy")
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -155,6 +167,8 @@ func normalizeServerConfig(config Config) (Config, error) {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = DefaultMaxBodyBytes
 	}
+	config.TrustedChecks = slices.Clone(config.TrustedChecks)
+	slices.Sort(config.TrustedChecks)
 	return config, nil
 }
 
@@ -183,8 +197,11 @@ func compilePrincipals(values []Principal) ([]principalDigest, error) {
 func compileTrustedChecks(values []string) (map[string]struct{}, error) {
 	checks := make(map[string]struct{}, len(values))
 	for _, check := range values {
-		if check == "" {
+		if check == "" || strings.TrimSpace(check) != check {
 			return nil, errors.New("trusted check IDs must be non-empty")
+		}
+		if _, exists := checks[check]; exists {
+			return nil, errors.New("trusted check IDs must be unique")
 		}
 		checks[check] = struct{}{}
 	}
@@ -425,7 +442,9 @@ func (s *Server) handleRunIntake(
 			return
 		}
 	}
-	result, err := s.intake.Accept(request.Context(), RunIntakeRequest{
+	intakeContext, cancel := context.WithTimeout(request.Context(), runIntakeTimeout)
+	defer cancel()
+	result, err := s.intake.Accept(intakeContext, RunIntakeRequest{
 		Idempotency: idempotency, Content: body.Content, BaseCommit: body.BaseCommit,
 		Command: workflow.CreateRun{
 			Meta: s.envelope(
@@ -561,7 +580,7 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 			return 0, nil, workflow.ErrInvalid
 		}
 		ref, _, _, err := runtime.BuildApprovedTaskGraph(
-			ctx, s.artifacts, &planningRequest, &graphProposal, s.checks,
+			ctx, s.artifacts, &planningRequest, &graphProposal, s.checks, s.config.Policy,
 		)
 		if err != nil {
 			return 0, nil, err

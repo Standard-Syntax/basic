@@ -19,6 +19,7 @@ import (
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/controlapi"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
@@ -37,6 +38,7 @@ type config struct {
 	TrustedChecks    []string               `json:"trusted_checks"`
 	Principals       []controlapi.Principal `json:"principals"`
 	Publication      *publicationConfig     `json:"publication,omitempty"`
+	Policy           beta.Policy            `json:"beta_policy"`
 }
 
 type publicationConfig struct {
@@ -75,6 +77,23 @@ func mainExit() int {
 }
 
 func loadConfig(path string) (config, error) {
+	value, err := decodeConfig(path)
+	if err != nil {
+		return config{}, err
+	}
+	if value.Listen == "" {
+		value.Listen = "127.0.0.1:8080"
+	}
+	if err := validateListen(value.Listen); err != nil {
+		return config{}, err
+	}
+	if err := validateConfig(value); err != nil {
+		return config{}, err
+	}
+	return value, nil
+}
+
+func decodeConfig(path string) (config, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return config{}, errors.New("config path must be clean and absolute")
 	}
@@ -93,24 +112,39 @@ func loadConfig(path string) (config, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return config{}, errors.New("configuration has trailing content")
 	}
-	if value.Listen == "" {
-		value.Listen = "127.0.0.1:8080"
-	}
-	host, _, err := net.SplitHostPort(value.Listen)
+	return value, nil
+}
+
+func validateListen(listen string) error {
+	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
-		return config{}, errors.New("listen must include host and port")
+		return errors.New("listen must include host and port")
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return config{}, errors.New("API listen address must be loopback")
+		return errors.New("API listen address must be loopback")
 	}
+	return nil
+}
+
+func validateConfig(value config) error {
 	if value.DatabaseURL == "" || !filepath.IsAbs(value.ArtifactRoot) ||
 		filepath.Clean(value.ArtifactRoot) != value.ArtifactRoot ||
 		!filepath.IsAbs(value.RepositoryRoot) ||
 		filepath.Clean(value.RepositoryRoot) != value.RepositoryRoot {
-		return config{}, errors.New("incomplete API configuration")
+		return errors.New("incomplete API configuration")
 	}
-	return value, nil
+	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot {
+		return errors.New("invalid or mismatched beta policy")
+	}
+	if value.Publication != nil && (value.Publication.RepositoryRoot != value.Policy.Repository.Root ||
+		value.Publication.RepositoryOwner != value.Policy.Repository.Owner ||
+		value.Publication.RepositoryName != value.Policy.Repository.Name ||
+		value.Publication.Remote != value.Policy.Repository.Remote ||
+		value.Publication.BaseBranch != value.Policy.Repository.BaseBranch) {
+		return errors.New("publication configuration does not match beta policy")
+	}
+	return nil
 }
 
 func run(ctx context.Context, value config) error {
@@ -156,7 +190,7 @@ func run(ctx context.Context, value config) error {
 	}
 	workflowStore := workflow.NewStore(pool)
 	runIntake, err := controlapi.NewRunIntakeCoordinator(
-		pool, workflowStore, artifacts, value.RepositoryRoot,
+		pool, workflowStore, artifacts, value.RepositoryRoot, value.Policy,
 	)
 	if err != nil {
 		return err
@@ -165,6 +199,7 @@ func run(ctx context.Context, value config) error {
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
 		MaxBodyBytes:  value.MaxBodyBytes,
 		TrustedChecks: value.TrustedChecks,
+		Policy:        value.Policy,
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
 	if err != nil {

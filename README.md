@@ -66,3 +66,8 @@ See [docs/development.md](docs/development.md) for exact commands and
 [docs/architecture.md](docs/architecture.md) for the trust boundaries.
 For the current beta provider profile and process-level live acceptance status,
 see [docs/live-harness.md](docs/live-harness.md).
+
+Production repository readiness is checked without mutation with
+`make beta-preflight BETA_CONFIG=/absolute/path/to/beta-preflight.json`. The
+same immutable `beta_policy` is consumed by both services. The beta supports
+exactly one dependency-free task per run.

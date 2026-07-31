@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-live-e2e provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-live-e2e provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -62,7 +62,7 @@ integration-test:
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		go test -tags=integration -count=1 \
-			./internal/workflow ./internal/registry ./internal/reasoning/gateway \
+			./internal/migration ./internal/workflow ./internal/registry ./internal/reasoning/gateway \
 			./internal/execution ./internal/verification ./internal/approval \
 			./internal/publication ./internal/controlapi || status=$$?; \
 	docker compose down --volumes; \
@@ -78,6 +78,10 @@ runtime-e2e:
 			./internal/orchestration || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
+
+beta-preflight:
+	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
+	cd go && go run ./cmd/beta-preflight -config "$(BETA_CONFIG)"
 
 beta-live-e2e:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }

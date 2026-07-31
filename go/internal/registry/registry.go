@@ -57,6 +57,10 @@ func Migrate(ctx context.Context, connectionString string) error {
 	return migration.Apply(ctx, connectionString, migrationFiles, "migrations")
 }
 
+func MigrationSource() migration.Source {
+	return migration.Source{Files: migrationFiles, Directory: "migrations"}
+}
+
 func (r *Registry) Register(ctx context.Context, rawManifest []byte) (RegisterResult, error) {
 	value, canonical, digest, err := manifest.Read(rawManifest)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -49,9 +50,10 @@ func (*fakeWorkflow) ListPendingApprovals(context.Context) ([]workflow.PendingAp
 }
 
 type fakeRuntime struct {
-	begins    int
-	completes int
-	abandons  int
+	begins            int
+	completes         int
+	abandons          int
+	intakeHasDeadline bool
 }
 
 type fakeRunIntake struct {
@@ -61,8 +63,9 @@ type fakeRunIntake struct {
 }
 
 func (f *fakeRunIntake) Accept(
-	_ context.Context, request RunIntakeRequest,
+	ctx context.Context, request RunIntakeRequest,
 ) (*runtime.IdempotencyResult, error) {
+	_, f.runtime.intakeHasDeadline = ctx.Deadline()
 	f.runtime.begins++
 	if f.err != nil {
 		f.runtime.abandons++
@@ -168,6 +171,7 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		}},
 		MaxBodyBytes:  512,
 		TrustedChecks: []string{"make-check-v1"},
+		Policy:        testPolicy("/tmp/repository", strings.Repeat("a", 40), "https://example.invalid/repository.git"),
 	}, workflowStore, runtimeLedger, &fakeRunIntake{
 		workflow: workflowStore, runtime: runtimeLedger,
 	}, fakeArtifacts{}, &fakeBindings{},
@@ -176,6 +180,34 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		t.Fatal(err)
 	}
 	return server, workflowStore, runtimeLedger, token
+}
+
+func TestNormalizeServerConfigCanonicalizesTrustedCheckOrder(t *testing.T) {
+	input := []string{"verify", "build"}
+	config, err := normalizeServerConfig(Config{
+		ServiceActorID: uuid.NewString(),
+		TrustedChecks:  input,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(config.TrustedChecks, ",") != "build,verify" {
+		t.Fatalf("trusted checks = %v", config.TrustedChecks)
+	}
+	if strings.Join(input, ",") != "verify,build" {
+		t.Fatalf("caller-owned input mutated: %v", input)
+	}
+	if _, err := compileTrustedChecks([]string{"build", "build"}); err == nil {
+		t.Fatal("duplicate trusted check accepted")
+	}
+}
+
+func testPolicy(root, commit, remoteURL string) beta.Policy {
+	return beta.Policy{Version: beta.PolicyVersion,
+		Repository:    beta.Repository{Owner: "owner", Name: "repository", Root: root, Remote: "origin", RemoteURL: remoteURL, BaseBranch: "main", BaseCommit: commit},
+		Paths:         beta.Paths{Readable: []string{"docs"}, Writable: []string{"docs"}, Prohibited: []string{"secrets"}},
+		TrustedChecks: []string{"make-check-v1"}, Limits: beta.Limits{MaximumTasks: 1, MaximumChangedFiles: 4, MaximumFileBytes: 1024, MaximumTotalBytes: 4096, ExecutionConcurrency: 1, VerificationConcurrency: 1},
+		Images: beta.Images{Execution: "sha256:" + strings.Repeat("a", 64), Verification: "sha256:" + strings.Repeat("b", 64)}}
 }
 
 func TestHealthAndAuthentication(t *testing.T) {
@@ -208,7 +240,7 @@ func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || len(workflowStore.runCommands) != 1 ||
-		runtimeLedger.begins != 1 || runtimeLedger.completes != 1 {
+		runtimeLedger.begins != 1 || runtimeLedger.completes != 1 || !runtimeLedger.intakeHasDeadline {
 		t.Fatalf("response=%d %s commands=%d runtime=%#v",
 			response.Code, response.Body, len(workflowStore.runCommands), runtimeLedger)
 	}
