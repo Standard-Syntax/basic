@@ -447,3 +447,41 @@ Only connection failures and HTTP `408`, `409`, `429`, and `5xx` retry.
 Provider failures roll back; completed malformed responses persist and replay.
 ### Date
 2026-07-29
+
+## DEC-023: Shipped beta reasoning is live-only MiniMax-M2.7
+
+### Decision
+Compose `workflow-service` only with the MiniMax Anthropic-compatible
+implementation and review adapters. Accept omitted mode or
+`minimax_anthropic` only, pinned to
+`https://api.minimax.io/anthropic`, `MiniMax-M2.7`, and
+`ANTHROPIC_API_KEY`.
+
+### Options considered
+Retain fake-by-default composition; permit fake and live modes; ship one closed
+live-only provider profile.
+
+### Pros
+Production startup cannot select synthesized proposals or an alternate
+provider destination, model, or credential name. The availability check fails
+before orchestration setup while per-invocation environment reads preserve
+credential rotation.
+
+### Cons
+Credential-free process E2E needs a redesigned external loopback fixture, and
+the historical mixed fake/live targets are not Beta Slice 1 acceptance
+evidence.
+
+### Why this option
+The first beta must exercise the approved provider boundary in production
+composition without weakening the unchanged proposal/kernel contracts.
+
+### Consequences
+DEC-008 remains historical rationale for boundary-first development but is
+superseded for the shipped beta runtime. Fake provider constants, adapters,
+proposal loaders, configuration fields, and composition branches are removed.
+Tests obtain valid proposals through the production adapter over bounded
+loopback HTTP; Beta Slice 2 owns the process-E2E redesign.
+
+### Date
+2026-07-30

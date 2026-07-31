@@ -1,5 +1,10 @@
 # High-Level Implementation Plan: Kernel-Driven Agent Harness
 
+> Historical roadmap: fake-provider steps below describe the original
+> dependency order and are not supported runtime configuration. DEC-023 and
+> the live-only MiniMax-M2.7 beta composition supersede those production
+> provider choices without rewriting this roadmap.
+
 ## 1. Objective
 
 Build a production-oriented agent harness with:

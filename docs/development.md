@@ -53,16 +53,14 @@ make type-check
 make test
 make build
 make integration-test
-make runtime-e2e
-make minimax-live-e2e # requires a MiniMax ANTHROPIC_API_KEY
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
-`make runtime-e2e` is deterministic and uses fake reasoning adapters.
-`make minimax-live-e2e` runs the same disposable process harness with two real
-MiniMax-M3 reasoning invocations. Follow
-[Run the agent harness live](live-harness.md) for its prerequisites, credential
-handling, acceptance evidence, and cleanup.
+The historical `make runtime-e2e` and `make minimax-live-e2e` targets still
+contain the pre-beta mixed fake/live process fixture. They are not supported
+Beta Slice 1 evidence: strict production configuration rejects the fake path,
+and Slice 2 owns the live fixture and target redesign. See
+[Run the agent harness live](live-harness.md).
 
 ## Installed manifest compiler
 
@@ -96,10 +94,10 @@ Generated transport types live under `go/gen` and
 `python/src/harness_agents/_generated`. Handwritten domain validation must not
 be added to those directories.
 
-## In-process fake reasoning gateway
+## In-process reasoning gateway
 
 `go/internal/reasoning/gateway` is a library boundary, not a daemon. Construct
-it with an exact manifest resolver, deterministic fake adapter,
+it with an exact manifest resolver, production MiniMax-compatible adapter,
 content-addressed artifact store, invocation repository, and clock, then call
 `Service.ProposeImplementation`. `NewService` applies 1 MiB request, proposal,
 and provider-response defaults; pass one `ByteLimits` value to configure
@@ -110,19 +108,24 @@ The integration tests use an integrity-checking in-memory store while
 PostgreSQL persists only artifact references and invocation metadata. The
 `go/cmd/reasoning-gateway` package builds but starts no listener.
 
-## Anthropic implementation and review adapters
+## MiniMax Anthropic-compatible implementation and review adapters
 
 Construct `NewAnthropicImplementationAdapter` or
 `NewAnthropicReviewAdapter` with a request-local `CredentialSource`, trusted
 `CapabilityModelResolver`, and the same backend-neutral `ArtifactStore` used by
-the gateway. Select either fake or Anthropic at construction; gateway, kernel,
-workflow, Protobuf, and manifest contracts do not change.
+the gateway. Shipped workflow composition accepts only
+`minimax_anthropic`, `https://api.minimax.io/anthropic`, `MiniMax-M2.7`, and
+`ANTHROPIC_API_KEY`; omitted provider configuration normalizes to that exact
+profile. Gateway, kernel, workflow, Protobuf, and manifest contracts do not
+change.
 
 The official SDK is pinned at `v1.61.0`. SDK retries are disabled; the adapter
 owns the bounded retry policy and five-minute timeout. Production callers must
 provide a real content-addressed artifact backend and credential source. Do not
 put API keys in manifests, artifacts, command arguments, logs, or database
-configuration.
+configuration. `make check` also runs `scripts/no-fake-provider-adapters.sh`,
+which rejects removed fake symbols, proposal-path loaders, and alternate
+production provider branches.
 
 The local suite uses loopback HTTP and no provider credential. Run the explicit
 live smoke separately:
@@ -187,11 +190,11 @@ listeners.
 ## Trusted review and human approval
 
 Construct `gateway.NewReviewService` with the registered review manifest,
-`FakeReviewAdapter`, content-addressed artifact store, invocation repository,
-and clock. Pass that gateway to `review.NewService` with a review-service actor
-UUID and workflow store. `Review` requires exact Phase 6 and Phase 7 report
-artifacts, the frozen v1 request, kernel resource labels, and expected task
-revision.
+the production MiniMax-compatible `AnthropicReviewAdapter`,
+content-addressed artifact store, invocation repository, and clock. Pass that
+gateway to `review.NewService` with a review-service actor UUID and workflow
+store. `Review` requires exact Phase 6 and Phase 7 report artifacts, the frozen
+v1 request, kernel resource labels, and expected task revision.
 
 Construct `approval.NewService` with the same content-addressed store, workflow
 store, and optionally `PostgresApprovalRepository`. Call `ApproveTask` or
@@ -228,7 +231,11 @@ strict JSON: unknown fields and trailing documents are rejected. The API
 configuration includes a loopback listener, PostgreSQL URL, absolute CAS root,
 service actor UUID, body limits, and principals with UUID identity, SHA-256
 token digest, and roles. Workflow configuration includes the PostgreSQL URL,
-absolute CAS root, worker-owner UUID, and artifact limit.
+absolute CAS root, worker-owner UUID, artifact limit, and the closed
+MiniMax-M2.7 provider profile. Unknown fields, fake proposal fields, fake mode,
+alternate endpoints/models/credential names, and trailing JSON fail closed.
+`ANTHROPIC_API_KEY` availability is checked before database or orchestration
+setup and the environment is read again for every provider invocation.
 
 ```bash
 cd go
@@ -238,10 +245,10 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
-`If-Match: "<revision>"`. Run `make runtime-e2e` for disposable PostgreSQL
-runtime recovery coverage. Run `make minimax-live-e2e` for the corresponding
-MiniMax-backed acceptance path. Keep `make provider-smoke` separate: it uses the
-generic Anthropic endpoint and is not MiniMax runtime-E2E evidence.
+`If-Match: "<revision>"`. The old process-E2E targets are historical until
+Beta Slice 2 replaces their mixed fake/live fixture. Keep `make provider-smoke`
+separate: it uses the generic Anthropic endpoint and is not MiniMax
+runtime-E2E evidence.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

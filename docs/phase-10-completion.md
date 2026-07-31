@@ -1,5 +1,9 @@
 # Phase 10 completion
 
+> Historical phase report: DEC-023 supersedes the constructor-selected fake
+> production path for the shipped beta. Current workflow composition is
+> live-only MiniMax-M2.7.
+
 Date: 2026-07-29
 
 ## Outcome

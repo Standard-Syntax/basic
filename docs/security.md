@@ -22,12 +22,12 @@
   result without holding a database connection during adapter work; different
   bytes under the same ID fail closed.
 - Request and proposal bodies are content-addressed and verified on write and
-  replay. PostgreSQL stores only URIs, digests, identity, fake-adapter metadata,
+  replay. PostgreSQL stores only URIs, digests, identity, provider metadata,
   usage, status, and rejection metadata. Completed rows cannot be updated or
   deleted.
-- Request and proposal transports default to a 1 MiB limit. The fake adapter
-  consumes exactly one permitted provider request and has no shell, network,
-  filesystem-write, workflow, approval, or execution capability.
+- Request and proposal transports default to a 1 MiB limit. Provider adapters
+  have no shell, filesystem-write, workflow, approval, execution, or
+  publication authority.
 - The installed compiler always applies its packaged v1 schema; an override can
   only add restrictions. Python and Go enforce the same closed stage/output
   mapping.
@@ -117,6 +117,11 @@ facts and completed rows are protected by PostgreSQL triggers.
 
 ## Phase 10 provider boundary
 
+- The shipped beta accepts only MiniMax's Anthropic-compatible HTTPS endpoint,
+  `MiniMax-M2.7`, and `ANTHROPIC_API_KEY`; omitted mode selects that profile.
+  Fake and alternate provider modes fail closed.
+- Startup checks credential availability before migrations, database
+  connections, manifest bootstrap, job claiming, or reconciliation.
 - API keys are fetched per invocation and passed only as SDK request options.
   Credential-source errors are replaced with a redacted sentinel; keys are
   never written to artifacts, PostgreSQL, model context, errors, or logs.

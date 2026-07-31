@@ -5,8 +5,8 @@ first-slice runtime for a kernel-driven agent harness.
 Go is the trusted control-plane language; Python is limited to declarative agent
 configuration. Reasoning outputs are untrusted, provider-neutral proposals.
 The runtime adds a loopback authenticated HTTP API, a durable PostgreSQL
-reconciler, a filesystem SHA-256 content-addressed store, closed MiniMax-M3
-provider configuration, and a full first-slice process E2E.
+reconciler, a filesystem SHA-256 content-addressed store, and a closed
+live-only MiniMax-M2.7 provider configuration.
 
 The trusted Go kernel now makes transactional run and task lifecycle decisions
 with append-only PostgreSQL events. Leases and artifact, execution,
@@ -23,11 +23,12 @@ stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
 reader independently enforces the same v1 stage/output and safety policy.
 
 The in-process Go reasoning gateway executes implementation and review stages
-through deterministic fake adapters by default or the runtime's closed
-MiniMax-M3 adapter in explicit live mode. It resolves exact registered manifest
-digests, validates proposals into five stable rejection codes, stores payloads
-through a content-addressed artifact interface, and records immutable
-PostgreSQL invocation metadata. The gateway starts no listener of its own.
+only through the runtime's closed MiniMax-M2.7 Anthropic-compatible adapter.
+It resolves exact registered manifest digests, validates proposals into five
+stable rejection codes, stores payloads through a content-addressed artifact
+interface, and records immutable PostgreSQL invocation metadata. The gateway
+starts no listener of its own. No shipped fake proposal adapter or alternate
+workflow-service provider branch remains.
 
 The Go execution library revalidates accepted proposals, fences them to the
 active lease, applies them in a network-disabled unprivileged container, creates
@@ -63,5 +64,5 @@ make integration-test
 
 See [docs/development.md](docs/development.md) for exact commands and
 [docs/architecture.md](docs/architecture.md) for the trust boundaries.
-For a real provider-backed acceptance run, follow
-[docs/live-harness.md](docs/live-harness.md) exactly.
+For the current beta provider profile and process-level live acceptance status,
+see [docs/live-harness.md](docs/live-harness.md).

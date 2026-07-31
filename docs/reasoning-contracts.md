@@ -22,22 +22,22 @@ coverage, and expiry failures are policy outcomes; cancellation, registry,
 adapter, artifact, and PostgreSQL failures remain Go errors. Scope-change
 requests remain advisory proposal data and never alter kernel-selected scope.
 
-The deterministic fake adapter binds proposal request, run, task, attempt,
-manifest, input-artifact, approved-task, and approved-specification identities
-from the request. It consumes exactly one provider-request budget unit and
-executes no command, repository mutation, network call, or workflow transition.
+The shipped beta adapter binds proposal request, run, task, attempt, manifest,
+input-artifact, approved-task, and approved-specification identities from the
+request. Provider output cannot supply those kernel-owned fields, execute
+tools, or mutate workflow state.
 Request and proposal transports retain their published v1 Protobuf shape.
 
 Phase 8 applies the same deterministic byte limits, artifact integrity,
 provider accounting, typed rejection, immutable replay, and conflict behavior
 to `ReviewRequest` and `ReviewProposal`. The registered manifest must be stage
 `review` with output `review_proposal.v1`. Proposal identity is derived from
-the request; neither the fake adapter nor a recommendation carries approval
+the request; neither a provider adapter nor a recommendation carries approval
 authority. The trusted review service separately fixes `HIGH` and `CRITICAL`
 as blocking and requires unexpected changed paths to be reported.
 
 Phase 10 leaves every published Protobuf and manifest-v1 field unchanged.
-Anthropic-specific implementation and review JSON schemas are internal, closed
+MiniMax Anthropic-compatible implementation and review JSON schemas are internal, closed
 projections containing only model-owned proposal fields. The adapter injects
 `ProposalIdentity`, approved task/specification bindings, manifest digest, and
 input-artifact digests from the trusted request. Valid projections must still
@@ -61,6 +61,12 @@ particular, a scope-change-only or otherwise incomplete implementation
 proposal can fail required-coverage validation and leave workflow state
 unchanged. Universal blocker handling, generic tool loops, and live provider
 adapters for specification and planning remain deferred.
+
+The closed beta profile is `minimax_anthropic` at
+`https://api.minimax.io/anthropic`, model `MiniMax-M2.7`, with
+`ANTHROPIC_API_KEY` read for every invocation. Requests are non-streaming and
+tool-free, omit thinking and `output_config`, and embed the closed schema in
+the system prompt.
 
 Malformed complete provider responses are typed adapter results that only the
 gateway translates to `SCHEMA_INVALID` and persists with the exact raw
