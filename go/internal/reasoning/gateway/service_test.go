@@ -36,6 +36,7 @@ func gatewayRequest(t *testing.T) *reasoningv1.ImplementationRequest {
 	); err != nil {
 		t.Fatal(err)
 	}
+	configureImplementationRequestArtifacts(t, &request)
 	return &request
 }
 
@@ -81,9 +82,10 @@ func (r *fakeResolver) ResolveManifest(
 }
 
 type countingAdapter struct {
-	inner ImplementationAdapter
-	err   error
-	calls atomic.Int32
+	inner    ImplementationAdapter
+	provider *loopbackProvider
+	err      error
+	calls    atomic.Int32
 }
 
 type implementationAdapterFunc func(
@@ -215,19 +217,23 @@ func gatewayService(
 	t.Helper()
 	request := gatewayRequest(t)
 	resolver := &fakeResolver{resolved: ResolvedManifest{
-		Digest:   request.GetEnvelope().GetAgentManifestDigest(),
-		Manifest: implementationManifest(t),
+		Digest: request.GetEnvelope().GetAgentManifestDigest(),
 	}}
-	fake, err := NewFakeImplementationAdapter(
-		template, "fake-implementation-v1",
-		Usage{InputTokens: 11, OutputTokens: 7, ProviderRequests: 1},
-	)
+	store := newMemoryArtifactStore()
+	seedImplementationAdapterArtifacts(t, store, request)
+	agentManifest := implementationManifest(t)
+	prompt, err := store.Put(t.Context(), []byte(testPromptBody))
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := &countingAdapter{inner: fake}
+	agentManifest.Prompt.ArtifactURI = prompt.URI
+	agentManifest.Prompt.SHA256 = prompt.SHA256
+	resolver.resolved.Manifest = agentManifest
+	production, provider := newLoopbackImplementationAdapter(t, store, template)
+	adapter := &countingAdapter{inner: production, provider: provider}
+	store.puts = 0
 	service, err := NewService(
-		resolver, adapter, newMemoryArtifactStore(), newMemoryInvocationRepository(),
+		resolver, adapter, store, newMemoryInvocationRepository(),
 		fixedClock{now: request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)},
 	)
 	if err != nil {
@@ -236,7 +242,7 @@ func gatewayService(
 	return service, resolver, adapter
 }
 
-func TestFakeImplementationReturnsOneDeterministicValidatedProposal(t *testing.T) {
+func TestMiniMaxImplementationReturnsOneValidatedProposalAndExactReplay(t *testing.T) {
 	template := gatewayProposal(t)
 	service, resolver, adapter := gatewayService(t, template)
 	request := gatewayRequest(t)
@@ -251,7 +257,7 @@ func TestFakeImplementationReturnsOneDeterministicValidatedProposal(t *testing.T
 	}
 	requireProposalOutcomes(t, first, second)
 	requireDeterministicProposal(t, first.Proposal, second.Proposal, request)
-	requireFakeInvocationMetadata(t, first, resolver, adapter)
+	requireMiniMaxInvocationMetadata(t, first, resolver, adapter)
 }
 
 func requireProposalOutcomes(t *testing.T, first, second Outcome) {
@@ -272,7 +278,7 @@ func requireDeterministicProposal(
 ) {
 	t.Helper()
 	if !proto.Equal(first, second) {
-		t.Fatal("fake adapter output is not deterministic")
+		t.Fatal("replayed provider output is not deterministic")
 	}
 	identity := first.GetIdentity()
 	envelope := request.GetEnvelope()
@@ -280,15 +286,16 @@ func requireDeterministicProposal(
 		identity.GetTaskId() != envelope.GetTaskId() ||
 		identity.GetAttempt() != envelope.GetAttempt() ||
 		identity.GetAgentManifestDigest() != envelope.GetAgentManifestDigest() {
-		t.Fatal("fake proposal identities were not bound to the request")
+		t.Fatal("provider proposal identities were not bound to the request")
 	}
 }
 
-func requireFakeInvocationMetadata(
+func requireMiniMaxInvocationMetadata(
 	t *testing.T, outcome Outcome, resolver *fakeResolver, adapter *countingAdapter,
 ) {
 	t.Helper()
-	if outcome.Invocation.Provider != FakeProvider ||
+	if outcome.Invocation.Provider != MiniMaxAnthropicProvider ||
+		outcome.Invocation.Model != MiniMaxModel ||
 		outcome.Invocation.Usage.ProviderRequests != 1 ||
 		resolver.calls.Load() != 1 || adapter.calls.Load() != 1 {
 		t.Fatalf(
@@ -485,14 +492,6 @@ func TestGatewayProviderResponseByteLimit(t *testing.T) {
 	outcome, err := service.ProposeImplementation(t.Context(), request)
 	if err != nil || outcome.Proposal == nil || adapter.calls.Load() != 2 {
 		t.Fatalf("retry outcome=%+v calls=%d err=%v", outcome, adapter.calls.Load(), err)
-	}
-}
-
-func TestFakeAdapterRejectsMultipleProviderRequests(t *testing.T) {
-	if _, err := NewFakeImplementationAdapter(
-		gatewayProposal(t), "fake", Usage{ProviderRequests: 2},
-	); err == nil {
-		t.Fatal("multi-request fake adapter configuration accepted")
 	}
 }
 

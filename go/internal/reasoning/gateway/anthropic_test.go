@@ -112,12 +112,27 @@ func quotedJSON(t *testing.T, value string) string {
 
 func validImplementationProjection(t *testing.T) string {
 	t.Helper()
-	proposal := gatewayProposal(t)
+	return implementationProjectionJSON(t, gatewayProposal(t))
+}
+
+func implementationProjectionJSON(
+	t *testing.T, proposal *reasoningv1.ImplementationProposal,
+) string {
+	t.Helper()
 	value := implementationProjection{
 		Summary:                   proposal.GetSummary(),
 		RequestedDeclaredCheckIDs: proposal.GetRequestedDeclaredCheckIds(),
 		Assumptions:               proposal.GetAssumptions(),
 		UnresolvedQuestions:       proposal.GetUnresolvedQuestions(),
+	}
+	if scope := proposal.GetScopeChangeRequest(); scope != nil {
+		value.ScopeChangeRequest = &scopeChangeProjection{
+			Summary:                         scope.GetSummary(),
+			RequestedReadablePaths:          scope.GetRequestedReadablePaths(),
+			RequestedWritablePaths:          scope.GetRequestedWritablePaths(),
+			RequestedAcceptanceCriterionIDs: scope.GetRequestedAcceptanceCriterionIds(),
+			RequestedCheckIDs:               scope.GetRequestedCheckIds(),
+		}
 	}
 	for _, change := range proposal.GetChanges() {
 		value.Changes = append(value.Changes, fileChangeProjection{

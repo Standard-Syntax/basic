@@ -43,19 +43,22 @@ func integrationService(
 	}
 	request := gatewayRequest(t)
 	resolver := &fakeResolver{resolved: ResolvedManifest{
-		Digest:   request.GetEnvelope().GetAgentManifestDigest(),
-		Manifest: implementationManifest(t),
+		Digest: request.GetEnvelope().GetAgentManifestDigest(),
 	}}
-	fake, err := NewFakeImplementationAdapter(
-		gatewayProposal(t), "fake-implementation-v1",
-		Usage{InputTokens: 11, OutputTokens: 7, ProviderRequests: 1},
-	)
+	store := newMemoryArtifactStore()
+	seedImplementationAdapterArtifacts(t, store, request)
+	agentManifest := implementationManifest(t)
+	prompt, err := store.Put(t.Context(), []byte(testPromptBody))
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := &countingAdapter{inner: fake}
+	agentManifest.Prompt.ArtifactURI = prompt.URI
+	agentManifest.Prompt.SHA256 = prompt.SHA256
+	resolver.resolved.Manifest = agentManifest
+	production, provider := newLoopbackImplementationAdapter(t, store, gatewayProposal(t))
+	adapter := &countingAdapter{inner: production, provider: provider}
 	service, err := NewService(
-		resolver, adapter, newMemoryArtifactStore(), repository,
+		resolver, adapter, store, repository,
 		fixedClock{now: request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)},
 	)
 	if err != nil {
@@ -360,7 +363,9 @@ func TestPostgresAllRejectionsHaveNoWorkflowOrRepositorySideEffects(t *testing.T
 			name: "schema invalid",
 			code: reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
 			mutate: func(_ *Service, adapter *countingAdapter, _ *reasoningv1.ImplementationRequest) {
-				adapter.inner.(*FakeImplementationAdapter).template.Summary = ""
+				proposal := gatewayProposal(t)
+				proposal.Summary = ""
+				adapter.provider.setResponse(implementationProjectionJSON(t, proposal))
 			},
 		},
 		{
@@ -383,16 +388,18 @@ func TestPostgresAllRejectionsHaveNoWorkflowOrRepositorySideEffects(t *testing.T
 			name: "scope violation",
 			code: reasoningv1.RejectionCode_REJECTION_CODE_SCOPE_VIOLATION,
 			mutate: func(_ *Service, adapter *countingAdapter, _ *reasoningv1.ImplementationRequest) {
-				adapter.inner.(*FakeImplementationAdapter).template.Changes[0].Path =
-					"docs/outside.go"
+				proposal := gatewayProposal(t)
+				proposal.Changes[0].Path = "docs/outside.go"
+				adapter.provider.setResponse(implementationProjectionJSON(t, proposal))
 			},
 		},
 		{
 			name: "required coverage missing",
 			code: reasoningv1.RejectionCode_REJECTION_CODE_REQUIRED_COVERAGE_MISSING,
 			mutate: func(_ *Service, adapter *countingAdapter, _ *reasoningv1.ImplementationRequest) {
-				fake := adapter.inner.(*FakeImplementationAdapter)
-				fake.template.Changes = fake.template.Changes[:2]
+				proposal := gatewayProposal(t)
+				proposal.Changes = proposal.Changes[:2]
+				adapter.provider.setResponse(implementationProjectionJSON(t, proposal))
 			},
 		},
 	}

@@ -1,5 +1,9 @@
 # Phase 11 implementation status
 
+> Historical phase report: fake-by-default runtime statements and commands
+> below predate DEC-023. The shipped beta workflow service now accepts only
+> the closed MiniMax-M2.7 profile; process-E2E redesign belongs to Beta Slice 2.
+
 ## Status
 
 Phase 11 is not complete. The durable runtime foundation is implemented and

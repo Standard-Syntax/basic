@@ -711,6 +711,14 @@ func implementationProposalFromProjection(
 	return proposal
 }
 
+func artifactDigests(values []*reasoningv1.ArtifactDigest) []string {
+	digests := make([]string, len(values))
+	for index, value := range values {
+		digests[index] = value.GetSha256()
+	}
+	return digests
+}
+
 func fileOperationFromString(value string) reasoningv1.FileOperation {
 	switch value {
 	case "create":

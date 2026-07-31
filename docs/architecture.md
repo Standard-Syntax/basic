@@ -23,12 +23,12 @@ by immutable `(agent_name, agent_version)` identity or lowercase SHA-256
 digest. Per-identity transaction advisory locks make concurrent registration
 deterministic.
 
-Phase 5 adds `go/internal/reasoning/gateway`, an in-process application API for
+Phase 5 originally added `go/internal/reasoning/gateway`, an in-process application API for
 implementation proposals only. A request is deterministically serialized,
 stored by SHA-256 through an `ArtifactStore`, and bound to an immutable
 invocation row. The gateway resolves the exact registered manifest digest,
 requires `implementation` with `implementation_proposal.v1`, calls one
-deterministic fake adapter, validates the proposal, stores its artifact, and
+proposal adapter, validates the proposal, stores its artifact, and
 commits either an accepted proposal or a typed rejection. A short committed
 reservation serializes each request ID; adapter and artifact work holds no
 database transaction or pooled connection. Exact concurrent replay returns the
@@ -47,6 +47,15 @@ Migration `0008` persists positive per-attempt lease fencing tokens. Migration
 `0009` reserves execution IDs, detects conflicting request digests, stores the
 completed result, and rejects mutation or deletion of completed rows. Artifact
 bodies remain behind the backend-neutral content-addressed port.
+
+The shipped beta composition supersedes Phase 5's fake-first production
+choice. `workflow-service` normalizes omitted provider configuration to the
+single closed profile `minimax_anthropic`,
+`https://api.minimax.io/anthropic`, `MiniMax-M2.7`, and
+`ANTHROPIC_API_KEY`. Implementation and review use the same production
+Anthropic-compatible adapter boundary; no fake adapter or alternate
+composition branch ships. The credential is checked before database or
+orchestration setup and read again, without caching, for each invocation.
 
 Phase 7 adds `go/internal/verification`. `Service.Verify` revalidates the
 implementation request and content-addressed Phase 6 report, requires their
