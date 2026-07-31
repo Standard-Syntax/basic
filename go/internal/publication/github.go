@@ -109,6 +109,56 @@ func (c *GitHubRESTClient) CreateDraft(
 	return mapPullRequest(response, input.Marker), nil
 }
 
+// InspectPullRequest reads exactly one pull request by immutable repository and
+// number. It is intentionally a concrete-client operation, not runtime
+// PullRequestClient authority.
+func (c *GitHubRESTClient) InspectPullRequest(
+	ctx context.Context, owner, repo string, number int64,
+) (DraftPullRequest, error) {
+	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" || number <= 0 {
+		return DraftPullRequest{}, ErrInvalidRequest
+	}
+	var response githubPullRequest
+	if err := c.do(ctx, http.MethodGet, exactPullPath(owner, repo, number), nil, &response); err != nil {
+		return DraftPullRequest{}, err
+	}
+	return mapPullRequest(response, ""), nil
+}
+
+// CloseDraft closes only the exact open draft bound to the expected marker,
+// refs, commits, and URL. A matching already-closed draft is replay success.
+func (c *GitHubRESTClient) CloseDraft(
+	ctx context.Context, expected PullRequestExpectation,
+) (bool, error) {
+	if err := validatePullRequestExpectation(expected); err != nil {
+		return false, err
+	}
+	var current githubPullRequest
+	path := exactPullPath(expected.Owner, expected.Repo, expected.Number)
+	if err := c.do(ctx, http.MethodGet, path, nil, &current); err != nil {
+		return false, err
+	}
+	if !matchesExpectedPullRequest(current, expected) {
+		return false, ErrPullRequestConflict
+	}
+	if current.State == "closed" {
+		return true, nil
+	}
+	if current.State != "open" {
+		return false, ErrPullRequestConflict
+	}
+	var closed githubPullRequest
+	if err := c.do(ctx, http.MethodPatch, path, struct {
+		State string `json:"state"`
+	}{State: "closed"}, &closed); err != nil {
+		return false, err
+	}
+	if closed.State != "closed" || !matchesExpectedPullRequest(closed, expected) {
+		return false, ErrPullRequestConflict
+	}
+	return false, nil
+}
+
 type githubPullRequest struct {
 	Number  int64  `json:"number"`
 	HTMLURL string `json:"html_url"`
@@ -117,10 +167,35 @@ type githubPullRequest struct {
 	Body    string `json:"body"`
 	Head    struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"base"`
+}
+
+func validatePullRequestExpectation(value PullRequestExpectation) error {
+	if value.Owner == "" || value.Repo == "" || value.Number <= 0 || value.URL == "" ||
+		value.Marker == "" || !branchPattern.MatchString(value.Base) ||
+		!branchPattern.MatchString(value.Head) || !commitPattern.MatchString(value.BaseCommit) ||
+		!commitPattern.MatchString(value.CandidateCommit) {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func matchesExpectedPullRequest(value githubPullRequest, expected PullRequestExpectation) bool {
+	return value.Number == expected.Number && value.HTMLURL == expected.URL && value.Draft &&
+		strings.Contains(value.Body, expected.Marker) && value.Base.Ref == expected.Base &&
+		value.Head.Ref == expected.Head && value.Base.SHA == expected.BaseCommit &&
+		value.Head.SHA == expected.CandidateCommit &&
+		(value.State == "open" || value.State == "closed")
+}
+
+func exactPullPath(owner, repo string, number int64) string {
+	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
+		"/pulls/" + strconv.FormatInt(number, 10)
 }
 
 func (c *GitHubRESTClient) do(
@@ -193,7 +268,8 @@ func (c *GitHubRESTClient) pullPath(input DraftPullRequestInput) string {
 func mapPullRequest(value githubPullRequest, marker string) DraftPullRequest {
 	return DraftPullRequest{
 		Number: value.Number, URL: value.HTMLURL, State: value.State,
-		Draft: value.Draft, Head: value.Head.Ref, Base: value.Base.Ref, Marker: marker,
+		Draft: value.Draft, Head: value.Head.Ref, Base: value.Base.Ref,
+		HeadCommit: value.Head.SHA, BaseCommit: value.Base.SHA, Body: value.Body, Marker: marker,
 	}
 }
 

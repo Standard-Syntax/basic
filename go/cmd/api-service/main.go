@@ -42,16 +42,17 @@ type config struct {
 }
 
 type publicationConfig struct {
-	RepositoryRoot  string `json:"repository_root"`
-	RepositoryOwner string `json:"repository_owner"`
-	RepositoryName  string `json:"repository_name"`
-	Remote          string `json:"remote"`
-	BaseBranch      string `json:"base_branch"`
-	BranchPrefix    string `json:"branch_prefix"`
-	ActorID         string `json:"actor_id"`
-	APIEndpoint     string `json:"api_endpoint"`
-	APIVersion      string `json:"api_version"`
-	TokenFile       string `json:"token_file"`
+	RepositoryRoot        string `json:"repository_root"`
+	RepositoryOwner       string `json:"repository_owner"`
+	RepositoryName        string `json:"repository_name"`
+	Remote                string `json:"remote"`
+	BaseBranch            string `json:"base_branch"`
+	BranchPrefix          string `json:"branch_prefix"`
+	ActorID               string `json:"actor_id"`
+	APIEndpoint           string `json:"api_endpoint"`
+	APIVersion            string `json:"api_version"`
+	TokenFile             string `json:"token_file"`
+	GitPushCredentialFile string `json:"git_push_credential_file,omitempty"`
 }
 
 func main() {
@@ -234,9 +235,17 @@ func buildPublication(
 	if value == nil {
 		return nil, nil
 	}
-	gitPublisher, err := publication.NewGitCommandPublisher(
-		value.RepositoryRoot, value.Remote, value.BaseBranch,
-	)
+	var gitPublisher *publication.GitCommandPublisher
+	var err error
+	if value.GitPushCredentialFile == "" {
+		gitPublisher, err = publication.NewGitCommandPublisher(
+			value.RepositoryRoot, value.Remote, value.BaseBranch,
+		)
+	} else {
+		gitPublisher, err = publication.NewAuthenticatedGitCommandPublisher(
+			value.RepositoryRoot, value.Remote, value.BaseBranch, value.GitPushCredentialFile,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

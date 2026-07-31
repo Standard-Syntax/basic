@@ -81,6 +81,57 @@ func TestGitPublisherDisablesHostileHooksAndPrompts(t *testing.T) {
 	}
 }
 
+func TestGitPublisherDeletesOnlyExactCandidateAndReplays(t *testing.T) {
+	root, remote, _, candidate := gitFixture(t)
+	publisher, err := NewGitCommandPublisher(root, "origin", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Publish(t.Context(), "harness/canary/run", candidate); err != nil {
+		t.Fatal(err)
+	}
+	other := gitCommit(t, root, "changed.txt", "changed")
+	runGit(t, root, "push", "--force", "origin", other+":refs/heads/harness/canary/run")
+	if _, err := publisher.DeleteBranch(
+		t.Context(), "harness/canary/run", candidate,
+	); !errors.Is(err, ErrBranchConflict) {
+		t.Fatalf("changed branch deletion error = %v", err)
+	}
+	if head := gitOutput(t, remote, "rev-parse", "refs/heads/harness/canary/run"); head != other {
+		t.Fatalf("changed branch was removed or changed: %s", head)
+	}
+	if _, err := publisher.DeleteBranch(t.Context(), "harness/canary/run", other); err != nil {
+		t.Fatal(err)
+	}
+	if replay, err := publisher.DeleteBranch(
+		t.Context(), "harness/canary/run", other,
+	); err != nil || !replay {
+		t.Fatalf("missing branch replay=%v err=%v", replay, err)
+	}
+}
+
+func TestAuthenticatedGitPublisherRejectsUnsafeCredentialPaths(t *testing.T) {
+	root := t.TempDir()
+	unsafe := filepath.Join(root, "key with spaces")
+	if err := os.WriteFile(unsafe, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAuthenticatedGitCommandPublisher(
+		root, "origin", "main", unsafe,
+	); !errors.Is(err, ErrCredentialPermissions) {
+		t.Fatalf("unsafe credential path error = %v", err)
+	}
+	safe := filepath.Join(root, "deploy-key")
+	if err := os.WriteFile(safe, []byte("key"), 0o640); err != nil { // skipcq: GSC-G302
+		t.Fatal(err)
+	}
+	if _, err := NewAuthenticatedGitCommandPublisher(
+		root, "origin", "main", safe,
+	); !errors.Is(err, ErrCredentialPermissions) {
+		t.Fatalf("broad credential mode error = %v", err)
+	}
+}
+
 func gitFixture(t *testing.T) (root, remote, base, candidate string) {
 	t.Helper()
 	parent := t.TempDir()

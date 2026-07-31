@@ -37,6 +37,32 @@ func NewPostgresPublicationRepository(
 	return &PostgresPublicationRepository{pool: pool}, nil
 }
 
+// LoadCompleted returns only an immutable completed publication. It is a
+// concrete repository operation used by the separate cleanup command and does
+// not expand PublicationLedger runtime authority.
+func (r *PostgresPublicationRepository) LoadCompleted(
+	ctx context.Context, publicationID string,
+) (CompletedPublication, error) {
+	var value CompletedPublication
+	err := r.pool.QueryRow(ctx, `SELECT publication_id,repository,base_branch,head_branch,
+		base_commit,candidate_commit,pull_request_number,pull_request_url,
+		publication_artifact_uri,publication_artifact_digest
+		FROM draft_pull_request_publications
+		WHERE publication_id=$1 AND state='completed'`, publicationID).Scan(
+		&value.PublicationID, &value.Repository, &value.BaseBranch, &value.HeadBranch,
+		&value.BaseCommit, &value.CandidateCommit, &value.PullRequestNumber,
+		&value.PullRequestURL, &value.PublicationArtifact.URI,
+		&value.PublicationArtifact.Digest,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return CompletedPublication{}, ErrPublicationState
+	}
+	if err != nil {
+		return CompletedPublication{}, fmt.Errorf("load completed publication: %w", err)
+	}
+	return value, nil
+}
+
 func (r *PostgresPublicationRepository) Begin(
 	ctx context.Context, start PublicationStart,
 ) (PublicationHandle, error) {
