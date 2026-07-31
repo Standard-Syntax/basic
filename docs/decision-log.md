@@ -523,3 +523,41 @@ slice.
 
 ### Date
 2026-07-30
+
+## DEC-025: Accept runs through one fenced transaction
+
+### Decision
+Resolve and stage the exact intake-time repository map before acceptance, then
+lock the API idempotency reservation and atomically persist workflow run
+creation, the complete immutable runtime binding, and the exact HTTP response
+in one caller-owned serializable transaction.
+
+### Options considered
+Keep the existing chain of independently committed repositories; add a partial
+intake state and compensating reconciler; expose a narrow caller-owned workflow
+transaction seam and commit the acceptance boundary once.
+
+### Pros
+An accepted run is complete and replayable, while every pre-commit failure
+exposes no run. Repository context cannot drift between API intake and worker
+start, and a post-commit response loss replays without external work.
+
+### Cons
+The API composition coordinates PostgreSQL records owned by workflow and
+runtime packages, and failed staging can leave unbound CAS objects for normal
+garbage collection.
+
+### Why this option
+Compensation cannot make a chain of visible commits atomic. PostgreSQL already
+owns the workflow, binding, and idempotency records and can enforce one
+serializable acceptance decision without a new migration or reconciler.
+
+### Consequences
+`api-service` requires a clean absolute repository root. New run bindings must
+include intake and repository-map references plus the exact base commit. Stage
+start verifies and consumes that bound map; incomplete legacy rows fail closed.
+Reservation expiry increments a fencing generation, and stale generations
+cannot commit, complete, or abandon intake.
+
+### Date
+2026-07-31

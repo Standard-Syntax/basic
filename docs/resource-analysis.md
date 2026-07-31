@@ -77,3 +77,17 @@ short claim transaction, then performs work outside that transaction; retries
 are bounded and back off to at most one minute. The first slice schedules one
 task, so it introduces no cross-task leasing or unbounded queue fan-out.
 External metrics and tracing backends remain deferred.
+
+## Beta Slice 3 intake
+
+Each fresh run intake performs one bounded Git tree walk and blob hashing pass
+at the requested commit, then publishes two CAS objects: the existing bounded
+intake body and one deterministic repository-map object containing path, kind,
+and SHA-256 per committed blob. The acceptance transaction is short: it holds
+one idempotency-row lock while writing one workflow command, initial event and
+snapshot, one complete run binding, and one response. Git and CAS staging occur
+before that transaction. Concurrent duplicates either replay or report the
+live reservation and do not multiply repository snapshots after completion.
+Operators must include repository-map objects in CAS retention sizing; unbound
+objects from failed pre-transaction staging are safe garbage-collection
+candidates.

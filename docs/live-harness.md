@@ -71,6 +71,14 @@ environment, then run:
 make beta-live-e2e
 ```
 
+The disposable API configuration supplies its fixture repository as the
+required top-level `repository_root`. `POST /v1/runs` resolves and binds the
+fixture base commit and repository-map CAS artifact before any worker starts.
+After the API restart, replay of the original run request must return the stored
+`201` bytes with `Idempotent-Replay: true`; a replay must not read Git, publish
+CAS objects, create another workflow run or binding, enqueue work, or invoke
+MiniMax.
+
 The gate builds both host services and both isolated worker images, starts
 disposable PostgreSQL, and runs one task against MiniMax-M2.7 through
 implementation, execution, independent verification, review, process restart,

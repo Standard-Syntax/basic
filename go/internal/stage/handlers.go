@@ -28,7 +28,6 @@ type ArtifactStore interface {
 type RuntimeStore interface {
 	GetRun(context.Context, string) (runtime.RunBinding, error)
 	GetTask(context.Context, string, string) (runtime.TaskBinding, error)
-	CheckpointRepository(context.Context, string, workflow.ArtifactRef) error
 	CompletedResult(
 		context.Context, string, *string, uint32, string,
 	) (workflow.ArtifactRef, error)
@@ -136,19 +135,21 @@ func (h *Handlers) start(
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
-	snapshot, err := runtime.SnapshotRepository(ctx, h.config.RepositoryRoot, binding.BaseCommit)
+	if binding.RepositoryMap == nil {
+		return orchestration.HandlerResult{}, runtime.ErrNotFound
+	}
+	ref := *binding.RepositoryMap
+	if err := ref.Validate(); err != nil {
+		return orchestration.HandlerResult{}, err
+	}
+	body, err := h.artifacts.Get(ctx, ref)
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
-	body, err := json.Marshal(snapshot)
-	if err != nil {
-		return orchestration.HandlerResult{}, err
+	if runtime.Digest(body) != ref.Digest {
+		return orchestration.HandlerResult{}, runtime.ErrConflict
 	}
-	ref, err := h.artifacts.Put(ctx, body)
-	if err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	if err := h.runtime.CheckpointRepository(ctx, job.RunID, ref); err != nil {
+	if _, err := runtime.DecodeRepositorySnapshot(body, binding.BaseCommit); err != nil {
 		return orchestration.HandlerResult{}, err
 	}
 	run, err := h.workflow.GetRun(ctx, job.RunID)

@@ -68,6 +68,7 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	apiConfig := filepath.Join(root, "api.json")
 	writeJSONFile(t, apiConfig, map[string]any{
 		"listen": apiAddress, "database_url": databaseURL, "artifact_root": artifactRoot,
+		"repository_root":  repository,
 		"service_actor_id": actorIDs[0], "max_artifact_bytes": 4 << 20,
 		"max_body_bytes": 4 << 20, "trusted_checks": []string{"make-check-v1"},
 		"principals": []map[string]any{{

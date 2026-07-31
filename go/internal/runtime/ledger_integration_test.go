@@ -200,9 +200,11 @@ func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	}
 	repository := NewBindingRepository(pool)
 	intake := artifactRef("intake")
+	repositoryMap := artifactRef("repository")
 	binding := RunBinding{
 		RunID: runID, Intake: intake,
-		BaseCommit: "0123456789012345678901234567890123456789", CreatedAt: at,
+		BaseCommit:    "0123456789012345678901234567890123456789",
+		RepositoryMap: &repositoryMap, CreatedAt: at,
 	}
 	if err := repository.CreateRun(ctx, binding); err != nil {
 		t.Fatal(err)
@@ -210,7 +212,6 @@ func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	if err := repository.CreateRun(ctx, binding); err != nil {
 		t.Fatalf("exact intake replay: %v", err)
 	}
-	repositoryMap := artifactRef("repository")
 	if err := repository.CheckpointRepository(ctx, runID, repositoryMap); err != nil {
 		t.Fatal(err)
 	}

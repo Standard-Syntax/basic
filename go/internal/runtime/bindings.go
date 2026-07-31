@@ -33,25 +33,58 @@ func NewBindingRepository(pool *pgxpool.Pool) *BindingRepository {
 }
 
 func (r *BindingRepository) CreateRun(ctx context.Context, binding RunBinding) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := CreateRunBindingTx(ctx, tx, binding); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CreateRunBindingTx inserts the complete immutable intake binding in a
+// caller-owned transaction. RepositoryMap is mandatory for newly accepted
+// runs; nullable database columns remain only for legacy migration tolerance.
+func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) error {
 	if err := binding.Intake.Validate(); err != nil {
 		return err
 	}
-	tag, err := r.pool.Exec(ctx, `INSERT INTO runtime_run_bindings
-		(run_id,intake_uri,intake_digest,base_commit,created_at)
-		VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-		binding.RunID, binding.Intake.URI, binding.Intake.Digest,
-		binding.BaseCommit, binding.CreatedAt.UTC())
+	if binding.RepositoryMap == nil {
+		return ErrConflict
+	}
+	if err := binding.RepositoryMap.Validate(); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO runtime_run_bindings
+		(run_id,intake_uri,intake_digest,base_commit,repository_map_uri,
+		 repository_map_digest,created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+		binding.RunID, binding.Intake.URI, binding.Intake.Digest, binding.BaseCommit,
+		binding.RepositoryMap.URI, binding.RepositoryMap.Digest, binding.CreatedAt.UTC())
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
-	existing, err := r.GetRun(ctx, binding.RunID)
+	var existing RunBinding
+	var repositoryURI, repositoryDigest string
+	err = tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
+		repository_map_uri,repository_map_digest,created_at
+		FROM runtime_run_bindings WHERE run_id=$1`, binding.RunID).Scan(
+		&existing.RunID, &existing.Intake.URI, &existing.Intake.Digest,
+		&existing.BaseCommit, &repositoryURI, &repositoryDigest, &existing.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
 	if err != nil {
 		return err
 	}
+	existing.RepositoryMap = &workflow.ArtifactRef{URI: repositoryURI, Digest: repositoryDigest}
 	if existing.Intake != binding.Intake || existing.BaseCommit != binding.BaseCommit ||
+		*existing.RepositoryMap != *binding.RepositoryMap ||
 		!existing.CreatedAt.Equal(binding.CreatedAt.UTC()) {
 		return ErrConflict
 	}
