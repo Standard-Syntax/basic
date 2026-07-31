@@ -16,6 +16,10 @@ import (
 //go:embed migrations/*.sql
 var publicationMigrationFiles embed.FS
 
+func MigrationSource() migration.Source {
+	return migration.Source{Files: publicationMigrationFiles, Directory: "migrations"}
+}
+
 func Migrate(ctx context.Context, connectionString string) error {
 	return migration.Apply(ctx, connectionString, publicationMigrationFiles, "migrations")
 }

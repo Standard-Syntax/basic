@@ -186,3 +186,13 @@ It loads the intake-bound CAS object, verifies its digest, strict shape, sorted
 blob entries, and exact base-commit binding, then performs the existing run and
 task lease transitions. Nullable repository-map columns remain migration-only
 compatibility: an incomplete legacy binding fails closed.
+
+### Immutable beta repository policy
+
+Slice 4 adds one canonical `beta_policy` shared by API intake, workflow
+workers, and `beta-preflight`. Intake stores its CAS artifact and both worker
+`sha256:` identities in the same serializable transaction as the run binding.
+Stage start compares the complete bound policy and image identities with active
+configuration before starting a run or acquiring a lease. Task-planning
+authority must match the bound policy; proposals may narrow it but cannot widen
+paths, checks, limits, concurrency, or the one dependency-free task boundary.

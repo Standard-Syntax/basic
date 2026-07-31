@@ -18,6 +18,10 @@ import (
 //go:embed migrations/*.sql
 var verificationMigrationFiles embed.FS
 
+func MigrationSource() migration.Source {
+	return migration.Source{Files: verificationMigrationFiles, Directory: "migrations"}
+}
+
 func Migrate(ctx context.Context, connectionString string) error {
 	return migration.Apply(
 		ctx, connectionString, verificationMigrationFiles, "migrations",

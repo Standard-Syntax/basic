@@ -561,3 +561,38 @@ cannot commit, complete, or abandon intake.
 
 ### Date
 2026-07-31
+
+## DEC-026: Bind production readiness policy to every accepted run
+
+### Decision
+Represent repository identity, approved base, path/check authority, resource
+ceilings, and both worker images as one strict canonical beta policy. Verify
+readiness without mutation, store the policy in CAS during intake staging, and
+atomically bind its artifact and image identities to the run.
+
+### Options considered
+Trust process-local configuration; copy individual settings into mutable
+workflow state; bind a canonical policy artifact and image identities to the
+immutable intake row.
+
+### Pros
+Workers can prove the exact accepted authority. Configuration drift, legacy
+rows, mutable tags, scope widening, base movement, and migration drift fail
+before leases or external work. Preflight emits secret-free evidence.
+
+### Cons
+Operators must maintain one strict policy across both services and preflight,
+and roots, images, and migrations must exist before readiness passes.
+
+### Why this option
+Readiness that is not run-bound can change after acceptance and cannot be
+audited. Canonical CAS bytes preserve the boundary without changing reasoning
+wire contracts.
+
+### Consequences
+Migration `0020` keeps historical columns nullable, but new intake requires the
+policy and both `sha256:` image IDs. Stage start rejects incomplete or changed
+bindings. Task planning remains one dependency-free task.
+
+### Date
+2026-07-31

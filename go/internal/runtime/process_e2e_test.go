@@ -43,6 +43,17 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	databaseURL := requireEnvironment(t, "TEST_DATABASE_URL")
 	root := t.TempDir()
 	repository, remote, baseCommit := fixtureRepository(t, root)
+	executionImage := dockerImageID(t, "basic-execution-worker:runtime")
+	verificationImage := dockerImageID(t, "basic-verification-worker:runtime")
+	policy := map[string]any{
+		"version": "1.0",
+		"repository": map[string]any{"owner": "local", "name": "fixture", "root": repository,
+			"remote": remote, "remote_url": filepath.Join(root, "remote.git"), "base_branch": "main", "base_commit": baseCommit},
+		"paths":          map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}},
+		"trusted_checks": []string{"make-check-v1"},
+		"limits":         map[string]any{"maximum_tasks": 1, "maximum_changed_files": 4, "maximum_file_bytes": 1 << 20, "maximum_total_bytes": 4 << 20, "execution_concurrency": 1, "verification_concurrency": 1},
+		"images":         map[string]any{"execution": executionImage, "verification": verificationImage},
+	}
 	artifactRoot := filepath.Join(root, "artifacts")
 	worktrees := filepath.Join(root, "worktrees")
 	verificationRoot := filepath.Join(root, "verification")
@@ -69,6 +80,7 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	writeJSONFile(t, apiConfig, map[string]any{
 		"listen": apiAddress, "database_url": databaseURL, "artifact_root": artifactRoot,
 		"repository_root":  repository,
+		"beta_policy":      policy,
 		"service_actor_id": actorIDs[0], "max_artifact_bytes": 4 << 20,
 		"max_body_bytes": 4 << 20, "trusted_checks": []string{"make-check-v1"},
 		"principals": []map[string]any{{
@@ -89,8 +101,9 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 		"owner_id": uuid.NewString(), "max_artifact_bytes": 4 << 20,
 		"repository_root": repository, "worktree_root": worktrees,
 		"verification_workspace_root": verificationRoot,
-		"execution_worker_image":      "basic-execution-worker:runtime",
-		"verification_worker_image":   "basic-verification-worker:runtime",
+		"execution_worker_image":      executionImage,
+		"verification_worker_image":   verificationImage,
+		"beta_policy":                 policy,
 		"worker_uid":                  os.Getuid(), "worker_gid": os.Getgid(),
 		"service_actor_id": actorIDs[0], "reasoning_actor_id": actorIDs[2],
 		"execution_actor_id": actorIDs[3], "verification_actor_id": actorIDs[4],
@@ -535,7 +548,7 @@ func planningPair(
 		ApprovedSpecificationDigest: specificationDigest, RepositoryMap: snapshot.Entries,
 		ReadablePaths:   []string{"add.go", "add_test.go"},
 		WritablePaths:   []string{"add.go"},
-		ProhibitedPaths: []string{"add_test.go", "go.mod", "Makefile"},
+		ProhibitedPaths: []string{"Makefile", "add_test.go", "go.mod"},
 		TaskCountLimit:  1, ParallelismLimit: 1,
 		AcceptanceCriterionIds: []string{"AC-001"},
 	}
@@ -547,7 +560,7 @@ func planningPair(
 			AcceptanceCriterionIds: []string{"AC-001"},
 			ReadablePaths:          []string{"add.go", "add_test.go"},
 			WritablePaths:          []string{"add.go"},
-			ProhibitedPaths:        []string{"add_test.go", "go.mod", "Makefile"},
+			ProhibitedPaths:        []string{"Makefile", "add_test.go", "go.mod"},
 			RequiredCheckIds:       []string{"make-check-v1"},
 			StopConditions:         []string{"make check passes"},
 		}},
@@ -673,6 +686,21 @@ func freeAddress(t *testing.T) string {
 	address := listener.Addr().String()
 	listener.Close()
 	return address
+}
+
+func dockerImageID(t *testing.T, image string) string {
+	t.Helper()
+	body := runCommandOutput(t, "docker", "image", "inspect", "--format", "{{.Id}}", image)
+	return strings.TrimSpace(body)
+}
+
+func runCommandOutput(t *testing.T, name string, arguments ...string) string {
+	t.Helper()
+	body, err := exec.CommandContext(t.Context(), name, arguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v: %v: %s", name, arguments, err, body)
+	}
+	return string(body)
 }
 
 func writeJSONFile(t *testing.T, path string, value any) {

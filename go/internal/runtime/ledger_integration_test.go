@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -201,10 +202,13 @@ func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	repository := NewBindingRepository(pool)
 	intake := artifactRef("intake")
 	repositoryMap := artifactRef("repository")
+	policy := artifactRef("policy")
 	binding := RunBinding{
 		RunID: runID, Intake: intake,
 		BaseCommit:    "0123456789012345678901234567890123456789",
 		RepositoryMap: &repositoryMap, CreatedAt: at,
+		Policy: &policy, ExecutionImageDigest: "sha256:" + strings.Repeat("a", 64),
+		VerificationImageDigest: "sha256:" + strings.Repeat("b", 64),
 	}
 	if err := repository.CreateRun(ctx, binding); err != nil {
 		t.Fatal(err)
@@ -266,7 +270,9 @@ func TestPostgresRuntimeBindingLegacyRepositoryMapFailsClosed(t *testing.T) {
 	repositoryMap := artifactRef("repository")
 	err = NewBindingRepository(pool).CreateRun(ctx, RunBinding{
 		RunID: runID, Intake: intake, BaseCommit: baseCommit,
-		RepositoryMap: &repositoryMap, CreatedAt: at,
+		RepositoryMap: &repositoryMap, Policy: &repositoryMap,
+		ExecutionImageDigest:    "sha256:" + strings.Repeat("a", 64),
+		VerificationImageDigest: "sha256:" + strings.Repeat("b", 64), CreatedAt: at,
 	})
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("legacy incomplete binding error=%v", err)

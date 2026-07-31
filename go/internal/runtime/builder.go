@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
@@ -356,7 +358,15 @@ func BuildApprovedTaskGraph(
 	request *reasoningv1.TaskPlanningRequest,
 	proposal *reasoningv1.TaskGraphProposal,
 	trustedChecks map[string]struct{},
+	policy beta.Policy,
 ) (workflow.ArtifactRef, workflow.ArtifactRef, *reasoningv1.PlannedTask, error) {
+	if err := policy.Validate(); err != nil || !slices.Equal(request.GetReadablePaths(), policy.Paths.Readable) ||
+		!slices.Equal(request.GetWritablePaths(), policy.Paths.Writable) ||
+		!slices.Equal(request.GetProhibitedPaths(), policy.Paths.Prohibited) ||
+		request.GetTaskCountLimit() != uint32(policy.Limits.MaximumTasks) ||
+		request.GetParallelismLimit() != uint32(policy.Limits.ExecutionConcurrency) {
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, fmt.Errorf("%w: task policy mismatch", ErrScope)
+	}
 	mapped, err := contracts.MapTaskPlanningRequest(request)
 	if err != nil {
 		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
@@ -374,6 +384,22 @@ func BuildApprovedTaskGraph(
 		if _, ok := trustedChecks[check]; !ok {
 			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil,
 				fmt.Errorf("%w: untrusted check %q", ErrScope, check)
+		}
+	}
+	planned := graph.Tasks[0]
+	for _, value := range planned.ReadablePaths {
+		if !beta.WithinAny(value, policy.Paths.Readable) {
+			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
+		}
+	}
+	for _, value := range planned.WritablePaths {
+		if !beta.WithinAny(value, policy.Paths.Writable) {
+			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
+		}
+	}
+	for _, value := range policy.Paths.Prohibited {
+		if !beta.WithinAny(value, planned.ProhibitedPaths) {
+			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
 		}
 	}
 	graphBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)

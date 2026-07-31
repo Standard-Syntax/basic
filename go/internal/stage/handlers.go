@@ -9,6 +9,7 @@ import (
 	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
@@ -68,6 +69,7 @@ type Config struct {
 	ContextLimits                runtime.ContextLimits
 	ImplementationBudget         runtime.ReasoningLimits
 	ReviewBudget                 runtime.ReasoningLimits
+	Policy                       beta.Policy
 }
 
 type Handlers struct {
@@ -103,6 +105,9 @@ func New(
 		config.ReviewManifestDigest == "" {
 		return nil, errors.New("incomplete stage configuration")
 	}
+	if err := config.Policy.Validate(); err != nil {
+		return nil, err
+	}
 	return &Handlers{
 		config: config, artifacts: artifacts, runtime: runtimeStore,
 		workflow: workflowStore, gateway: implementationGateway,
@@ -135,8 +140,23 @@ func (h *Handlers) start(
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
-	if binding.RepositoryMap == nil {
+	if binding.RepositoryMap == nil || binding.Policy == nil ||
+		binding.ExecutionImageDigest != h.config.Policy.Images.Execution ||
+		binding.VerificationImageDigest != h.config.Policy.Images.Verification {
 		return orchestration.HandlerResult{}, runtime.ErrNotFound
+	}
+	policyBody, err := h.artifacts.Get(ctx, *binding.Policy)
+	if err != nil {
+		return orchestration.HandlerResult{}, err
+	}
+	boundPolicy, err := beta.DecodePolicy(policyBody)
+	if err != nil {
+		return orchestration.HandlerResult{}, runtime.ErrConflict
+	}
+	_, activeDigest, _ := h.config.Policy.Canonical()
+	_, boundDigest, _ := boundPolicy.Canonical()
+	if activeDigest != boundDigest || runtime.Digest(policyBody) != binding.Policy.Digest {
+		return orchestration.HandlerResult{}, runtime.ErrConflict
 	}
 	ref := *binding.RepositoryMap
 	if err := ref.Validate(); err != nil {

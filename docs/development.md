@@ -268,3 +268,14 @@ bytes returns an idempotency conflict.
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed
 fixtures, while Go and Python tests verify cross-language digest equality.
+
+## Production repository preflight
+
+Run `make beta-preflight BETA_CONFIG=/absolute/path/to/beta-preflight.json`.
+Exit 0 means ready, 1 means a readiness check failed, and 2 means strict JSON
+configuration is invalid. Repository, artifact, execution-worktree, and
+verification-workspace roots must already exist, be non-symlinked,
+owner-controlled, and non-overlapping. The command verifies Git/remote-base
+identity, empty harness worktree roots, exact Docker image IDs, already-applied
+migrations, the MiniMax environment credential, and a regular `0600`
+publication credential file. It never applies migrations or creates resources.

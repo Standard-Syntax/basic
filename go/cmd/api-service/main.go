@@ -19,6 +19,7 @@ import (
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/controlapi"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
@@ -37,6 +38,7 @@ type config struct {
 	TrustedChecks    []string               `json:"trusted_checks"`
 	Principals       []controlapi.Principal `json:"principals"`
 	Publication      *publicationConfig     `json:"publication,omitempty"`
+	Policy           beta.Policy            `json:"beta_policy"`
 }
 
 type publicationConfig struct {
@@ -110,6 +112,16 @@ func loadConfig(path string) (config, error) {
 		filepath.Clean(value.RepositoryRoot) != value.RepositoryRoot {
 		return config{}, errors.New("incomplete API configuration")
 	}
+	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot {
+		return config{}, errors.New("invalid or mismatched beta policy")
+	}
+	if value.Publication != nil && (value.Publication.RepositoryRoot != value.Policy.Repository.Root ||
+		value.Publication.RepositoryOwner != value.Policy.Repository.Owner ||
+		value.Publication.RepositoryName != value.Policy.Repository.Name ||
+		value.Publication.Remote != value.Policy.Repository.Remote ||
+		value.Publication.BaseBranch != value.Policy.Repository.BaseBranch) {
+		return config{}, errors.New("publication configuration does not match beta policy")
+	}
 	return value, nil
 }
 
@@ -156,7 +168,7 @@ func run(ctx context.Context, value config) error {
 	}
 	workflowStore := workflow.NewStore(pool)
 	runIntake, err := controlapi.NewRunIntakeCoordinator(
-		pool, workflowStore, artifacts, value.RepositoryRoot,
+		pool, workflowStore, artifacts, value.RepositoryRoot, value.Policy,
 	)
 	if err != nil {
 		return err
@@ -165,6 +177,7 @@ func run(ctx context.Context, value config) error {
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
 		MaxBodyBytes:  value.MaxBodyBytes,
 		TrustedChecks: value.TrustedChecks,
+		Policy:        value.Policy,
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
 	if err != nil {

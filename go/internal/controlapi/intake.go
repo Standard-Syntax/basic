@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5"
@@ -36,6 +37,7 @@ const (
 	FaultAfterReservation   IntakeFaultPoint = "after_reservation"
 	FaultAfterIntakeCAS     IntakeFaultPoint = "after_intake_cas"
 	FaultAfterRepositoryCAS IntakeFaultPoint = "after_repository_cas"
+	FaultAfterPolicyCAS     IntakeFaultPoint = "after_policy_cas"
 	FaultAfterWorkflow      IntakeFaultPoint = "after_workflow"
 	FaultAfterBinding       IntakeFaultPoint = "after_binding"
 	FaultAfterResponse      IntakeFaultPoint = "after_response"
@@ -49,6 +51,7 @@ type RunIntakeCoordinator struct {
 	workflow       transactionalWorkflow
 	artifacts      ArtifactStore
 	repositoryRoot string
+	policy         beta.Policy
 	inject         func(IntakeFaultPoint) error
 }
 
@@ -57,11 +60,12 @@ const intakeCleanupTimeout = 5 * time.Second
 type stagedRunIntake struct {
 	intake        workflow.ArtifactRef
 	repositoryMap workflow.ArtifactRef
+	policy        workflow.ArtifactRef
 }
 
 func NewRunIntakeCoordinator(
 	pool *pgxpool.Pool, store transactionalWorkflow, artifacts ArtifactStore,
-	repositoryRoot string,
+	repositoryRoot string, configuredPolicy ...beta.Policy,
 ) (*RunIntakeCoordinator, error) {
 	if pool == nil || store == nil || artifacts == nil {
 		return nil, errors.New("run intake dependencies are required")
@@ -69,9 +73,15 @@ func NewRunIntakeCoordinator(
 	if !filepath.IsAbs(repositoryRoot) || filepath.Clean(repositoryRoot) != repositoryRoot {
 		return nil, errors.New("repository root must be clean and absolute")
 	}
+	if len(configuredPolicy) != 1 || configuredPolicy[0].Repository.Root != repositoryRoot {
+		return nil, errors.New("one matching beta policy is required")
+	}
+	if err := configuredPolicy[0].Validate(); err != nil {
+		return nil, err
+	}
 	return &RunIntakeCoordinator{
 		pool: pool, ledger: runtime.NewLedger(pool), workflow: store,
-		artifacts: artifacts, repositoryRoot: repositoryRoot,
+		artifacts: artifacts, repositoryRoot: repositoryRoot, policy: configuredPolicy[0],
 	}, nil
 }
 
@@ -129,6 +139,12 @@ func validateRunIntakeRequest(request RunIntakeRequest) error {
 func (c *RunIntakeCoordinator) stageArtifacts(
 	ctx context.Context, request RunIntakeRequest,
 ) (stagedRunIntake, error) {
+	if request.BaseCommit != c.policy.Repository.BaseCommit {
+		return stagedRunIntake{}, runtime.ErrConflict
+	}
+	if err := beta.VerifyRemoteBase(ctx, c.policy); err != nil {
+		return stagedRunIntake{}, err
+	}
 	intake, err := c.artifacts.Put(ctx, request.Content)
 	if err != nil {
 		return stagedRunIntake{}, err
@@ -154,7 +170,18 @@ func (c *RunIntakeCoordinator) stageArtifacts(
 	if err := c.fault(FaultAfterRepositoryCAS); err != nil {
 		return stagedRunIntake{}, err
 	}
-	return stagedRunIntake{intake: intake, repositoryMap: repositoryMap}, nil
+	policyBody, _, err := c.policy.Canonical()
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	policy, err := c.artifacts.Put(ctx, policyBody)
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	if err := c.fault(FaultAfterPolicyCAS); err != nil {
+		return stagedRunIntake{}, err
+	}
+	return stagedRunIntake{intake: intake, repositoryMap: repositoryMap, policy: policy}, nil
 }
 
 func (c *RunIntakeCoordinator) commitIntake(
@@ -179,7 +206,10 @@ func (c *RunIntakeCoordinator) commitIntake(
 	}
 	binding := runtime.RunBinding{
 		RunID: request.Command.ID, Intake: staged.intake, BaseCommit: request.BaseCommit,
-		RepositoryMap: &staged.repositoryMap, CreatedAt: request.Command.Meta.Timestamp,
+		RepositoryMap: &staged.repositoryMap, Policy: &staged.policy,
+		ExecutionImageDigest:    c.policy.Images.Execution,
+		VerificationImageDigest: c.policy.Images.Verification,
+		CreatedAt:               request.Command.Meta.Timestamp,
 	}
 	if err := runtime.CreateRunBindingTx(ctx, tx, binding); err != nil {
 		return nil, false, err

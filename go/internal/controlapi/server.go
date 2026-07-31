@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +20,7 @@ import (
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/approval"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
@@ -92,6 +94,7 @@ type Config struct {
 	ServiceActorID string
 	MaxBodyBytes   int64
 	TrustedChecks  []string
+	Policy         beta.Policy
 }
 
 type Server struct {
@@ -136,6 +139,12 @@ func New(
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
 		return nil, err
+	}
+	if err := normalized.Policy.Validate(); err != nil {
+		return nil, err
+	}
+	if !slices.Equal(normalized.TrustedChecks, normalized.Policy.TrustedChecks) {
+		return nil, errors.New("trusted checks do not match beta policy")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -561,7 +570,7 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 			return 0, nil, workflow.ErrInvalid
 		}
 		ref, _, _, err := runtime.BuildApprovedTaskGraph(
-			ctx, s.artifacts, &planningRequest, &graphProposal, s.checks,
+			ctx, s.artifacts, &planningRequest, &graphProposal, s.checks, s.config.Policy,
 		)
 		if err != nil {
 			return 0, nil, err

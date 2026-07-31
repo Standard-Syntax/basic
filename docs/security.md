@@ -182,3 +182,10 @@ facts and completed rows are protected by PostgreSQL triggers.
 - Pre-commit failures leave no workflow run, binding, completed response, job,
   or provider invocation. A crash after commit replays the stored bytes and
   performs no Git, CAS, workflow, job, or provider operation.
+- New beta bindings also contain the canonical policy artifact and immutable
+  execution and verification image IDs. Missing, mutable, or configuration-
+  mismatched bindings fail before a lease, provider call, candidate, or
+  publication.
+- `beta-preflight` does not create directories, apply migrations, write CAS,
+  update Git refs, call a provider, push, or contact GitHub. Its JSON contains
+  only allowlisted identities/digests and stable redacted failure codes.

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
@@ -57,6 +58,7 @@ type config struct {
 	TaskLeaseDuration          time.Duration          `json:"task_lease_duration_nanoseconds"`
 	ClaimTTL                   time.Duration          `json:"claim_ttl_nanoseconds"`
 	Provider                   gateway.ProviderConfig `json:"provider"`
+	Policy                     beta.Policy            `json:"beta_policy"`
 }
 
 func main() {
@@ -130,6 +132,11 @@ func normalizeConfig(value config) (config, error) {
 	}
 	if !completeConfig(value) {
 		return config{}, errors.New("incomplete configuration")
+	}
+	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot ||
+		value.Policy.Images.Execution != value.ExecutionWorkerImage ||
+		value.Policy.Images.Verification != value.VerificationWorkerImage {
+		return config{}, errors.New("invalid or mismatched beta policy")
 	}
 	applyConfigDefaults(&value)
 	return value, nil
@@ -254,7 +261,11 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		RepositoryRoot: value.RepositoryRoot, WorktreeRoot: value.WorktreeRoot,
 		WorkerImage: value.ExecutionWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID,
 		ActorID: value.ExecutionActorID, AuthorName: "Harness Runtime",
-		AuthorEmail: "harness@example.invalid",
+		AuthorEmail:   "harness@example.invalid",
+		MaxConcurrent: value.Policy.Limits.ExecutionConcurrency,
+		Limits: execution.Limits{MaxChangedFiles: value.Policy.Limits.MaximumChangedFiles,
+			MaxFileBytes:  value.Policy.Limits.MaximumFileBytes,
+			MaxTotalBytes: value.Policy.Limits.MaximumTotalBytes, Timeout: execution.DefaultTimeout},
 	}, artifacts, execution.DockerApplicator{
 		Image: value.ExecutionWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID,
 	}, workflowStore, execution.NewPostgresExecutionLedger(pool))
@@ -263,6 +274,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	}
 	verificationService, err := verification.NewService(verification.Config{
 		ActorID: value.VerificationActorID, Catalog: verification.DefaultCatalog(),
+		MaxConcurrent: value.Policy.Limits.VerificationConcurrency,
 	}, artifacts, workflowStore, verification.FileWorkspacePreparer{
 		RepositoryRoot: value.RepositoryRoot, WorkspaceRoot: value.VerificationWorkspaceRoot,
 	}, verification.DockerCheckExecutor{
@@ -284,6 +296,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		ReasoningActorID:             value.ReasoningActorID,
 		ImplementationManifestDigest: implementationDigest, ReviewManifestDigest: reviewDigest,
 		TaskLeaseDuration: value.TaskLeaseDuration,
+		Policy:            value.Policy,
 		ContextLimits: runtime.ContextLimits{
 			MaxFiles: value.ContextMaxFiles, MaxBytes: value.ContextMaxBytes,
 		},

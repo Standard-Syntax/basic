@@ -463,3 +463,9 @@ arbitrary model tools, streaming, images, autonomous approval, hosted secret
 management, multi-tenant isolation, or general provider selection. These
 features require separate authority and threat-model decisions after beta
 evidence exists.
+
+Slice 4 implementation uses a versioned canonical `beta_policy` shared by both
+services and preflight. Migration `0020` preserves nullable historical rows
+while requiring policy and image bindings for every new intake. Workers consume
+only bound `sha256:` image identities. The beta remains limited to one
+dependency-free task.

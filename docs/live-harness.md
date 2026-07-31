@@ -99,3 +99,9 @@ recovery using an already-existing artifact; it does not generate a proposal
 or prove beta lifecycle completion. A missing credential, skipped live test,
 provider failure, evidence mismatch, replayed side effect, or secret leak
 fails `make beta-live-e2e`.
+
+Before targeting a production repository, run
+`make beta-preflight BETA_CONFIG=/absolute/path/to/beta-preflight.json` and
+require exit 0 with `status:"ready"`. Exit 1 exposes only redacted readiness
+codes; exit 2 means invalid configuration. This non-mutating check is not a
+substitute for the credentialed live lifecycle gate.

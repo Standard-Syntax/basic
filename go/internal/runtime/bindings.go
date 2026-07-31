@@ -11,14 +11,17 @@ import (
 )
 
 type RunBinding struct {
-	RunID                 string
-	Intake                workflow.ArtifactRef
-	BaseCommit            string
-	RepositoryMap         *workflow.ArtifactRef
-	ApprovedSpecification *workflow.ArtifactRef
-	ApprovedTaskGraph     *workflow.ArtifactRef
-	CompositeApproval     *workflow.ArtifactRef
-	CreatedAt             time.Time
+	RunID                   string
+	Intake                  workflow.ArtifactRef
+	BaseCommit              string
+	RepositoryMap           *workflow.ArtifactRef
+	Policy                  *workflow.ArtifactRef
+	ExecutionImageDigest    string
+	VerificationImageDigest string
+	ApprovedSpecification   *workflow.ArtifactRef
+	ApprovedTaskGraph       *workflow.ArtifactRef
+	CompositeApproval       *workflow.ArtifactRef
+	CreatedAt               time.Time
 }
 
 type TaskBinding struct {
@@ -51,18 +54,25 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 	if err := binding.Intake.Validate(); err != nil {
 		return err
 	}
-	if binding.RepositoryMap == nil {
+	if binding.RepositoryMap == nil || binding.Policy == nil ||
+		!validImageDigest(binding.ExecutionImageDigest) || !validImageDigest(binding.VerificationImageDigest) {
 		return ErrConflict
 	}
 	if err := binding.RepositoryMap.Validate(); err != nil {
 		return err
 	}
+	if err := binding.Policy.Validate(); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `INSERT INTO runtime_run_bindings
 		(run_id,intake_uri,intake_digest,base_commit,repository_map_uri,
-		 repository_map_digest,created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
+		 repository_map_digest,beta_policy_uri,beta_policy_digest,
+		 execution_image_digest,verification_image_digest,created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
 		binding.RunID, binding.Intake.URI, binding.Intake.Digest, binding.BaseCommit,
-		binding.RepositoryMap.URI, binding.RepositoryMap.Digest, binding.CreatedAt.UTC())
+		binding.RepositoryMap.URI, binding.RepositoryMap.Digest,
+		binding.Policy.URI, binding.Policy.Digest, binding.ExecutionImageDigest,
+		binding.VerificationImageDigest, binding.CreatedAt.UTC())
 	if err != nil {
 		return err
 	}
@@ -70,12 +80,14 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 		return nil
 	}
 	var existing RunBinding
-	var repositoryURI, repositoryDigest *string
+	var repositoryURI, repositoryDigest, policyURI, policyDigest *string
 	err = tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
-		repository_map_uri,repository_map_digest,created_at
+		repository_map_uri,repository_map_digest,beta_policy_uri,beta_policy_digest,
+		execution_image_digest,verification_image_digest,created_at
 		FROM runtime_run_bindings WHERE run_id=$1`, binding.RunID).Scan(
 		&existing.RunID, &existing.Intake.URI, &existing.Intake.Digest,
-		&existing.BaseCommit, &repositoryURI, &repositoryDigest, &existing.CreatedAt)
+		&existing.BaseCommit, &repositoryURI, &repositoryDigest, &policyURI, &policyDigest,
+		&existing.ExecutionImageDigest, &existing.VerificationImageDigest, &existing.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -83,8 +95,12 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 		return err
 	}
 	existing.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
+	existing.Policy = optionalRef(policyURI, policyDigest)
 	if existing.Intake != binding.Intake || existing.BaseCommit != binding.BaseCommit ||
 		existing.RepositoryMap == nil || *existing.RepositoryMap != *binding.RepositoryMap ||
+		existing.Policy == nil || *existing.Policy != *binding.Policy ||
+		existing.ExecutionImageDigest != binding.ExecutionImageDigest ||
+		existing.VerificationImageDigest != binding.VerificationImageDigest ||
 		!existing.CreatedAt.Equal(binding.CreatedAt.UTC()) {
 		return ErrConflict
 	}
@@ -93,15 +109,19 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 
 func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBinding, error) {
 	var result RunBinding
-	var repositoryURI, repositoryDigest, specificationURI, specificationDigest *string
+	var repositoryURI, repositoryDigest, policyURI, policyDigest *string
+	var specificationURI, specificationDigest *string
 	var graphURI, graphDigest, approvalURI, approvalDigest *string
 	err := r.pool.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
-		repository_map_uri,repository_map_digest,approved_specification_uri,
+		repository_map_uri,repository_map_digest,beta_policy_uri,beta_policy_digest,
+		execution_image_digest,verification_image_digest,approved_specification_uri,
 		approved_specification_digest,approved_task_graph_uri,approved_task_graph_digest,
 		composite_approval_uri,composite_approval_digest,created_at
 		FROM runtime_run_bindings WHERE run_id=$1`, runID).Scan(
 		&result.RunID, &result.Intake.URI, &result.Intake.Digest, &result.BaseCommit,
-		&repositoryURI, &repositoryDigest, &specificationURI, &specificationDigest,
+		&repositoryURI, &repositoryDigest, &policyURI, &policyDigest,
+		&result.ExecutionImageDigest, &result.VerificationImageDigest,
+		&specificationURI, &specificationDigest,
 		&graphURI, &graphDigest, &approvalURI, &approvalDigest, &result.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RunBinding{}, ErrNotFound
@@ -110,6 +130,7 @@ func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBindin
 		return RunBinding{}, err
 	}
 	result.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
+	result.Policy = optionalRef(policyURI, policyDigest)
 	result.ApprovedSpecification = optionalRef(specificationURI, specificationDigest)
 	result.ApprovedTaskGraph = optionalRef(graphURI, graphDigest)
 	result.CompositeApproval = optionalRef(approvalURI, approvalDigest)
@@ -257,4 +278,16 @@ func optionalRef(uri, digest *string) *workflow.ArtifactRef {
 		return nil
 	}
 	return &workflow.ArtifactRef{URI: *uri, Digest: *digest}
+}
+
+func validImageDigest(value string) bool {
+	if len(value) != 71 || value[:7] != "sha256:" {
+		return false
+	}
+	for _, item := range value[7:] {
+		if !((item >= '0' && item <= '9') || (item >= 'a' && item <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

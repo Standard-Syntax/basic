@@ -9,22 +9,30 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
 )
 
 func validTestConfig() config {
+	executionImage := "sha256:" + strings.Repeat("a", 64)
+	verificationImage := "sha256:" + strings.Repeat("b", 64)
 	return config{
 		DatabaseURL:  "postgres://unused.invalid/test",
 		ArtifactRoot: "/tmp/basic-artifacts", OwnerID: "owner",
 		RepositoryRoot: "/tmp/basic-repository", WorktreeRoot: "/tmp/basic-worktrees",
 		VerificationWorkspaceRoot: "/tmp/basic-verification",
-		ExecutionWorkerImage:      "execution", VerificationWorkerImage: "verification",
+		ExecutionWorkerImage:      executionImage, VerificationWorkerImage: verificationImage,
 		WorkerUID: 1, WorkerGID: 1, ServiceActorID: "service",
 		ReasoningActorID: "reasoning", ExecutionActorID: "execution",
 		VerificationActorID: "verification", ReviewActorID: "review",
 		ImplementationManifestPath: "/tmp/implementation.json",
 		ImplementationPromptPath:   "/tmp/implementation.md",
 		ReviewManifestPath:         "/tmp/review.json", ReviewPromptPath: "/tmp/review.md",
+		Policy: beta.Policy{Version: beta.PolicyVersion,
+			Repository:    beta.Repository{Owner: "owner", Name: "repository", Root: "/tmp/basic-repository", Remote: "origin", RemoteURL: "https://example.invalid/owner/repository.git", BaseBranch: "main", BaseCommit: strings.Repeat("c", 40)},
+			Paths:         beta.Paths{Readable: []string{"docs"}, Writable: []string{"docs"}, Prohibited: []string{"secrets"}},
+			TrustedChecks: []string{"make-check-v1"}, Limits: beta.Limits{MaximumTasks: 1, MaximumChangedFiles: 4, MaximumFileBytes: 1024, MaximumTotalBytes: 4096, ExecutionConcurrency: 1, VerificationConcurrency: 1},
+			Images: beta.Images{Execution: executionImage, Verification: verificationImage}},
 	}
 }
 

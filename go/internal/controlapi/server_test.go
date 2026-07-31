@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -168,6 +169,7 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		}},
 		MaxBodyBytes:  512,
 		TrustedChecks: []string{"make-check-v1"},
+		Policy:        testPolicy("/tmp/repository", strings.Repeat("a", 40), "https://example.invalid/repository.git"),
 	}, workflowStore, runtimeLedger, &fakeRunIntake{
 		workflow: workflowStore, runtime: runtimeLedger,
 	}, fakeArtifacts{}, &fakeBindings{},
@@ -176,6 +178,14 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		t.Fatal(err)
 	}
 	return server, workflowStore, runtimeLedger, token
+}
+
+func testPolicy(root, commit, remoteURL string) beta.Policy {
+	return beta.Policy{Version: beta.PolicyVersion,
+		Repository:    beta.Repository{Owner: "owner", Name: "repository", Root: root, Remote: "origin", RemoteURL: remoteURL, BaseBranch: "main", BaseCommit: commit},
+		Paths:         beta.Paths{Readable: []string{"docs"}, Writable: []string{"docs"}, Prohibited: []string{"secrets"}},
+		TrustedChecks: []string{"make-check-v1"}, Limits: beta.Limits{MaximumTasks: 1, MaximumChangedFiles: 4, MaximumFileBytes: 1024, MaximumTotalBytes: 4096, ExecutionConcurrency: 1, VerificationConcurrency: 1},
+		Images: beta.Images{Execution: "sha256:" + strings.Repeat("a", 64), Verification: "sha256:" + strings.Repeat("b", 64)}}
 }
 
 func TestHealthAndAuthentication(t *testing.T) {

@@ -96,6 +96,8 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 	}
 	git("add", "README.md")
 	git("commit", "-qm", "fixture")
+	git("branch", "-M", "main")
+	git("remote", "add", "origin", repository)
 	baseCommit := git("rev-parse", "HEAD")[:40]
 	artifactStore, err := artifact.NewStore(filepath.Join(t.TempDir(), "artifacts"), 1<<20)
 	if err != nil {
@@ -104,7 +106,8 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 	t.Cleanup(func() { _ = artifactStore.Close() })
 	artifacts := &countingArtifacts{store: artifactStore}
 	workflowStore := workflow.NewStore(pool)
-	coordinator, err := NewRunIntakeCoordinator(pool, workflowStore, artifacts, repository)
+	policy := testPolicy(repository, baseCommit, repository)
+	coordinator, err := NewRunIntakeCoordinator(pool, workflowStore, artifacts, repository, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +135,7 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 func TestAtomicRunIntakeRollsBackEveryPrecommitFailure(t *testing.T) {
 	points := []IntakeFaultPoint{
 		FaultAfterReservation, FaultAfterIntakeCAS, FaultAfterRepositoryCAS,
+		FaultAfterPolicyCAS,
 		FaultAfterWorkflow, FaultAfterBinding, FaultAfterResponse, FaultIntakeBeforeCommit,
 	}
 	for _, point := range points {
@@ -237,6 +241,7 @@ func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {
 			ID: principal, TokenSHA256: hex.EncodeToString(tokenDigest[:]),
 			Roles: []Role{RoleOperator},
 		}},
+		TrustedChecks: []string{"make-check-v1"}, Policy: fixture.coordinator.policy,
 	}, workflowStore, runtime.NewLedger(fixture.pool), fixture.coordinator,
 		fixture.artifacts, runtime.NewBindingRepository(fixture.pool), fakeApproval{}, nil, nil)
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
@@ -31,6 +32,11 @@ func TestStartRejectsIncompleteOrInvalidIntakeRepositoryMap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	policy := stagePolicy(base)
+	policyBody, _, err := policy.Canonical()
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		binding runtime.RunBinding
@@ -40,6 +46,11 @@ func TestStartRejectsIncompleteOrInvalidIntakeRepositoryMap(t *testing.T) {
 		{name: "malformed", binding: boundRepositoryMap(base, []byte(`{"unknown":true}`)), body: []byte(`{"unknown":true}`)},
 		{name: "base mismatch", binding: boundRepositoryMap(strings.Repeat("f", 40), valid), body: valid},
 		{name: "digest mismatch", binding: boundRepositoryMap(base, valid), body: append(valid, ' ')},
+		{name: "changed image", binding: func() runtime.RunBinding {
+			value := boundRepositoryMap(base, valid)
+			value.ExecutionImageDigest = "sha256:" + strings.Repeat("f", 64)
+			return value
+		}(), body: valid},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -48,7 +59,10 @@ func TestStartRejectsIncompleteOrInvalidIntakeRepositoryMap(t *testing.T) {
 			if test.binding.RepositoryMap != nil {
 				artifacts.values[test.binding.RepositoryMap.Digest] = test.body
 			}
-			handlers := &Handlers{runtime: runtimeStore, artifacts: artifacts}
+			if test.binding.Policy != nil {
+				artifacts.values[test.binding.Policy.Digest] = policyBody
+			}
+			handlers := &Handlers{runtime: runtimeStore, artifacts: artifacts, config: Config{Policy: policy}}
 			taskID := uuid.NewString()
 			result, err := handlers.start(t.Context(), runtime.Job{
 				RunID: uuid.NewString(), TaskID: &taskID, Attempt: 1,
@@ -63,7 +77,20 @@ func TestStartRejectsIncompleteOrInvalidIntakeRepositoryMap(t *testing.T) {
 func boundRepositoryMap(base string, body []byte) runtime.RunBinding {
 	digest := runtime.Digest(body)
 	ref := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
-	return runtime.RunBinding{BaseCommit: base, RepositoryMap: &ref}
+	policy := stagePolicy(base)
+	policyBody, _, _ := policy.Canonical()
+	policyDigest := runtime.Digest(policyBody)
+	policyRef := workflow.ArtifactRef{URI: "artifact://sha256/" + policyDigest, Digest: policyDigest}
+	return runtime.RunBinding{BaseCommit: base, RepositoryMap: &ref, Policy: &policyRef,
+		ExecutionImageDigest: policy.Images.Execution, VerificationImageDigest: policy.Images.Verification}
+}
+
+func stagePolicy(base string) beta.Policy {
+	return beta.Policy{Version: beta.PolicyVersion,
+		Repository: beta.Repository{Owner: "owner", Name: "repo", Root: "/tmp/repo", Remote: "origin", RemoteURL: "https://example.invalid/repo.git", BaseBranch: "main", BaseCommit: base},
+		Paths:      beta.Paths{Readable: []string{"docs"}, Writable: []string{"docs"}, Prohibited: []string{"secrets"}}, TrustedChecks: []string{"check"},
+		Limits: beta.Limits{MaximumTasks: 1, MaximumChangedFiles: 1, MaximumFileBytes: 1, MaximumTotalBytes: 1, ExecutionConcurrency: 1, VerificationConcurrency: 1},
+		Images: beta.Images{Execution: "sha256:" + strings.Repeat("a", 64), Verification: "sha256:" + strings.Repeat("b", 64)}}
 }
 
 func TestExecutionExpectedRevisionSurvivesPartialExecution(t *testing.T) {

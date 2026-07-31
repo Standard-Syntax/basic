@@ -5,15 +5,110 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
+
+type Source struct {
+	Files     fs.FS
+	Directory string
+}
+
+type Expected struct {
+	Version      int64
+	Name, Digest string
+}
+
+func Describe(sources ...Source) ([]Expected, error) {
+	var result []Expected
+	seen := map[int64]bool{}
+	for _, source := range sources {
+		items, err := readAll(source.Files, source.Directory)
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range items {
+			if seen[value.version] {
+				return nil, fmt.Errorf("duplicate migration version %d", value.version)
+			}
+			seen[value.version] = true
+			result = append(result, Expected{Version: value.version, Name: value.name, Digest: value.digest})
+		}
+	}
+	slices.SortFunc(result, func(a, b Expected) int { return int(a.Version - b.Version) })
+	return result, nil
+}
+
+// Verify checks the existing ledger without applying migrations or creating schema objects.
+func Verify(ctx context.Context, connectionString string, sources ...Source) ([]Expected, error) {
+	expected, err := Describe(sources...)
+	if err != nil {
+		return nil, err
+	}
+	config, err := pgx.ParseConfig(connectionString)
+	if err != nil {
+		return nil, fmt.Errorf("parse migration connection: %w", err)
+	}
+	if config.RuntimeParams == nil {
+		config.RuntimeParams = map[string]string{}
+	}
+	config.RuntimeParams["default_transaction_read_only"] = "on"
+	connection, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("connect for migration verification: %w", err)
+	}
+	defer func() { _ = connection.Close(ctx) }()
+	var ledger *string
+	if err := connection.QueryRow(ctx, `SELECT to_regclass('schema_migrations')::text`).Scan(&ledger); err != nil || ledger == nil {
+		return nil, errors.New("migration ledger missing")
+	}
+	rows, err := connection.Query(ctx, `SELECT version,name,digest FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return nil, fmt.Errorf("read migration ledger: %w", err)
+	}
+	defer rows.Close()
+	actual := map[int64]Expected{}
+	for rows.Next() {
+		var item Expected
+		if err := rows.Scan(&item.Version, &item.Name, &item.Digest); err != nil {
+			return nil, err
+		}
+		actual[item.Version] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, item := range expected {
+		stored, ok := actual[item.Version]
+		if !ok {
+			return nil, fmt.Errorf("migration %d pending", item.Version)
+		}
+		if stored.Name != item.Name {
+			return nil, fmt.Errorf("migration %d name changed", item.Version)
+		}
+		if stored.Digest != item.Digest {
+			return nil, fmt.Errorf("migration %d digest changed", item.Version)
+		}
+	}
+	expectedVersions := make(map[int64]bool, len(expected))
+	for _, item := range expected {
+		expectedVersions[item.Version] = true
+	}
+	for version := range actual {
+		if !expectedVersions[version] {
+			return nil, fmt.Errorf("unexpected migration %d", version)
+		}
+	}
+	return expected, nil
+}
 
 const advisoryLock int64 = 719043625421948938
 
