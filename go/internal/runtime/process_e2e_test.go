@@ -23,7 +23,9 @@ import (
 	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
+	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
+	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -34,42 +36,93 @@ import (
 )
 
 func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
+	if os.Getenv("BETA_CANARY") == "1" {
+		t.Skip("real canary mode uses the dedicated test entrypoint")
+	}
+	runBetaProcesses(t)
+}
+
+func TestBetaCanaryProcessesPublishRealDraft(t *testing.T) {
+	if os.Getenv("BETA_CANARY") != "1" {
+		t.Skip("BETA_CANARY=1 is required")
+	}
+	runBetaProcesses(t)
+}
+
+func runBetaProcesses(t *testing.T) {
 	apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
 	if apiKey == "" {
 		t.Fatal("ANTHROPIC_API_KEY is required for the beta live E2E")
 	}
 	apiBinary := requireEnvironment(t, "RUNTIME_API_BINARY")
 	workflowBinary := requireEnvironment(t, "RUNTIME_WORKFLOW_BINARY")
-	databaseURL := requireEnvironment(t, "TEST_DATABASE_URL")
-	root := t.TempDir()
-	repository, remote, baseCommit := fixtureRepository(t, root)
-	executionImage := dockerImageID(t, "basic-execution-worker:runtime")
-	verificationImage := dockerImageID(t, "basic-verification-worker:runtime")
-	policy := map[string]any{
-		"version": "1.0",
-		"repository": map[string]any{"owner": "local", "name": "fixture", "root": repository,
-			"remote": remote, "remote_url": filepath.Join(root, "remote.git"), "base_branch": "main", "base_commit": baseCommit},
-		"paths":          map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}},
-		"trusted_checks": []string{"make-check-v1"},
-		"limits":         map[string]any{"maximum_tasks": 1, "maximum_changed_files": 4, "maximum_file_bytes": 1 << 20, "maximum_total_bytes": 4 << 20, "execution_concurrency": 1, "verification_concurrency": 1},
-		"images":         map[string]any{"execution": executionImage, "verification": verificationImage},
-	}
-	artifactRoot := filepath.Join(root, "artifacts")
-	worktrees := filepath.Join(root, "worktrees")
-	verificationRoot := filepath.Join(root, "verification")
-	for _, path := range []string{artifactRoot, worktrees, verificationRoot} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
+	canaryMode := os.Getenv("BETA_CANARY") == "1"
+	var canaryConfig beta.Config
+	var databaseURL string
+	if canaryMode {
+		var err error
+		canaryConfig, err = beta.LoadConfig(requireEnvironment(t, "BETA_CONFIG"))
+		if err != nil {
 			t.Fatal(err)
+		}
+		if err := canaryConfig.ValidateCanary(); err != nil {
+			t.Fatal(err)
+		}
+		databaseURL = canaryConfig.DatabaseURL
+	} else {
+		databaseURL = requireEnvironment(t, "TEST_DATABASE_URL")
+	}
+	root := t.TempDir()
+	repository, remote, baseCommit := "", "", ""
+	repositoryOwner, repositoryName, branchPrefix := "local", "fixture", "harness/"
+	tokenFile, pushCredential, apiEndpoint := "", "", ""
+	artifactRoot, worktrees, verificationRoot := "", "", ""
+	executionImage, verificationImage := "", ""
+	var policy any
+	if canaryMode {
+		repository, remote = canaryConfig.Policy.Repository.Root, canaryConfig.Policy.Repository.Remote
+		baseCommit = canaryConfig.Policy.Repository.BaseCommit
+		repositoryOwner, repositoryName, branchPrefix = beta.CanaryOwner, beta.CanaryRepository, "harness/canary/"
+		tokenFile, pushCredential = canaryConfig.PublicationCredentialFile, canaryConfig.GitPushCredentialFile
+		apiEndpoint = "https://api.github.com"
+		artifactRoot, worktrees = canaryConfig.ArtifactRoot, canaryConfig.WorktreeRoot
+		verificationRoot = canaryConfig.VerificationWorkspaceRoot
+		executionImage, verificationImage = canaryConfig.Policy.Images.Execution, canaryConfig.Policy.Images.Verification
+		policy = canaryConfig.Policy
+	} else {
+		repository, remote, baseCommit = fixtureRepository(t, root)
+		executionImage = dockerImageID(t, "basic-execution-worker:runtime")
+		verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
+		policy = map[string]any{
+			"version": "1.0",
+			"repository": map[string]any{"owner": "local", "name": "fixture", "root": repository,
+				"remote": remote, "remote_url": filepath.Join(root, "remote.git"), "base_branch": "main", "base_commit": baseCommit},
+			"paths":          map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}},
+			"trusted_checks": []string{"make-check-v1"},
+			"limits":         map[string]any{"maximum_tasks": 1, "maximum_changed_files": 4, "maximum_file_bytes": 1 << 20, "maximum_total_bytes": 4 << 20, "execution_concurrency": 1, "verification_concurrency": 1},
+			"images":         map[string]any{"execution": executionImage, "verification": verificationImage},
+		}
+		artifactRoot, worktrees = filepath.Join(root, "artifacts"), filepath.Join(root, "worktrees")
+		verificationRoot = filepath.Join(root, "verification")
+		for _, path := range []string{artifactRoot, worktrees, verificationRoot} {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	promptPaths, manifestPaths := runtimeManifests(t, root)
 	token := "runtime-operator-token"
 	tokenDigest := sha256.Sum256([]byte(token))
-	prServer, prState := loopbackPullRequests(t)
-	defer prServer.Close()
-	tokenFile := filepath.Join(root, "github-token")
-	if err := os.WriteFile(tokenFile, []byte("loopback-token"), 0o600); err != nil {
-		t.Fatal(err)
+	var prServer *httptest.Server
+	var prState *pullRequestState
+	if !canaryMode {
+		prServer, prState = loopbackPullRequests(t)
+		defer prServer.Close()
+		tokenFile = filepath.Join(root, "github-token")
+		if err := os.WriteFile(tokenFile, []byte("loopback-token"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		apiEndpoint = prServer.URL
 	}
 	apiAddress := freeAddress(t)
 	actorIDs := make([]string, 7)
@@ -88,11 +141,11 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 			"roles": []string{"operator", "approver", "elevated_approver"},
 		}},
 		"publication": map[string]any{
-			"repository_root": repository, "repository_owner": "local",
-			"repository_name": "fixture", "remote": remote, "base_branch": "main",
-			"branch_prefix": "harness/", "actor_id": actorIDs[6],
-			"api_endpoint": prServer.URL, "api_version": "2022-11-28",
-			"token_file": tokenFile,
+			"repository_root": repository, "repository_owner": repositoryOwner,
+			"repository_name": repositoryName, "remote": remote, "base_branch": "main",
+			"branch_prefix": branchPrefix, "actor_id": actorIDs[6],
+			"api_endpoint": apiEndpoint, "api_version": "2022-11-28",
+			"token_file": tokenFile, "git_push_credential_file": pushCredential,
 		},
 	})
 	workflowConfig := filepath.Join(root, "workflow.json")
@@ -260,7 +313,7 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	)
 	publicationValue, ok := approvalResponse["publication"].(map[string]any)
 	if !ok || publicationValue["candidate_commit"] == "" ||
-		publicationValue["pull_request_number"] != float64(1) {
+		publicationValue["pull_request_number"].(float64) <= 0 {
 		t.Fatalf("publication = %#v", publicationValue)
 	}
 	candidate := publicationValue["candidate_commit"].(string)
@@ -268,20 +321,27 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 		t.Fatal("candidate equals base")
 	}
 	branch, ok := publicationValue["branch"].(string)
-	if !ok || branch != "harness/"+runID {
+	if !ok || branch != branchPrefix+runID {
 		t.Fatalf("publication branch = %#v", publicationValue["branch"])
 	}
 	changed := strings.Fields(runGitOutput(t, repository, "diff", "--name-only", baseCommit, candidate))
 	if len(changed) != 1 || changed[0] != "add.go" {
 		t.Fatalf("changed paths = %v", changed)
 	}
-	runGitE2E(t, repository, "worktree", "add", "--detach", filepath.Join(root, "candidate"), candidate)
+	candidatePath := filepath.Join(root, "candidate")
+	runGitE2E(t, repository, "worktree", "add", "--detach", candidatePath, candidate)
 	command := exec.Command("make", "check")
-	command.Dir = filepath.Join(root, "candidate")
+	command.Dir = candidatePath
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("candidate verification: %v: %s", err, output)
 	}
-	assertPublishedFixture(t, repository, remote, baseCommit, candidate, branch, prState)
+	runGitE2E(t, repository, "worktree", "remove", candidatePath)
+	if canaryMode {
+		assertPublishedCanary(t, tokenFile, artifactRoot, repository, remote, baseCommit,
+			candidate, branch, publicationValue)
+	} else {
+		assertPublishedFixture(t, repository, remote, baseCommit, candidate, branch, prState)
+	}
 	assertReasoningEvidence(t, pool, artifactRoot, runID)
 	assertDurableOutcome(t, pool, runID, taskID, actorIDs[1], candidate)
 	beforeReplay := snapshotSideEffects(
@@ -306,6 +366,10 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 		t.Fatalf("approval replay repeated a side effect: before=%#v after=%#v",
 			beforeReplay, afterReplay)
 	}
+	if canaryMode {
+		assertPublishedCanary(t, tokenFile, artifactRoot, repository, remote, baseCommit,
+			candidate, branch, publicationValue)
+	}
 	var events int
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM workflow_events
 		WHERE aggregate_id IN ($1,$2)`, runID, taskID).Scan(&events); err != nil || events < 10 {
@@ -316,6 +380,34 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 			apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
 			manifestPaths[0], manifestPaths[1],
 		}, processes)
+	if canaryMode {
+		for _, secretFile := range []string{tokenFile, pushCredential} {
+			secret, err := os.ReadFile(secretFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSecretAbsent(t, strings.TrimSpace(string(secret)), pool, artifactRoot,
+				repository, []string{apiConfig, workflowConfig}, processes)
+		}
+		artifactValue := publicationValue["publication_artifact"].(map[string]any)
+		report := map[string]any{
+			"run_id": runID, "publication_id": publicationValue["publication_id"],
+			"candidate_commit": candidate, "artifact_reference": artifactValue,
+			"pull_request_url": publicationValue["pull_request_url"],
+			"cleanup_command": "make beta-canary-cleanup BETA_CONFIG=" +
+				shellQuote(requireEnvironment(t, "BETA_CONFIG")) + " CANARY_PUBLICATION_ID=" +
+				shellQuote(publicationValue["publication_id"].(string)),
+		}
+		encoded, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println(string(encoded))
+	}
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 type process struct {
@@ -879,6 +971,71 @@ func assertPublishedFixture(
 	}
 }
 
+func assertPublishedCanary(
+	t *testing.T, tokenFile, artifactRoot, repository, remote, base, candidate, branch string,
+	value map[string]any,
+) {
+	t.Helper()
+	remoteHead := strings.Fields(runGitOutput(
+		t, repository, "ls-remote", "--heads", remote, "refs/heads/"+branch,
+	))
+	if len(remoteHead) != 2 || remoteHead[0] != candidate ||
+		remoteHead[1] != "refs/heads/"+branch {
+		t.Fatalf("exact canary branch = %v", remoteHead)
+	}
+	credential, err := publication.NewFileCredential(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := publication.NewGitHubRESTClient(
+		"https://api.github.com", "2022-11-28", publication.DefaultMaxBodyBytes,
+		publication.DefaultTimeout, credential,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	number := int64(value["pull_request_number"].(float64))
+	pull, err := client.InspectPullRequest(
+		t.Context(), beta.CanaryOwner, beta.CanaryRepository, number,
+	)
+	if err != nil || pull.State != "open" || !pull.Draft || pull.Base != "main" ||
+		pull.Head != branch || pull.BaseCommit != base || pull.HeadCommit != candidate ||
+		pull.URL != value["pull_request_url"] ||
+		!strings.Contains(pull.Body, "<!-- harness-publication-id:"+value["publication_id"].(string)+" -->") {
+		t.Fatalf("real canary pull request = %#v error=%v", pull, err)
+	}
+	marker := "<!-- harness-publication-id:" + value["publication_id"].(string) + " -->"
+	_, found, err := client.FindDraft(t.Context(), publication.DraftPullRequestInput{
+		Owner: beta.CanaryOwner, Repo: beta.CanaryRepository, Head: branch,
+		Base: "main", Marker: marker,
+	})
+	if err != nil || !found {
+		t.Fatalf("unique canary draft lookup found=%v err=%v", found, err)
+	}
+	artifactValue, ok := value["publication_artifact"].(map[string]any)
+	if !ok {
+		t.Fatalf("publication artifact = %#v", value["publication_artifact"])
+	}
+	uri, uriOK := artifactValue["uri"].(string)
+	digest, digestOK := artifactValue["digest"].(string)
+	if !uriOK || !digestOK || uri != "artifact://sha256/"+digest {
+		t.Fatalf("publication artifact reference = %#v", artifactValue)
+	}
+	assertArtifactIntegrity(t, artifactRoot, uri)
+	encoded, err := os.ReadFile(filepath.Join(artifactRoot, digest[:2], digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifactValueDecoded publication.DraftPullRequestArtifact
+	if err := json.Unmarshal(encoded, &artifactValueDecoded); err != nil ||
+		artifactValueDecoded.PublicationID != value["publication_id"] ||
+		artifactValueDecoded.HeadBranch != branch || artifactValueDecoded.BaseCommit != base ||
+		artifactValueDecoded.CandidateCommit != candidate ||
+		artifactValueDecoded.PullRequestNumber != number || artifactValueDecoded.PullRequestURL != pull.URL {
+		t.Fatalf("publication artifact = %#v error=%v", artifactValueDecoded, err)
+	}
+}
+
 type sideEffects struct {
 	reasoning, approvals, publications, pullRequests int
 	remoteRefs                                       string
@@ -951,9 +1108,11 @@ func snapshotSideEffects(
 			t.Fatal(err)
 		}
 	}
-	state.mu.Lock()
-	value.pullRequests = state.creates
-	state.mu.Unlock()
+	if state != nil {
+		state.mu.Lock()
+		value.pullRequests = state.creates
+		state.mu.Unlock()
+	}
 	value.remoteRefs = runGitOutput(t, repository, "ls-remote", "--heads", remote)
 	return value
 }
