@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check format-check lint type-check test check integration-test runtime-e2e minimax-live-e2e provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e minimax-live-e2e provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -26,6 +26,9 @@ generate: tools
 generate-check:
 	./scripts/generate-check.sh
 
+no-fake-provider-adapters:
+	./scripts/no-fake-provider-adapters.sh
+
 format-check:
 	test -z "$$(gofmt -l go)"
 	uv run --frozen ruff format --check python scripts
@@ -42,7 +45,7 @@ test:
 	cd go && go test $(GO_PACKAGES)
 	uv run --frozen pytest
 
-check: generate-check lint type-check test build
+check: generate-check no-fake-provider-adapters lint type-check test build
 
 integration-test:
 	docker build -f Dockerfile.execution-worker -t basic-execution-worker:integration .

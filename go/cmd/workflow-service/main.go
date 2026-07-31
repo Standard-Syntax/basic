@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
@@ -30,8 +29,6 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 type config struct {
@@ -55,8 +52,6 @@ type config struct {
 	ImplementationPromptPath   string                 `json:"implementation_prompt_path"`
 	ReviewManifestPath         string                 `json:"review_manifest_path"`
 	ReviewPromptPath           string                 `json:"review_prompt_path"`
-	FakeImplementationProposal string                 `json:"fake_implementation_proposal_path"`
-	FakeReviewProposal         string                 `json:"fake_review_proposal_path"`
 	ContextMaxFiles            int                    `json:"context_max_files"`
 	ContextMaxBytes            int64                  `json:"context_max_bytes"`
 	TaskLeaseDuration          time.Duration          `json:"task_lease_duration_nanoseconds"`
@@ -133,13 +128,6 @@ func normalizeConfig(value config) (config, error) {
 	}); err != nil {
 		return config{}, err
 	}
-	if value.Provider.Mode == gateway.FakeProviderMode {
-		if err := validateCleanAbsolutePaths("fake proposal", []string{
-			value.FakeImplementationProposal, value.FakeReviewProposal,
-		}); err != nil {
-			return config{}, err
-		}
-	}
 	if !completeConfig(value) {
 		return config{}, errors.New("incomplete configuration")
 	}
@@ -192,6 +180,10 @@ func applyConfigDefaults(value *config) {
 func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	ctx context.Context, value config,
 ) error {
+	credentials := gateway.EnvironmentCredentialSource{Name: value.Provider.APIKeyEnv}
+	if _, err := credentials.Credential(ctx); err != nil {
+		return fmt.Errorf("provider credential unavailable: %w", err)
+	}
 	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
 	err := migrateAll(migrateCtx, value.DatabaseURL)
 	cancelMigrate()
@@ -240,7 +232,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	}
 	gatewayArtifacts := artifact.Gateway{Store: artifacts}
 	implementationAdapter, reviewAdapter, err := providerAdapters(
-		ctx, value, gatewayArtifacts,
+		value, credentials, gatewayArtifacts,
 	)
 	if err != nil {
 		return err
@@ -367,34 +359,8 @@ func bootstrapManifest(
 }
 
 func providerAdapters(
-	ctx context.Context, value config, artifacts gateway.ArtifactStore,
+	value config, credentials gateway.CredentialSource, artifacts gateway.ArtifactStore,
 ) (gateway.ImplementationAdapter, gateway.ReviewAdapter, error) {
-	if value.Provider.Mode == gateway.FakeProviderMode {
-		var implementation reasoningv1.ImplementationProposal
-		if err := readProtoJSON(value.FakeImplementationProposal, &implementation); err != nil {
-			return nil, nil, err
-		}
-		var review reasoningv1.ReviewProposal
-		if err := readProtoJSON(value.FakeReviewProposal, &review); err != nil {
-			return nil, nil, err
-		}
-		implementationAdapter, err := gateway.NewFakeImplementationAdapter(
-			&implementation, "fake-implementation",
-			gateway.Usage{InputTokens: 1, OutputTokens: 1, ProviderRequests: 1},
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		reviewAdapter, err := gateway.NewFakeReviewAdapter(
-			&review, "fake-review",
-			gateway.Usage{InputTokens: 1, OutputTokens: 1, ProviderRequests: 1},
-		)
-		return implementationAdapter, reviewAdapter, err
-	}
-	credentials := gateway.EnvironmentCredentialSource{Name: value.Provider.APIKeyEnv}
-	if _, err := credentials.Credential(ctx); err != nil {
-		return nil, nil, err
-	}
 	models := gateway.MiniMaxModels()
 	options := []gateway.AnthropicOption{
 		gateway.WithAnthropicBaseURL(value.Provider.BaseURL),
@@ -410,12 +376,4 @@ func providerAdapters(
 		credentials, models, artifacts, options...,
 	)
 	return implementationAdapter, reviewAdapter, err
-}
-
-func readProtoJSON(path string, destination proto.Message) error {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return protojson.UnmarshalOptions{DiscardUnknown: false}.Unmarshal(body, destination)
 }

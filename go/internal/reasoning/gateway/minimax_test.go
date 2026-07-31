@@ -7,8 +7,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestMiniMaxProviderConfigurationIsClosed(t *testing.T) {
@@ -26,7 +28,7 @@ func TestMiniMaxProviderConfigurationIsClosed(t *testing.T) {
 		{Mode: MiniMaxMode, BaseURL: "https://example.invalid"},
 		{Mode: MiniMaxMode, Model: "other"},
 		{Mode: MiniMaxMode, APIKeyEnv: "OTHER_KEY"},
-		{Mode: FakeProviderMode, Model: MiniMaxModel},
+		{Mode: "fake"},
 	} {
 		if _, err := value.Normalize(); err == nil {
 			t.Fatalf("accepted provider config %#v", value)
@@ -80,5 +82,56 @@ func TestMiniMaxImplementationOmitsUnsupportedOutputConfig(t *testing.T) {
 	}
 	if result.Provider != MiniMaxAnthropicProvider || result.Model != MiniMaxModel {
 		t.Fatalf("metadata = provider %q model %q", result.Provider, result.Model)
+	}
+}
+
+func TestMiniMaxAdapterReadsChangedEnvironmentCredentialPerInvocation(t *testing.T) {
+	store := newMemoryArtifactStore()
+	request := gatewayRequest(t)
+	request.Envelope.ExpiresAt = timestamppb.New(time.Now().Add(time.Hour))
+	seedImplementationAdapterArtifacts(t, store, request)
+	agentManifest := implementationManifest(t)
+	prompt, err := store.Put(t.Context(), []byte(testPromptBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentManifest.Prompt.ArtifactURI = prompt.URI
+	agentManifest.Prompt.SHA256 = prompt.SHA256
+	provider := newLoopbackProvider(t, implementationProjectionJSON(t, gatewayProposal(t)))
+	adapter, err := NewAnthropicImplementationAdapter(
+		EnvironmentCredentialSource{Name: MiniMaxAPIKeyEnv},
+		MiniMaxModels(), store,
+		WithAnthropicHTTPClient(provider.server.Client()),
+		WithAnthropicBaseURL(provider.server.URL),
+		WithAnthropicTimeout(2*time.Second),
+		WithMiniMaxCompatibility(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MiniMaxAPIKeyEnv, "first-invocation-key")
+	if _, err := adapter.ProposeImplementation(t.Context(), agentManifest, request); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MiniMaxAPIKeyEnv, "second-invocation-key")
+	if _, err := adapter.ProposeImplementation(t.Context(), agentManifest, request); err != nil {
+		t.Fatal(err)
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if len(provider.apiKeys) != 2 ||
+		provider.apiKeys[0] != "first-invocation-key" ||
+		provider.apiKeys[1] != "second-invocation-key" {
+		t.Fatalf("per-invocation credential headers = %#v", provider.apiKeys)
+	}
+	for _, body := range provider.requestBodies {
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["model"] != MiniMaxModel || payload["tools"] != nil ||
+			payload["thinking"] != nil || payload["output_config"] != nil {
+			t.Fatalf("MiniMax loopback request = %s", body)
+		}
 	}
 }

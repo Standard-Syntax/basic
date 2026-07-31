@@ -18,6 +18,7 @@ func reviewRequestFixture(t *testing.T) *reasoningv1.ReviewRequest {
 	if err := proto.Unmarshal(gatewayFixture(t, "review", "request.bin"), &request); err != nil {
 		t.Fatal(err)
 	}
+	configureTestRequestArtifacts(t, request.GetEnvelope().GetInputArtifacts())
 	return &request
 }
 
@@ -40,8 +41,9 @@ func reviewManifest(t *testing.T) manifest.Manifest {
 }
 
 type countingReviewAdapter struct {
-	inner ReviewAdapter
-	calls atomic.Int32
+	inner    ReviewAdapter
+	provider *loopbackProvider
+	calls    atomic.Int32
 }
 
 func (a *countingReviewAdapter) ProposeReview(
@@ -57,18 +59,22 @@ func reviewGatewayService(
 	t.Helper()
 	request := reviewRequestFixture(t)
 	resolver := &fakeResolver{resolved: ResolvedManifest{
-		Digest: request.GetEnvelope().GetAgentManifestDigest(), Manifest: reviewManifest(t),
+		Digest: request.GetEnvelope().GetAgentManifestDigest(),
 	}}
-	fake, err := NewFakeReviewAdapter(
-		proposal, "fake-review-v1",
-		Usage{InputTokens: 13, OutputTokens: 5, ProviderRequests: 1},
-	)
+	store := newMemoryArtifactStore()
+	seedTestAdapterArtifacts(t, store, request.GetEnvelope().GetInputArtifacts())
+	agentManifest := reviewManifest(t)
+	prompt, err := store.Put(t.Context(), []byte(testPromptBody))
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := &countingReviewAdapter{inner: fake}
+	agentManifest.Prompt.ArtifactURI = prompt.URI
+	agentManifest.Prompt.SHA256 = prompt.SHA256
+	resolver.resolved.Manifest = agentManifest
+	production, provider := newLoopbackReviewAdapter(t, store, proposal)
+	adapter := &countingReviewAdapter{inner: production, provider: provider}
 	service, err := NewReviewService(
-		resolver, adapter, newMemoryArtifactStore(), newMemoryInvocationRepository(),
+		resolver, adapter, store, newMemoryInvocationRepository(),
 		fixedClock{now: request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)},
 	)
 	if err != nil {
@@ -77,7 +83,7 @@ func reviewGatewayService(
 	return service, adapter
 }
 
-func TestFakeReviewReturnsDeterministicAdvisoryAndExactReplay(t *testing.T) {
+func TestMiniMaxReviewReturnsAdvisoryAndExactReplay(t *testing.T) {
 	service, adapter := reviewGatewayService(t, reviewProposalFixture(t))
 	request := reviewRequestFixture(t)
 	first, err := service.ProposeReview(t.Context(), request)
@@ -101,7 +107,7 @@ func TestFakeReviewReturnsDeterministicAdvisoryAndExactReplay(t *testing.T) {
 	}
 }
 
-func TestFakeReviewPreservesBlockingRework(t *testing.T) {
+func TestMiniMaxReviewPreservesBlockingRework(t *testing.T) {
 	proposal := reviewProposalFixture(t)
 	proposal.Recommendation = reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED
 	if len(proposal.Findings) == 0 {
@@ -198,13 +204,9 @@ func TestReviewGatewayRejectsConflictingRequestIDReuse(t *testing.T) {
 }
 
 func TestNewReviewServiceValidatesDependenciesAndLimits(t *testing.T) {
-	fake, err := NewFakeReviewAdapter(
-		reviewProposalFixture(t), "fake", Usage{ProviderRequests: 1},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = NewReviewService(nil, fake, newMemoryArtifactStore(),
+	store := newMemoryArtifactStore()
+	adapter, _ := newLoopbackReviewAdapter(t, store, reviewProposalFixture(t))
+	_, err := NewReviewService(nil, adapter, store,
 		newMemoryInvocationRepository(), fixedClock{now: time.Now()})
 	if err == nil {
 		t.Fatal("nil manifest resolver accepted")

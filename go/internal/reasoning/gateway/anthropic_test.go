@@ -112,7 +112,13 @@ func quotedJSON(t *testing.T, value string) string {
 
 func validImplementationProjection(t *testing.T) string {
 	t.Helper()
-	proposal := gatewayProposal(t)
+	return implementationProjectionJSON(t, gatewayProposal(t))
+}
+
+func implementationProjectionJSON(
+	t *testing.T, proposal *reasoningv1.ImplementationProposal,
+) string {
+	t.Helper()
 	value := implementationProjection{
 		Summary:                   proposal.GetSummary(),
 		RequestedDeclaredCheckIDs: proposal.GetRequestedDeclaredCheckIds(),

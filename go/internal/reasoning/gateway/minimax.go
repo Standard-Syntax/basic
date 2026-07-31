@@ -10,9 +10,8 @@ import (
 
 const (
 	MiniMaxMode      = "minimax_anthropic"
-	FakeProviderMode = "fake"
 	MiniMaxBaseURL   = "https://api.minimax.io/anthropic"
-	MiniMaxModel     = "MiniMax-M3"
+	MiniMaxModel     = "MiniMax-M2.7"
 	MiniMaxAPIKeyEnv = "ANTHROPIC_API_KEY"
 )
 
@@ -28,17 +27,10 @@ func (c ProviderConfig) Normalize() (ProviderConfig, error) {
 	if normalized.Mode == "" {
 		normalized.Mode = MiniMaxMode
 	}
-	switch normalized.Mode {
-	case FakeProviderMode:
-		if normalized.BaseURL != "" || normalized.Model != "" || normalized.APIKeyEnv != "" {
-			return ProviderConfig{}, errors.New("fake provider does not accept remote configuration")
-		}
-		return normalized, nil
-	case MiniMaxMode:
-		return normalizeMiniMaxConfig(normalized)
-	default:
-		return ProviderConfig{}, errors.New("provider mode must be minimax_anthropic or fake")
+	if normalized.Mode != MiniMaxMode {
+		return ProviderConfig{}, errors.New("provider mode must be minimax_anthropic")
 	}
+	return normalizeMiniMaxConfig(normalized)
 }
 
 func normalizeMiniMaxConfig(normalized ProviderConfig) (ProviderConfig, error) {
@@ -57,7 +49,7 @@ func normalizeMiniMaxConfig(normalized ProviderConfig) (ProviderConfig, error) {
 		return ProviderConfig{}, errors.New("MiniMax base URL must use the approved HTTPS endpoint")
 	}
 	if normalized.Model != MiniMaxModel {
-		return ProviderConfig{}, errors.New("MiniMax model must be MiniMax-M3")
+		return ProviderConfig{}, errors.New("MiniMax model must be MiniMax-M2.7")
 	}
 	if normalized.APIKeyEnv != MiniMaxAPIKeyEnv {
 		return ProviderConfig{}, errors.New("MiniMax credential source must be ANTHROPIC_API_KEY")

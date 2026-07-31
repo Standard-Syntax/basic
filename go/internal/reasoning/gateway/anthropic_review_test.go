@@ -22,7 +22,11 @@ func enumProjection(value, prefix string) string {
 
 func validReviewProjection(t *testing.T) string {
 	t.Helper()
-	proposal := reviewProposalFixture(t)
+	return reviewProjectionJSON(t, reviewProposalFixture(t))
+}
+
+func reviewProjectionJSON(t *testing.T, proposal *reasoningv1.ReviewProposal) string {
+	t.Helper()
 	value := reviewProjection{
 		Recommendation: enumProjection(
 			proposal.GetRecommendation().String(), "REVIEW_RECOMMENDATION_",
