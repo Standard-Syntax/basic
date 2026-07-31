@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYV2PS025Y22SYPNRK5JTRBW",
+  "strategy": "manual-commit",
+  "branch": "beta/live-only-provider",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "scripts/no-fake-provider-adapters.sh",
+    "scripts/testdata/no-fake-provider-adapters/split-provider-mode.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 545457,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 17783552,
+    "output_tokens": 49223,
+    "api_call_count": 184
+  }
+}
