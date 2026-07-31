@@ -1,9 +1,7 @@
 # Live MiniMax beta profile
 
-Beta Slice 1 ships a live-only provider composition for implementation and
-independent review. It removes the production fake proposal path but does not
-yet deliver the redesigned process-level live harness; that fixture and its
-final target name belong to Beta Slice 2.
+Beta Slice 2 ships the credentialed full-process gate for the live-only
+implementation and independent-review composition.
 
 ## Closed production profile
 
@@ -32,8 +30,10 @@ or logs.
 Both stages use non-streaming, tool-free Anthropic Messages requests through
 MiniMax's compatibility endpoint. Requests contain no tools, thinking
 configuration, or `output_config`; the closed stage schema is embedded in the
-system prompt. The response must be one complete JSON text block with no
-unknown fields or trailing JSON.
+system prompt. MiniMax's documented signed `thinking` response block is kept
+only in the immutable raw-response artifact. Exactly one complete JSON text
+block is parsed, with no unknown fields or trailing JSON; tools, extra text,
+and any other content type fail closed.
 
 Trusted Go injects proposal identity and immutable request bindings after
 decoding. The unchanged kernel validators still decide whether the result is
@@ -51,6 +51,7 @@ servers while exercising the production MiniMax adapter path:
 make generate-check
 make check
 make integration-test
+make runtime-e2e
 go build ./cmd/workflow-service
 ```
 
@@ -61,16 +62,32 @@ proposal loaders, and alternate provider branches.
 The generic `make provider-smoke` target remains an explicit Anthropic adapter
 connectivity check. It is not a MiniMax process-E2E acceptance run.
 
-## Process-E2E status
+## Credentialed beta gate
 
-Do not use the current `make runtime-e2e` or `make minimax-live-e2e` targets as
-Beta Slice 1 acceptance evidence. Their mixed fixture predates the live-only
-composition: the default branch writes fake provider configuration and the
-live branch still writes the superseded model. Strict production
-configuration therefore prevents those scripted paths from starting
-successfully.
+Load `ANTHROPIC_API_KEY` from a non-logging secret source into the command
+environment, then run:
 
-Beta Slice 2 owns `MINIMAX_LIVE_E2E`, prebuilt process proposals, target
-renaming, and the new `beta-live-e2e` path. Until that slice lands, a successful
-unit/integration loopback run proves protocol and composition behavior but not
-a credentialed full workflow run against MiniMax.
+```bash
+make beta-live-e2e
+```
+
+The gate builds both host services and both isolated worker images, starts
+disposable PostgreSQL, and runs one task against MiniMax-M2.7 through
+implementation, execution, independent verification, review, process restart,
+human approval, and draft publication. The Git repository and publication
+remote are disposable; GitHub REST remains loopback-only in Slice 2.
+
+Acceptance requires one implementation request and one distinct review
+request, one provider request per stage, immutable proposal/raw-response
+evidence with request IDs and token usage, an independently passing `add.go`
+candidate, one approval and publication, and exact replay after API restart
+without another provider request, push, approval, or PR. The fixture scans
+configuration, prompts, process logs, CAS, PostgreSQL, and reachable Git
+objects for the provider secret.
+
+`make runtime-e2e` remains credential-free and intentionally narrower. It
+proves PostgreSQL claim takeover, fencing, CAS integrity, and reconciler
+recovery using an already-existing artifact; it does not generate a proposal
+or prove beta lifecycle completion. A missing credential, skipped live test,
+provider failure, evidence mismatch, replayed side effect, or secret leak
+fails `make beta-live-e2e`.

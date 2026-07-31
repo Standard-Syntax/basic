@@ -258,7 +258,7 @@ func TestReviewRecordsAdvisoryOnlyAtAwaitingApprovalBoundary(t *testing.T) {
 	}
 }
 
-func TestHighFindingDeterministicallyRecordsRework(t *testing.T) {
+func TestReworkRequiredReviewStopsBeforeApprovalAndPublication(t *testing.T) {
 	proposal := &reasoningv1.ReviewProposal{
 		Recommendation: reasoningv1.ReviewRecommendation_REVIEW_RECOMMENDATION_REWORK_REQUIRED,
 		Findings: []*reasoningv1.ReviewFinding{{
@@ -271,14 +271,15 @@ func TestHighFindingDeterministicallyRecordsRework(t *testing.T) {
 			ActionId: "ACTION-1", FindingId: "FINDING-1", Description: "fix it",
 		}},
 	}
-	service, request, _, workflowPort, _ := fixture(t, proposal)
+	service, request, gatewayPort, workflowPort, _ := fixture(t, proposal)
 	result, err := service.Review(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	command := workflowPort.command.(workflow.RecordTaskReview)
-	if result.Passed || command.Passed {
-		t.Fatal("blocking review advanced toward approval")
+	if result.Passed || command.Passed || gatewayPort.calls != 1 || workflowPort.calls != 1 {
+		t.Fatalf("blocking review advanced toward approval: result=%#v command=%#v",
+			result, command)
 	}
 }
 

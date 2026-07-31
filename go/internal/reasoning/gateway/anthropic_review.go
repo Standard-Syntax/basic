@@ -200,15 +200,12 @@ type residualRiskProjection struct {
 func decodeReviewMessage(
 	message *anthropic.Message,
 ) (reviewProjection, *MalformedOutput) {
-	if message == nil || message.StopReason != anthropic.StopReasonEndTurn ||
-		len(message.Content) != 1 || message.Content[0].Type != "text" ||
-		strings.TrimSpace(message.Content[0].Text) == "" {
-		return reviewProjection{}, &MalformedOutput{
-			Message: "provider response must contain one complete text block",
-		}
+	text, malformed := providerText(message)
+	if malformed != nil {
+		return reviewProjection{}, malformed
 	}
 	var projection reviewProjection
-	decoder := json.NewDecoder(strings.NewReader(message.Content[0].Text))
+	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
 		return reviewProjection{}, &MalformedOutput{

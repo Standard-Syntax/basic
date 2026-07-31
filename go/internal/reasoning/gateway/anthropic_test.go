@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -229,6 +230,41 @@ func TestAnthropicImplementationBuildsClosedStructuredRequest(t *testing.T) {
 	}
 }
 
+func TestAnthropicImplementationAcceptsDocumentedThinkingBeforeOneTextBlock(t *testing.T) {
+	message := anthropicMessage(t, validImplementationProjection(t))
+	message.Content = append([]anthropic.ContentBlockUnion{{
+		Type: "thinking", Thinking: "untrusted reasoning", Signature: "fixture-signature",
+	}}, message.Content...)
+	sender := &captureMessageSender{reply: message}
+	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+
+	result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil || result.MalformedOutput != nil || result.Proposal == nil {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
+func TestAnthropicImplementationRejectsUnexpectedOrMultipleContentBlocks(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		block anthropic.ContentBlockUnion
+	}{
+		{name: "second text", block: anthropic.ContentBlockUnion{Type: "text", Text: "{}"}},
+		{name: "tool use", block: anthropic.ContentBlockUnion{Type: "tool_use", ID: "tool-1"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := anthropicMessage(t, validImplementationProjection(t))
+			message.Content = append(message.Content, test.block)
+			sender := &captureMessageSender{reply: message}
+			adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+			result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+			if err != nil || result.MalformedOutput == nil || result.Proposal != nil {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
 func assertImplementationResult(
 	t *testing.T, result AdapterResult, sender *captureMessageSender,
 ) {
@@ -374,6 +410,42 @@ func TestAnthropicImplementationRetriesWithinAllBounds(t *testing.T) {
 			"usage=%+v calls=%d delays=%v",
 			result.Usage, sender.position.Load(), delays,
 		)
+	}
+}
+
+func TestAnthropicImplementationExhaustsTimeoutAndTransportRetries(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		kind ProviderErrorKind
+	}{
+		{
+			name: "provider timeout",
+			err:  anthropicAPIError(t, http.StatusRequestTimeout, ""),
+			kind: ProviderErrorTimeout,
+		},
+		{
+			name: "transport failure",
+			err: &net.OpError{
+				Op: "dial", Net: "tcp", Err: errors.New("fixture transport unavailable"),
+			},
+			kind: ProviderErrorTransport,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sender := &sequenceMessageSender{errors: []error{test.err, test.err, test.err}}
+			adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
+			request.Envelope.Budget.MaximumProviderRequests = 3
+			adapter.runtime.sleep = func(context.Context, time.Duration) error { return nil }
+
+			_, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+			var providerError *ProviderError
+			if !errors.As(err, &providerError) || providerError.Kind != test.kind ||
+				providerError.Attempts != 3 || sender.position.Load() != 3 {
+				t.Fatalf("err=%v calls=%d", err, sender.position.Load())
+			}
+		})
 	}
 }
 

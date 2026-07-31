@@ -485,3 +485,41 @@ loopback HTTP; Beta Slice 2 owns the process-E2E redesign.
 
 ### Date
 2026-07-30
+
+## DEC-024: Separate recovery, provider smoke, and the credentialed beta gate
+
+### Decision
+Use three commands with non-overlapping evidence claims:
+`make runtime-e2e` for credential-free PostgreSQL/CAS/reconciler recovery,
+`make provider-smoke` for isolated provider protocol connectivity, and
+`make beta-live-e2e` for the complete two-process MiniMax-M2.7 lifecycle.
+
+### Options considered
+Keep one environment-switched process fixture; treat provider smoke as live
+acceptance; separate deterministic infrastructure evidence from the
+credentialed lifecycle gate.
+
+### Pros
+No credential-free command can silently substitute generated proposals for the
+live provider. Operators can identify whether a result proves recovery,
+provider connectivity, or the full implementation-through-publication
+lifecycle.
+
+### Cons
+The full gate is slower, requires a real provider credential, and remains
+outside ordinary credential-free CI.
+
+### Why this option
+Beta acceptance must fail on a missing credential, skipped test, missing
+provider evidence, replayed side effect, or secret leak. Environment-selected
+fake/live behavior made those claims ambiguous.
+
+### Consequences
+The shipped composition remains live-only. The deterministic recovery gate
+uses pre-existing immutable artifacts and never calls reasoning. The beta gate
+uses disposable PostgreSQL and Git, real execution and verification workers,
+and loopback-only GitHub publication; real GitHub publication remains a later
+slice.
+
+### Date
+2026-07-30

@@ -147,7 +147,7 @@ func TestOnceCompletesAndEnqueuesStableNextStage(t *testing.T) {
 	}
 }
 
-func TestOnceHonorsStopDecisionAndRenewsLongClaim(t *testing.T) {
+func TestFailedVerificationStopsBeforeReviewAndRenewsLongClaim(t *testing.T) {
 	runID, taskID, owner := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	ledger := &memoryLedger{found: true, job: runtime.Job{
 		ID: uuid.NewString(), RunID: runID, TaskID: &taskID, Attempt: 1,
@@ -235,7 +235,8 @@ func TestOnceRetriesThenPersistsFailureEvidence(t *testing.T) {
 
 func TestOncePersistsFailureEvidenceAfterRetryExhaustion(t *testing.T) {
 	ledger, artifacts, owner, fixedNow := runFailureCase(t, 2)
-	if len(ledger.retried) != 0 || len(ledger.failed) != 1 || len(artifacts.bodies) != 1 {
+	if len(ledger.retried) != 0 || len(ledger.failed) != 1 ||
+		len(ledger.completed) != 0 || len(artifacts.bodies) != 1 {
 		t.Fatalf("ledger=%#v bodies=%d", ledger, len(artifacts.bodies))
 	}
 	call := ledger.failed[0]

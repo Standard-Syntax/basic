@@ -13,6 +13,7 @@ import (
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -117,6 +118,19 @@ func TestAnthropicReviewBuildsClosedProposalAcceptedByKernel(t *testing.T) {
 	}
 	if result.Proposal.GetIdentity().GetRequestId() != request.GetEnvelope().GetRequestId() {
 		t.Fatal("trusted review identity was not injected")
+	}
+}
+
+func TestAnthropicReviewAcceptsDocumentedThinkingBeforeOneTextBlock(t *testing.T) {
+	message := anthropicMessage(t, validReviewProjection(t))
+	message.Content = append([]anthropic.ContentBlockUnion{{
+		Type: "thinking", Thinking: "untrusted review reasoning", Signature: "fixture-signature",
+	}}, message.Content...)
+	sender := &captureMessageSender{reply: message}
+	adapter, agentManifest, request := anthropicReviewFixture(t, sender)
+	result, err := adapter.ProposeReview(t.Context(), agentManifest, request)
+	if err != nil || result.MalformedOutput != nil || result.Proposal == nil {
+		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
 

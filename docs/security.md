@@ -140,9 +140,11 @@ facts and completed rows are protected by PostgreSQL triggers.
 - Authentication, permission, billing, timeout, exhausted rate limit, refusal,
   transport, and other provider failures are typed and redacted. They cannot
   advance workflow state.
-- Truncation, context exhaustion, empty/multiple/non-text content, malformed
-  JSON, unknown projection fields, and over-budget usage persist as exact,
-  deterministic `SCHEMA_INVALID` outcomes.
+- MiniMax's documented signed `thinking` response blocks remain only in the
+  immutable raw-response artifact and are never parsed as proposal content.
+  Truncation, context exhaustion, empty/multiple text, tool or other unexpected
+  content, malformed JSON, unknown projection fields, and over-budget usage
+  persist as exact, deterministic `SCHEMA_INVALID` outcomes.
 - Exact replay verifies the stored provider response and performs no credential
   lookup or provider request.
 

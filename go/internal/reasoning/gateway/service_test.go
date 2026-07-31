@@ -553,6 +553,24 @@ func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
 	}
 }
 
+func TestEmptyChangeProposalIsSchemaInvalidAndCannotReachExecution(t *testing.T) {
+	proposal := gatewayProposal(t)
+	proposal.Changes = nil
+	proposal.ScopeChangeRequest = nil
+	service, _, adapter := gatewayService(t, proposal)
+
+	outcome, err := service.ProposeImplementation(t.Context(), gatewayRequest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Proposal != nil ||
+		outcome.Rejection.GetCode() !=
+			reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		outcome.ProposalArtifact == (ArtifactReference{}) || adapter.calls.Load() != 1 {
+		t.Fatalf("outcome=%+v adapter calls=%d", outcome, adapter.calls.Load())
+	}
+}
+
 func TestGatewayArtifactFailuresAndReplayIntegrity(t *testing.T) {
 	t.Run("request put", func(t *testing.T) {
 		service, _, adapter := gatewayService(t, gatewayProposal(t))
