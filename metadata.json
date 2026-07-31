@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWHG6GXT7RP2XAY3KTSB941",
+  "strategy": "manual-commit",
+  "branch": "beta/repository-preflight",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/migration/migration.go",
+    "go/internal/migration/migration_integration_test.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/workflow/migrations/0020_beta_policy_bindings.sql"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 151758,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5752320,
+    "output_tokens": 15499,
+    "api_call_count": 71
+  }
+}

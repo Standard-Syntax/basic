@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWHG6GXT7RP2XAY3KTSB941",
+  "session_id": "019fb8d5-18d0-7283-9620-ac335ecda024",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T16:53:13.68524182Z",
+  "branch": "beta/repository-preflight",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/migration/migration.go",
+    "go/internal/migration/migration_integration_test.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/workflow/migrations/0020_beta_policy_bindings.sql"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "c9c078c738d7",
+  "checkpoint_transcript_start": 592,
+  "transcript_lines_at_start": 592,
+  "compact_transcript_start": 133,
+  "token_usage": {
+    "input_tokens": 151758,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5752320,
+    "output_tokens": 15499,
+    "api_call_count": 71
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T16:53:13.580653212Z",
+    "agent_lines": 319,
+    "agent_removed": 54,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 319,
+    "total_lines_changed": 373,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}
