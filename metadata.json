@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWR0Z1G0CT5J0WD47TJPWTC",
+  "strategy": "manual-commit",
+  "branch": "beta/github-canary",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/cmd/api-service/main.go",
+    "go/cmd/beta-canary-cleanup/main.go",
+    "go/cmd/beta-canary-cleanup/main_test.go",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/internal/beta/config.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/publication/authority_test.go",
+    "go/internal/publication/git.go",
+    "go/internal/publication/git_test.go",
+    "go/internal/publication/github.go",
+    "go/internal/publication/github_test.go",
+    "go/internal/publication/repository.go",
+    "go/internal/publication/repository_integration_test.go",
+    "go/internal/publication/types.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 212612,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11677952,
+    "output_tokens": 39520,
+    "api_call_count": 99
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWR0Z1G0CT5J0WD47TJPWTC",
+  "session_id": "019fb96d-d73c-73d3-a1e8-fd9725813e3a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T18:47:14.003280862Z",
+  "branch": "beta/github-canary",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/cmd/api-service/main.go",
+    "go/cmd/beta-canary-cleanup/main.go",
+    "go/cmd/beta-canary-cleanup/main_test.go",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/internal/beta/config.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/publication/authority_test.go",
+    "go/internal/publication/git.go",
+    "go/internal/publication/git_test.go",
+    "go/internal/publication/github.go",
+    "go/internal/publication/github_test.go",
+    "go/internal/publication/repository.go",
+    "go/internal/publication/repository_integration_test.go",
+    "go/internal/publication/types.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "e57604e6d17d",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 212612,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11677952,
+    "output_tokens": 39520,
+    "api_call_count": 99
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T18:47:13.953051907Z",
+    "agent_lines": 0,
+    "agent_removed": 2277,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 2277,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}
