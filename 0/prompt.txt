@@ -1,1 +1,1 @@
-yes
+commit docs/beta-release-plan.md and create a pull request
