@@ -230,6 +230,49 @@ func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	}
 }
 
+func TestPostgresRuntimeBindingLegacyRepositoryMapFailsClosed(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := context.Background()
+	if err := workflow.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
+		Meta: workflow.CommandEnvelope{
+			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
+			Timestamp: at, CorrelationID: commandID, CausationID: commandID,
+		},
+		ID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intake := artifactRef("legacy-intake")
+	baseCommit := "0123456789012345678901234567890123456789"
+	if _, err := pool.Exec(ctx, `INSERT INTO runtime_run_bindings
+		(run_id,intake_uri,intake_digest,base_commit,created_at)
+		VALUES ($1,$2,$3,$4,$5)`, runID, intake.URI, intake.Digest, baseCommit, at); err != nil {
+		t.Fatal(err)
+	}
+	repositoryMap := artifactRef("repository")
+	err = NewBindingRepository(pool).CreateRun(ctx, RunBinding{
+		RunID: runID, Intake: intake, BaseCommit: baseCommit,
+		RepositoryMap: &repositoryMap, CreatedAt: at,
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("legacy incomplete binding error=%v", err)
+	}
+}
+
 func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {

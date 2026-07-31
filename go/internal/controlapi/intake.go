@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -51,6 +52,13 @@ type RunIntakeCoordinator struct {
 	inject         func(IntakeFaultPoint) error
 }
 
+const intakeCleanupTimeout = 5 * time.Second
+
+type stagedRunIntake struct {
+	intake        workflow.ArtifactRef
+	repositoryMap workflow.ArtifactRef
+}
+
 func NewRunIntakeCoordinator(
 	pool *pgxpool.Pool, store transactionalWorkflow, artifacts ArtifactStore,
 	repositoryRoot string,
@@ -77,14 +85,7 @@ func (c *RunIntakeCoordinator) fault(point IntakeFaultPoint) error {
 func (c *RunIntakeCoordinator) Accept(
 	ctx context.Context, request RunIntakeRequest,
 ) (*runtime.IdempotencyResult, error) {
-	if request.Idempotency.Method != http.MethodPost || request.Idempotency.Target != "/v1/runs" ||
-		request.Command.Meta.CommandID != request.Idempotency.Key ||
-		request.Command.Meta.Actor.ID != request.Idempotency.PrincipalID ||
-		request.Command.Meta.Actor.Kind != workflow.ActorHuman ||
-		request.Command.Meta.ExpectedRevision != 0 {
-		return nil, runtime.ErrConflict
-	}
-	if err := request.Command.Meta.Validate(); err != nil {
+	if err := validateRunIntakeRequest(request); err != nil {
 		return nil, err
 	}
 	reservation, err := c.ledger.BeginIdempotency(ctx, request.Idempotency)
@@ -92,93 +93,19 @@ func (c *RunIntakeCoordinator) Accept(
 		return reservation, err
 	}
 	fence := reservation.FencingToken
-	abandon := func(cause error) (*runtime.IdempotencyResult, error) {
-		abandonErr := c.ledger.AbandonIdempotency(ctx, request.Idempotency.Key, fence)
-		if abandonErr != nil && !errors.Is(abandonErr, runtime.ErrTerminal) {
-			return nil, errors.Join(cause, abandonErr)
-		}
-		return nil, cause
-	}
 	if err := c.fault(FaultAfterReservation); err != nil {
-		return abandon(err)
+		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
-	intake, err := c.artifacts.Put(ctx, request.Content)
+	staged, err := c.stageArtifacts(ctx, request)
 	if err != nil {
-		return abandon(err)
+		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
-	if err := c.fault(FaultAfterIntakeCAS); err != nil {
-		return abandon(err)
-	}
-	snapshot, err := runtime.SnapshotRepository(ctx, c.repositoryRoot, request.BaseCommit)
+	response, commitAttempted, err := c.commitIntake(ctx, request, fence, staged)
 	if err != nil {
-		return abandon(err)
-	}
-	if snapshot.BaseCommit != request.BaseCommit {
-		return abandon(runtime.ErrConflict)
-	}
-	repositoryBody, err := json.Marshal(snapshot)
-	if err != nil {
-		return abandon(err)
-	}
-	repositoryMap, err := c.artifacts.Put(ctx, repositoryBody)
-	if err != nil {
-		return abandon(err)
-	}
-	if err := c.fault(FaultAfterRepositoryCAS); err != nil {
-		return abandon(err)
-	}
-
-	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return abandon(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	failTx := func(cause error) (*runtime.IdempotencyResult, error) {
-		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			cause = errors.Join(cause, rollbackErr)
+		if commitAttempted {
+			return nil, err
 		}
-		return abandon(cause)
-	}
-	if err := lockIntakeReservation(ctx, tx, request.Idempotency, fence); err != nil {
-		return failTx(err)
-	}
-	result, err := c.workflow.ExecuteRunTx(ctx, tx, request.Command)
-	if err != nil {
-		return failTx(err)
-	}
-	if err := c.fault(FaultAfterWorkflow); err != nil {
-		return failTx(err)
-	}
-	binding := runtime.RunBinding{
-		RunID: request.Command.ID, Intake: intake, BaseCommit: request.BaseCommit,
-		RepositoryMap: &repositoryMap, CreatedAt: request.Command.Meta.Timestamp,
-	}
-	if err := runtime.CreateRunBindingTx(ctx, tx, binding); err != nil {
-		return failTx(err)
-	}
-	if err := c.fault(FaultAfterBinding); err != nil {
-		return failTx(err)
-	}
-	response, err := json.Marshal(result)
-	if err != nil {
-		return failTx(err)
-	}
-	response, err = completeIntakeReservation(
-		ctx, tx, request.Idempotency.Key, fence, http.StatusCreated, response,
-	)
-	if err != nil {
-		return failTx(err)
-	}
-	if err := c.fault(FaultAfterResponse); err != nil {
-		return failTx(err)
-	}
-	if err := c.fault(FaultIntakeBeforeCommit); err != nil {
-		return failTx(err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		// A commit error can be ambiguous. Leave the fenced reservation intact so
-		// a retry either observes the committed response or reclaims after expiry.
-		return nil, fmt.Errorf("commit run intake: %w", err)
+		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
 	if err := c.fault(FaultIntakeAfterCommit); err != nil {
 		return nil, err
@@ -186,6 +113,127 @@ func (c *RunIntakeCoordinator) Accept(
 	return &runtime.IdempotencyResult{
 		StatusCode: http.StatusCreated, Response: response, FencingToken: fence,
 	}, nil
+}
+
+func validateRunIntakeRequest(request RunIntakeRequest) error {
+	if request.Idempotency.Method != http.MethodPost || request.Idempotency.Target != "/v1/runs" ||
+		request.Command.Meta.CommandID != request.Idempotency.Key ||
+		request.Command.Meta.Actor.ID != request.Idempotency.PrincipalID ||
+		request.Command.Meta.Actor.Kind != workflow.ActorHuman ||
+		request.Command.Meta.ExpectedRevision != 0 {
+		return runtime.ErrConflict
+	}
+	return request.Command.Meta.Validate()
+}
+
+func (c *RunIntakeCoordinator) stageArtifacts(
+	ctx context.Context, request RunIntakeRequest,
+) (stagedRunIntake, error) {
+	intake, err := c.artifacts.Put(ctx, request.Content)
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	if err := c.fault(FaultAfterIntakeCAS); err != nil {
+		return stagedRunIntake{}, err
+	}
+	snapshot, err := runtime.SnapshotRepository(ctx, c.repositoryRoot, request.BaseCommit)
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	if snapshot.BaseCommit != request.BaseCommit {
+		return stagedRunIntake{}, runtime.ErrConflict
+	}
+	repositoryBody, err := json.Marshal(snapshot)
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	repositoryMap, err := c.artifacts.Put(ctx, repositoryBody)
+	if err != nil {
+		return stagedRunIntake{}, err
+	}
+	if err := c.fault(FaultAfterRepositoryCAS); err != nil {
+		return stagedRunIntake{}, err
+	}
+	return stagedRunIntake{intake: intake, repositoryMap: repositoryMap}, nil
+}
+
+func (c *RunIntakeCoordinator) commitIntake(
+	ctx context.Context, request RunIntakeRequest, fence uint64, staged stagedRunIntake,
+) (response []byte, commitAttempted bool, err error) {
+	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		if err == nil || commitAttempted {
+			return
+		}
+		cleanupCtx, cancel := detachedCleanupContext(ctx)
+		defer cancel()
+		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil &&
+			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
+	if err := lockIntakeReservation(ctx, tx, request.Idempotency, fence); err != nil {
+		return nil, false, err
+	}
+	result, err := c.workflow.ExecuteRunTx(ctx, tx, request.Command)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.fault(FaultAfterWorkflow); err != nil {
+		return nil, false, err
+	}
+	binding := runtime.RunBinding{
+		RunID: request.Command.ID, Intake: staged.intake, BaseCommit: request.BaseCommit,
+		RepositoryMap: &staged.repositoryMap, CreatedAt: request.Command.Meta.Timestamp,
+	}
+	if err := runtime.CreateRunBindingTx(ctx, tx, binding); err != nil {
+		return nil, false, err
+	}
+	if err := c.fault(FaultAfterBinding); err != nil {
+		return nil, false, err
+	}
+	response, err = json.Marshal(result)
+	if err != nil {
+		return nil, false, err
+	}
+	response, err = completeIntakeReservation(
+		ctx, tx, request.Idempotency.Key, fence, http.StatusCreated, response,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := c.fault(FaultAfterResponse); err != nil {
+		return nil, false, err
+	}
+	if err := c.fault(FaultIntakeBeforeCommit); err != nil {
+		return nil, false, err
+	}
+	commitAttempted = true
+	if err = tx.Commit(ctx); err != nil {
+		// A commit error can be ambiguous. Leave the fenced reservation intact so
+		// a retry either observes the committed response or reclaims after expiry.
+		return nil, true, fmt.Errorf("commit run intake: %w", err)
+	}
+	return response, true, nil
+}
+
+func (c *RunIntakeCoordinator) abandonReservation(
+	ctx context.Context, key string, fence uint64, cause error,
+) error {
+	cleanupCtx, cancel := detachedCleanupContext(ctx)
+	defer cancel()
+	if abandonErr := c.ledger.AbandonIdempotency(cleanupCtx, key, fence); abandonErr != nil &&
+		!errors.Is(abandonErr, runtime.ErrTerminal) {
+		return errors.Join(cause, abandonErr)
+	}
+	return cause
+}
+
+func detachedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), intakeCleanupTimeout)
 }
 
 func lockIntakeReservation(

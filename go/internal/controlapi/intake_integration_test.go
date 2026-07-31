@@ -157,6 +157,33 @@ func TestAtomicRunIntakeRollsBackEveryPrecommitFailure(t *testing.T) {
 	}
 }
 
+func TestAtomicRunIntakeCleansUpAfterRequestCancellation(t *testing.T) {
+	points := []IntakeFaultPoint{FaultAfterIntakeCAS, FaultAfterWorkflow}
+	for _, point := range points {
+		t.Run(string(point), func(t *testing.T) {
+			fixture := newIntakeFixture(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			fixture.coordinator.inject = func(actual IntakeFaultPoint) error {
+				if actual != point {
+					return nil
+				}
+				cancel()
+				return context.Canceled
+			}
+			if _, err := fixture.coordinator.Accept(ctx, fixture.request); !errors.Is(err, context.Canceled) {
+				t.Fatalf("canceled intake error=%v", err)
+			}
+			assertNoAcceptedRun(t, fixture)
+			fixture.coordinator.inject = nil
+			result, err := fixture.coordinator.Accept(t.Context(), fixture.request)
+			if err != nil || result.Replay || result.FencingToken != 2 {
+				t.Fatalf("retry result=%#v err=%v", result, err)
+			}
+			assertCompleteRun(t, fixture)
+		})
+	}
+}
+
 func TestAtomicRunIntakeReplaysPostcommitCrashWithoutExternalWork(t *testing.T) {
 	fixture := newIntakeFixture(t)
 	fixture.coordinator.inject = func(point IntakeFaultPoint) error {

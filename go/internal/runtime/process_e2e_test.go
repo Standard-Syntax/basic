@@ -116,11 +116,18 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	client := &runtimeClient{base: "http://" + apiAddress, token: token}
 	runID, taskID := uuid.NewString(), uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Second)
-	client.mutate(t, "/v1/runs", "", map[string]any{
+	runKey := uuid.NewString()
+	runRequest := map[string]any{
 		"run_id": runID, "base_commit": baseCommit,
 		"content":            map[string]any{"objective": "correct Add without changing tests"},
 		"decision_timestamp": now,
-	}, http.StatusCreated)
+	}
+	firstRun := client.mutateResponseWithKey(
+		t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
+	)
+	if firstRun.replay {
+		t.Fatal("initial run intake was marked as a replay")
+	}
 	specRequest, specProposal := specificationPair(runID, now)
 	client.mutate(t, "/v1/runs/"+runID+"/specification", client.revision(t, runID),
 		protoPair(t, specRequest, specProposal, now.Add(time.Second)), http.StatusOK)
@@ -138,13 +145,39 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	api = startProcess(t, ctx, apiBinary, apiConfig)
 	processes = append(processes, api)
 	waitHTTP(t, "http://"+apiAddress+"/healthz", "", http.StatusOK)
-	workflowProcess := startProcess(t, ctx, workflowBinary, workflowConfig)
-	processes = append(processes, workflowProcess)
 	pool, err := pgxpool.New(t.Context(), databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	beforeRunReplay := snapshotRunIntakeSideEffects(t, pool, artifactRoot, runID)
+	var replayedRun mutationResponse
+	func() {
+		gitPath := filepath.Join(repository, ".git")
+		hiddenGitPath := filepath.Join(repository, ".git-hidden")
+		if err := os.Rename(gitPath, hiddenGitPath); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.Rename(hiddenGitPath, gitPath); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		replayedRun = client.mutateResponseWithKey(
+			t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
+		)
+	}()
+	if !replayedRun.replay || !bytes.Equal(replayedRun.body, firstRun.body) {
+		t.Fatalf("run replay header=%v first=%s replay=%s",
+			replayedRun.replay, firstRun.body, replayedRun.body)
+	}
+	afterRunReplay := snapshotRunIntakeSideEffects(t, pool, artifactRoot, runID)
+	if afterRunReplay != beforeRunReplay {
+		t.Fatalf("run replay repeated a side effect: before=%#v after=%#v",
+			beforeRunReplay, afterRunReplay)
+	}
+	workflowProcess := startProcess(t, ctx, workflowBinary, workflowConfig)
+	processes = append(processes, workflowProcess)
 	waitFor(t, 12*time.Minute, func() bool {
 		var state string
 		err := pool.QueryRow(t.Context(), `SELECT state FROM workflow_tasks
@@ -322,6 +355,12 @@ type runtimeClient struct {
 	base, token string
 }
 
+type mutationResponse struct {
+	value  map[string]any
+	body   []byte
+	replay bool
+}
+
 func (c runtimeClient) mutate(
 	t *testing.T, path, revision string, body any, status int,
 ) map[string]any {
@@ -332,6 +371,13 @@ func (c runtimeClient) mutate(
 func (c runtimeClient) mutateWithKey(
 	t *testing.T, path, revision, idempotencyKey string, body any, status int,
 ) map[string]any {
+	t.Helper()
+	return c.mutateResponseWithKey(t, path, revision, idempotencyKey, body, status).value
+}
+
+func (c runtimeClient) mutateResponseWithKey(
+	t *testing.T, path, revision, idempotencyKey string, body any, status int,
+) mutationResponse {
 	t.Helper()
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -356,7 +402,10 @@ func (c runtimeClient) mutateWithKey(
 	if err := json.Unmarshal(responseBody, &value); err != nil {
 		t.Fatal(err)
 	}
-	return value
+	return mutationResponse{
+		value: value, body: responseBody,
+		replay: response.Header.Get("Idempotent-Replay") == "true",
+	}
 }
 
 func (c runtimeClient) run(t *testing.T, runID string) map[string]any {
@@ -805,6 +854,50 @@ func assertPublishedFixture(
 type sideEffects struct {
 	reasoning, approvals, publications, pullRequests int
 	remoteRefs                                       string
+}
+
+type runIntakeSideEffects struct {
+	runs, commands, events, bindings, jobs, artifacts int
+	providerLedger                                    bool
+}
+
+func snapshotRunIntakeSideEffects(
+	t *testing.T, pool *pgxpool.Pool, artifactRoot, runID string,
+) runIntakeSideEffects {
+	t.Helper()
+	var value runIntakeSideEffects
+	queries := []struct {
+		target *int
+		query  string
+	}{
+		{&value.runs, `SELECT count(*) FROM workflow_runs WHERE run_id=$1`},
+		{&value.commands, `SELECT count(*) FROM workflow_commands WHERE aggregate_id=$1`},
+		{&value.events, `SELECT count(*) FROM workflow_events WHERE aggregate_id=$1`},
+		{&value.bindings, `SELECT count(*) FROM runtime_run_bindings WHERE run_id=$1`},
+		{&value.jobs, `SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1`},
+	}
+	for _, query := range queries {
+		if err := pool.QueryRow(t.Context(), query.query, runID).Scan(query.target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pool.QueryRow(t.Context(),
+		`SELECT to_regclass('reasoning_invocations') IS NOT NULL`).Scan(&value.providerLedger); err != nil {
+		t.Fatal(err)
+	}
+	err := filepath.WalkDir(artifactRoot, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() {
+			value.artifacts++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 func snapshotSideEffects(

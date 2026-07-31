@@ -70,7 +70,7 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 		return nil
 	}
 	var existing RunBinding
-	var repositoryURI, repositoryDigest string
+	var repositoryURI, repositoryDigest *string
 	err = tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
 		repository_map_uri,repository_map_digest,created_at
 		FROM runtime_run_bindings WHERE run_id=$1`, binding.RunID).Scan(
@@ -82,9 +82,9 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 	if err != nil {
 		return err
 	}
-	existing.RepositoryMap = &workflow.ArtifactRef{URI: repositoryURI, Digest: repositoryDigest}
+	existing.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
 	if existing.Intake != binding.Intake || existing.BaseCommit != binding.BaseCommit ||
-		*existing.RepositoryMap != *binding.RepositoryMap ||
+		existing.RepositoryMap == nil || *existing.RepositoryMap != *binding.RepositoryMap ||
 		!existing.CreatedAt.Equal(binding.CreatedAt.UTC()) {
 		return ErrConflict
 	}
