@@ -1,6 +1,7 @@
 package beta
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -25,7 +26,7 @@ func TestPolicyCanonicalDigestIsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, secondDigest, _ := decoded.Canonical()
-	if string(body) != string(second) || digest != secondDigest {
+	if !bytes.Equal(body, second) || digest != secondDigest {
 		t.Fatal("policy canonicalization changed")
 	}
 }
@@ -37,6 +38,10 @@ func TestPolicyRejectsWideningAndMutableImages(t *testing.T) {
 		"mutable image":             func(p *Policy) { p.Images.Execution = "worker:latest" },
 		"task expansion":            func(p *Policy) { p.Limits.MaximumTasks = 2 },
 		"concurrency expansion":     func(p *Policy) { p.Limits.VerificationConcurrency = 3 },
+		"parent traversal": func(p *Policy) {
+			p.Paths.Readable = []string{".."}
+			p.Paths.Writable = []string{".."}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

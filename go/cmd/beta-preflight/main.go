@@ -146,26 +146,38 @@ func check(ctx context.Context, value config) report {
 
 func checkRoots(paths []string) error {
 	for index, root := range paths {
-		info, err := os.Lstat(root)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return errors.New("unsafe root")
-		}
-		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o022 != 0 {
-			return errors.New("unsafe permissions")
+		if err := checkRoot(root); err != nil {
+			return err
 		}
 		for _, other := range paths[:index] {
-			rel, err := filepath.Rel(other, root)
-			if err == nil && (rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")) {
-				return errors.New("overlapping roots")
-			}
-			rel, err = filepath.Rel(root, other)
-			if err == nil && (rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")) {
+			if rootsOverlap(root, other) {
 				return errors.New("overlapping roots")
 			}
 		}
 	}
 	return nil
+}
+
+func checkRoot(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("unsafe root")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0o022 != 0 {
+		return errors.New("unsafe permissions")
+	}
+	return nil
+}
+
+func rootsOverlap(left, right string) bool {
+	return beneathOrEqual(left, right) || beneathOrEqual(right, left)
+}
+
+func beneathOrEqual(root, candidate string) bool {
+	relative, err := filepath.Rel(root, candidate)
+	return err == nil && (relative == "." ||
+		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
 }
 
 func checkGit(ctx context.Context, policy beta.Policy, worktreeRoot string) error {

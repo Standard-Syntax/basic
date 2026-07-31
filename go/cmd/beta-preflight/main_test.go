@@ -43,11 +43,42 @@ func TestCredentialFileRequiresExact0600AndContent(t *testing.T) {
 	if err := checkCredentialFile(name); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(name, 0o640); err != nil {
+	if err := os.Chmod(name, 0o640); err != nil { // skipcq: GSC-G302 -- intentionally unsafe test fixture.
 		t.Fatal(err)
 	}
 	if err := checkCredentialFile(name); err == nil {
 		t.Fatal("broad credential mode accepted")
+	}
+}
+
+func TestCheckRootsRejectsUnsafeAndOverlappingDirectories(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "first")
+	second := filepath.Join(root, "second")
+	nested := filepath.Join(first, "nested")
+	for _, name := range []string{first, second, nested} {
+		if err := os.Mkdir(name, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkRoots([]string{first, second}); err != nil {
+		t.Fatalf("safe roots rejected: %v", err)
+	}
+	if err := checkRoots([]string{first, nested}); err == nil {
+		t.Fatal("overlapping roots accepted")
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(second, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkRoots([]string{link}); err == nil {
+		t.Fatal("symlink root accepted")
+	}
+	if err := os.Chmod(second, 0o770); err != nil { // skipcq: GSC-G302 -- intentionally unsafe test fixture.
+		t.Fatal(err)
+	}
+	if err := checkRoots([]string{second}); err == nil {
+		t.Fatal("group-writable root accepted")
 	}
 }
 

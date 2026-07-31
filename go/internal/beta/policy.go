@@ -97,36 +97,60 @@ func (p Policy) Validate() error {
 	if p.Version != PolicyVersion {
 		return errors.New("unsupported beta policy version")
 	}
-	r := p.Repository
-	if r.Owner == "" || r.Name == "" || r.Remote == "" || r.RemoteURL == "" ||
-		r.BaseBranch == "" || !cleanAbsolute(r.Root) || !commitPattern.MatchString(r.BaseCommit) {
-		return errors.New("invalid repository policy")
+	if err := validateRepository(p.Repository); err != nil {
+		return err
 	}
-	if !imagePattern.MatchString(p.Images.Execution) || !imagePattern.MatchString(p.Images.Verification) {
-		return errors.New("worker images must be immutable sha256 identities")
+	if err := validateImages(p.Images); err != nil {
+		return err
 	}
-	if p.Limits.MaximumTasks != 1 || p.Limits.MaximumChangedFiles < 1 ||
-		p.Limits.MaximumFileBytes < 1 || p.Limits.MaximumTotalBytes < p.Limits.MaximumFileBytes ||
-		p.Limits.ExecutionConcurrency < 1 || p.Limits.VerificationConcurrency < 1 ||
-		p.Limits.MaximumChangedFiles > 100 || p.Limits.MaximumFileBytes > 1<<20 ||
-		p.Limits.MaximumTotalBytes > 10<<20 || p.Limits.ExecutionConcurrency > 4 ||
-		p.Limits.VerificationConcurrency > 2 {
-		return errors.New("invalid beta limits")
+	if err := validateLimits(p.Limits); err != nil {
+		return err
 	}
 	if err := validatePathPolicy(p.Paths); err != nil {
 		return err
 	}
-	if len(p.TrustedChecks) == 0 {
+	return validateTrustedChecks(p.TrustedChecks)
+}
+
+func validateRepository(value Repository) error {
+	if value.Owner == "" || value.Name == "" || value.Remote == "" || value.RemoteURL == "" ||
+		value.BaseBranch == "" || !cleanAbsolute(value.Root) || !commitPattern.MatchString(value.BaseCommit) {
+		return errors.New("invalid repository policy")
+	}
+	return nil
+}
+
+func validateImages(value Images) error {
+	if !imagePattern.MatchString(value.Execution) || !imagePattern.MatchString(value.Verification) {
+		return errors.New("worker images must be immutable sha256 identities")
+	}
+	return nil
+}
+
+func validateLimits(value Limits) error {
+	if value.MaximumTasks != 1 || value.MaximumChangedFiles < 1 ||
+		value.MaximumFileBytes < 1 || value.MaximumTotalBytes < value.MaximumFileBytes ||
+		value.ExecutionConcurrency < 1 || value.VerificationConcurrency < 1 ||
+		value.MaximumChangedFiles > 100 || value.MaximumFileBytes > 1<<20 ||
+		value.MaximumTotalBytes > 10<<20 || value.ExecutionConcurrency > 4 ||
+		value.VerificationConcurrency > 2 {
+		return errors.New("invalid beta limits")
+	}
+	return nil
+}
+
+func validateTrustedChecks(values []string) error {
+	if len(values) == 0 {
 		return errors.New("trusted checks are required")
 	}
 	seen := map[string]bool{}
-	for _, check := range p.TrustedChecks {
+	for _, check := range values {
 		if check == "" || strings.TrimSpace(check) != check || seen[check] {
 			return errors.New("trusted checks must be unique and non-empty")
 		}
 		seen[check] = true
 	}
-	if !slices.IsSorted(p.TrustedChecks) {
+	if !slices.IsSorted(values) {
 		return errors.New("trusted checks must be sorted")
 	}
 	return nil
@@ -159,7 +183,7 @@ func validatePathPolicy(value Paths) error {
 }
 
 func safePath(value string) bool {
-	return value != "" && value != "." && !strings.HasPrefix(value, "/") &&
+	return value != "" && value != "." && value != ".." && !strings.HasPrefix(value, "/") &&
 		path.Clean(value) == value && !strings.HasPrefix(value, "../") && !strings.ContainsRune(value, '\x00')
 }
 

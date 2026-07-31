@@ -81,13 +81,14 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 	}
 	var existing RunBinding
 	var repositoryURI, repositoryDigest, policyURI, policyDigest *string
+	var executionImageDigest, verificationImageDigest *string
 	err = tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
 		repository_map_uri,repository_map_digest,beta_policy_uri,beta_policy_digest,
 		execution_image_digest,verification_image_digest,created_at
 		FROM runtime_run_bindings WHERE run_id=$1`, binding.RunID).Scan(
 		&existing.RunID, &existing.Intake.URI, &existing.Intake.Digest,
 		&existing.BaseCommit, &repositoryURI, &repositoryDigest, &policyURI, &policyDigest,
-		&existing.ExecutionImageDigest, &existing.VerificationImageDigest, &existing.CreatedAt)
+		&executionImageDigest, &verificationImageDigest, &existing.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -96,6 +97,8 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 	}
 	existing.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
 	existing.Policy = optionalRef(policyURI, policyDigest)
+	existing.ExecutionImageDigest = optionalString(executionImageDigest)
+	existing.VerificationImageDigest = optionalString(verificationImageDigest)
 	if existing.Intake != binding.Intake || existing.BaseCommit != binding.BaseCommit ||
 		existing.RepositoryMap == nil || *existing.RepositoryMap != *binding.RepositoryMap ||
 		existing.Policy == nil || *existing.Policy != *binding.Policy ||
@@ -112,6 +115,7 @@ func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBindin
 	var repositoryURI, repositoryDigest, policyURI, policyDigest *string
 	var specificationURI, specificationDigest *string
 	var graphURI, graphDigest, approvalURI, approvalDigest *string
+	var executionImageDigest, verificationImageDigest *string
 	err := r.pool.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
 		repository_map_uri,repository_map_digest,beta_policy_uri,beta_policy_digest,
 		execution_image_digest,verification_image_digest,approved_specification_uri,
@@ -120,7 +124,7 @@ func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBindin
 		FROM runtime_run_bindings WHERE run_id=$1`, runID).Scan(
 		&result.RunID, &result.Intake.URI, &result.Intake.Digest, &result.BaseCommit,
 		&repositoryURI, &repositoryDigest, &policyURI, &policyDigest,
-		&result.ExecutionImageDigest, &result.VerificationImageDigest,
+		&executionImageDigest, &verificationImageDigest,
 		&specificationURI, &specificationDigest,
 		&graphURI, &graphDigest, &approvalURI, &approvalDigest, &result.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -131,10 +135,19 @@ func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBindin
 	}
 	result.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
 	result.Policy = optionalRef(policyURI, policyDigest)
+	result.ExecutionImageDigest = optionalString(executionImageDigest)
+	result.VerificationImageDigest = optionalString(verificationImageDigest)
 	result.ApprovedSpecification = optionalRef(specificationURI, specificationDigest)
 	result.ApprovedTaskGraph = optionalRef(graphURI, graphDigest)
 	result.CompositeApproval = optionalRef(approvalURI, approvalDigest)
 	return result, nil
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (r *BindingRepository) CheckpointRepository(

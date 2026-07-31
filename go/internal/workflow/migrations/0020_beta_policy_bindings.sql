@@ -4,13 +4,18 @@ ALTER TABLE runtime_run_bindings
     ADD COLUMN execution_image_digest text,
     ADD COLUMN verification_image_digest text,
     ADD CONSTRAINT runtime_beta_policy_pair
-        CHECK ((beta_policy_uri IS NULL) = (beta_policy_digest IS NULL)),
+        CHECK ((beta_policy_uri IS NULL) = (beta_policy_digest IS NULL)) NOT VALID,
     ADD CONSTRAINT runtime_beta_policy_digest_shape
-        CHECK (beta_policy_digest IS NULL OR beta_policy_digest ~ '^[a-f0-9]{64}$'),
+        CHECK (beta_policy_digest IS NULL OR beta_policy_digest ~ '^[a-f0-9]{64}$') NOT VALID,
     ADD CONSTRAINT runtime_execution_image_shape
-        CHECK (execution_image_digest IS NULL OR execution_image_digest ~ '^sha256:[a-f0-9]{64}$'),
+        CHECK (execution_image_digest IS NULL OR execution_image_digest ~ '^sha256:[a-f0-9]{64}$') NOT VALID,
     ADD CONSTRAINT runtime_verification_image_shape
-        CHECK (verification_image_digest IS NULL OR verification_image_digest ~ '^sha256:[a-f0-9]{64}$');
+        CHECK (verification_image_digest IS NULL OR verification_image_digest ~ '^sha256:[a-f0-9]{64}$') NOT VALID;
+
+ALTER TABLE runtime_run_bindings VALIDATE CONSTRAINT runtime_beta_policy_pair;
+ALTER TABLE runtime_run_bindings VALIDATE CONSTRAINT runtime_beta_policy_digest_shape;
+ALTER TABLE runtime_run_bindings VALIDATE CONSTRAINT runtime_execution_image_shape;
+ALTER TABLE runtime_run_bindings VALIDATE CONSTRAINT runtime_verification_image_shape;
 
 CREATE OR REPLACE FUNCTION protect_runtime_run_binding()
 RETURNS trigger

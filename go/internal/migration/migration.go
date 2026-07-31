@@ -53,6 +53,22 @@ func Verify(ctx context.Context, connectionString string, sources ...Source) ([]
 	if err != nil {
 		return nil, err
 	}
+	connection, err := connectReadOnly(ctx, connectionString)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = connection.Close(ctx) }()
+	actual, err := readLedger(ctx, connection)
+	if err != nil {
+		return nil, err
+	}
+	if err := compareMigrations(expected, actual); err != nil {
+		return nil, err
+	}
+	return expected, nil
+}
+
+func connectReadOnly(ctx context.Context, connectionString string) (*pgx.Conn, error) {
 	config, err := pgx.ParseConfig(connectionString)
 	if err != nil {
 		return nil, fmt.Errorf("parse migration connection: %w", err)
@@ -65,7 +81,10 @@ func Verify(ctx context.Context, connectionString string, sources ...Source) ([]
 	if err != nil {
 		return nil, fmt.Errorf("connect for migration verification: %w", err)
 	}
-	defer func() { _ = connection.Close(ctx) }()
+	return connection, nil
+}
+
+func readLedger(ctx context.Context, connection *pgx.Conn) (map[int64]Expected, error) {
 	var ledger *string
 	if err := connection.QueryRow(ctx, `SELECT to_regclass('schema_migrations')::text`).Scan(&ledger); err != nil || ledger == nil {
 		return nil, errors.New("migration ledger missing")
@@ -86,16 +105,20 @@ func Verify(ctx context.Context, connectionString string, sources ...Source) ([]
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	return actual, nil
+}
+
+func compareMigrations(expected []Expected, actual map[int64]Expected) error {
 	for _, item := range expected {
 		stored, ok := actual[item.Version]
 		if !ok {
-			return nil, fmt.Errorf("migration %d pending", item.Version)
+			return fmt.Errorf("migration %d pending", item.Version)
 		}
 		if stored.Name != item.Name {
-			return nil, fmt.Errorf("migration %d name changed", item.Version)
+			return fmt.Errorf("migration %d name changed", item.Version)
 		}
 		if stored.Digest != item.Digest {
-			return nil, fmt.Errorf("migration %d digest changed", item.Version)
+			return fmt.Errorf("migration %d digest changed", item.Version)
 		}
 	}
 	expectedVersions := make(map[int64]bool, len(expected))
@@ -104,10 +127,10 @@ func Verify(ctx context.Context, connectionString string, sources ...Source) ([]
 	}
 	for version := range actual {
 		if !expectedVersions[version] {
-			return nil, fmt.Errorf("unexpected migration %d", version)
+			return fmt.Errorf("unexpected migration %d", version)
 		}
 	}
-	return expected, nil
+	return nil
 }
 
 const advisoryLock int64 = 719043625421948938

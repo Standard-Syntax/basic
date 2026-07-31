@@ -267,8 +267,13 @@ func TestPostgresRuntimeBindingLegacyRepositoryMapFailsClosed(t *testing.T) {
 		VALUES ($1,$2,$3,$4,$5)`, runID, intake.URI, intake.Digest, baseCommit, at); err != nil {
 		t.Fatal(err)
 	}
+	repository := NewBindingRepository(pool)
+	legacy, err := repository.GetRun(ctx, runID)
+	if err != nil || legacy.ExecutionImageDigest != "" || legacy.VerificationImageDigest != "" {
+		t.Fatalf("read legacy binding = %#v, %v", legacy, err)
+	}
 	repositoryMap := artifactRef("repository")
-	err = NewBindingRepository(pool).CreateRun(ctx, RunBinding{
+	err = repository.CreateRun(ctx, RunBinding{
 		RunID: runID, Intake: intake, BaseCommit: baseCommit,
 		RepositoryMap: &repositoryMap, Policy: &repositoryMap,
 		ExecutionImageDigest:    "sha256:" + strings.Repeat("a", 64),
