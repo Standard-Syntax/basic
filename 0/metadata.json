@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYW9FYVP8PZP324AF7T980N7",
+  "session_id": "019fb855-863c-7be3-9946-b01bcd69051b",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T14:33:16.663937779Z",
+  "branch": "beta/atomic-run-intake",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "Makefile",
+    "docs/architecture.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "docs/resource-analysis.md",
+    "docs/security.md",
+    "go/cmd/api-service/main.go",
+    "go/cmd/api-service/main_test.go",
+    "go/internal/controlapi/intake.go",
+    "go/internal/controlapi/intake_integration_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/builder.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/stage/handlers.go",
+    "go/internal/stage/handlers_test.go",
+    "go/internal/workflow/store.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "a2cd8e05ed44",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 245797,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 14526208,
+    "output_tokens": 39879,
+    "api_call_count": 125
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T14:33:16.608373831Z",
+    "agent_lines": 224,
+    "agent_removed": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 98,
+    "total_committed": 224,
+    "total_lines_changed": 326,
+    "agent_percentage": 69.93865030674846,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1069,
+      "user_lines_removed": 98,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272,
+        "Makefile": 1,
+        "go/cmd/api-service/main.go": 12,
+        "go/internal/controlapi/intake.go": 227,
+        "go/internal/controlapi/intake_integration_test.go": 289,
+        "go/internal/controlapi/server.go": 52,
+        "go/internal/controlapi/server_test.go": 32,
+        "go/internal/runtime/bindings.go": 39,
+        "go/internal/runtime/builder.go": 53,
+        "go/internal/runtime/ledger_integration_test.go": 3,
+        "go/internal/runtime/process_e2e_test.go": 1,
+        "go/internal/stage/handlers.go": 9,
+        "go/internal/workflow/store.go": 24
+      },
+      "user_removed_per_file": {
+        "Makefile": 1,
+        "go/cmd/api-service/main.go": 2,
+        "go/internal/controlapi/server.go": 43,
+        "go/internal/controlapi/server_test.go": 27,
+        "go/internal/runtime/bindings.go": 6,
+        "go/internal/runtime/builder.go": 3,
+        "go/internal/runtime/ledger_integration_test.go": 2,
+        "go/internal/stage/handlers.go": 8,
+        "go/internal/stage/handlers_test.go": 6
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1064,
+      "agent_lines_removed": 102,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}

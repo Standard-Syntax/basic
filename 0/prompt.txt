@@ -1,0 +1,60 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Slice 3: Atomic Run Intake
+
+## Summary
+
+Implement Slice 3 on the already-initialized `beta/atomic-run-intake` stack branch. Make `POST /v1/runs` publish either one complete, replayable `DRAFT` run or no run at all. The current HTTP wire contract remains unchanged.
+
+## Implementation Changes
+
+- Add required, clean absolute `repository_root` configuration to `api-service`. Before opening the database transaction, validate the requested base commit, snapshot its committed repository map, serialize it deterministically, and stage both the intake body and repository map in CAS. Failed intake may leave only harmless unbound CAS objects.
+- Add a dedicated run-intake application boundary to `controlapi`, backed by the API process’s shared PostgreSQL pool. Keep generic idempotency handling for other mutations, but route successful run creation through this coordinator.
+- Add a transaction-aware workflow seam that persists the `CreateRun` command, initial event, `DRAFT` snapshot, and command result inside a caller-owned serializable transaction.
+- Within that same transaction:
+  - lock the API idempotency reservation with `FOR UPDATE`;
+  - verify method, target, principal, request digest, unexpired reservation, and current fencing generation;
+  - create the workflow run;
+  - insert one immutable `runtime_run_bindings` row containing both intake and repository-map references plus the exact base commit;
+  - encode and store the exact HTTP `201` response and mark the reservation complete;
+  - commit once.
+- A pre-commit error rolls everything back and exposes no run. A crash after commit but before response is recovered by returning the stored response with `Idempotent-Replay: true`. Expired reservations must be reclaimed with an incremented generation; stale generations cannot commit, complete, or abandon the intake.
+- Remove worker-time repository snapshotting and `CheckpointRepository` from the start-stage contract. Stage start must load the intake-bound repository-map artifact, verify its CAS digest and base-commit binding, reject malformed or mismatched snapshots, and then perform the existing workflow/task lease transitions.
+- Update architecture, security, development, live-harness, resource, and decision documentation to describe intake-time repository binding and the single transactional acceptance boundary. Historical completion reports remain factual and unchanged.
+
+## Interfaces and Compatibility
+
+- `POST /v1/runs` request and response JSON remain unchanged.
+- `api-service` configuration gains required `repository_root`.
+- `runtime.RunBinding.RepositoryMap` becomes mandatory for every newly accepted run, while the existing nullable database columns remain for migration compatibility. Legacy incomplete rows fail closed; no compensating reconciler or new migration is introduced.
+- Internal server composition gains a run-intake coordinator; ordinary workflow, binding, and idempotency interfaces remain available for non-intake operations.
+
+## Test Plan
+
+- Add PostgreSQL-backed `controlapi` integration coverage and include that package in `make integration-test`.
+- Inject failures after reservation, each CAS publication, workflow command/event/snapshot persistence, binding insertion, idempotency response completion, immediately before commit, and immediately after commit before response.
+- After rebuilding the API composition, verify each pre-commit failure leaves no workflow run, binding, completed response, job, or provider invocation; retry after reservation expiry must converge to exactly one complete run.
+- Verify exact byte replay returns the stored status and response without CAS, Git, workflow, job, or provider work; changed bytes under the same key conflict.
+- Cover concurrent duplicate requests, the same run ID under different keys, expired-generation takeover, stale completion/abandonment, malformed repository maps, base-commit drift, and immutable binding conflicts.
+- Preserve the existing full lifecycle and run:
+
+```bash
+make generate-check
+make check
+make integration-test
+cd go && go test -race ./internal/runtime ./internal/controlapi
+cd .. && git diff --check
+make beta-live-e2e
+```
+
+`make beta-live-e2e` must execute with a real `ANTHROPIC_API_KEY`; if credentials are unavailable, report the gate as unverified and do not claim Slice 3 is ready to advance.
+
+## Assumptions
+
+- The verified stack is already `main ← beta/atomic-run-intake` at `f0e8842`; `gh stack init` must not be repeated.
+- Untracked `.codex/`, `.entire/`, and `.opencode/` directories remain untouched.
+- The current baseline passes `go test ./internal/runtime ./internal/controlapi` and `git diff --check`.
+
+---
+
+please continue implementation if slice 3
