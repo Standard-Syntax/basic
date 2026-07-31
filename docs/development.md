@@ -228,6 +228,9 @@ Git, and loopback REST tests.
 
 ## Phase 11 processes
 
+Packaged beta operation, readiness, backup/restore, credential rotation, and
+exact-image rollback are documented in `docs/beta-deployment.md`.
+
 Both processes accept `-config /absolute/path/config.json`. Configuration is
 strict JSON: unknown fields and trailing documents are rejected. The API
 configuration includes a loopback listener, PostgreSQL URL, absolute CAS root,
