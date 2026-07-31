@@ -330,6 +330,11 @@ func runBetaProcesses(t *testing.T) {
 	}
 	candidatePath := filepath.Join(root, "candidate")
 	runGitE2E(t, repository, "worktree", "add", "--detach", candidatePath, candidate)
+	t.Cleanup(func() {
+		command := exec.Command("git", "worktree", "remove", "--force", candidatePath)
+		command.Dir = repository
+		_ = command.Run()
+	})
 	command := exec.Command("make", "check")
 	command.Dir = candidatePath
 	if output, err := command.CombinedOutput(); err != nil {
@@ -345,7 +350,7 @@ func runBetaProcesses(t *testing.T) {
 	assertReasoningEvidence(t, pool, artifactRoot, runID)
 	assertDurableOutcome(t, pool, runID, taskID, actorIDs[1], candidate)
 	beforeReplay := snapshotSideEffects(
-		t, pool, repository, remote, runID, taskID, prState,
+		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
 	)
 
 	api.stop(t)
@@ -360,7 +365,7 @@ func runBetaProcesses(t *testing.T) {
 			approvalResponse, replayedApproval)
 	}
 	afterReplay := snapshotSideEffects(
-		t, pool, repository, remote, runID, taskID, prState,
+		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
 	)
 	if afterReplay != beforeReplay {
 		t.Fatalf("approval replay repeated a side effect: before=%#v after=%#v",
@@ -1086,7 +1091,7 @@ func snapshotRunIntakeSideEffects(
 }
 
 func snapshotSideEffects(
-	t *testing.T, pool *pgxpool.Pool, repository, remote, runID, taskID string,
+	t *testing.T, pool *pgxpool.Pool, repository, remote, branchPrefix, runID, taskID string,
 	state *pullRequestState,
 ) sideEffects {
 	t.Helper()
@@ -1101,7 +1106,7 @@ func snapshotSideEffects(
 		{&value.approvals, `SELECT count(*) FROM task_approvals
 			WHERE run_id=$1 AND task_id=$2`, []any{runID, taskID}},
 		{&value.publications, `SELECT count(*) FROM draft_pull_request_publications
-			WHERE published_branch=$1`, []any{"harness/" + runID}},
+			WHERE published_branch=$1`, []any{branchPrefix + runID}},
 	}
 	for _, query := range queries {
 		if err := pool.QueryRow(t.Context(), query.query, query.args...).Scan(query.target); err != nil {

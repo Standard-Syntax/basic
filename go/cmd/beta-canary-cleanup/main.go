@@ -50,8 +50,15 @@ func mainExit() int {
 		fmt.Fprintln(os.Stderr, "canary cleanup failed:", err)
 		return 1
 	}
-	_ = json.NewEncoder(os.Stdout).Encode(report)
+	if err := writeCleanupReport(os.Stdout, report); err != nil {
+		fmt.Fprintln(os.Stderr, "write canary cleanup report:", err)
+		return 1
+	}
 	return 0
+}
+
+func writeCleanupReport(writer io.Writer, report cleanupReport) error {
+	return json.NewEncoder(writer).Encode(report)
 }
 
 func cleanup(ctx context.Context, config beta.Config, publicationID string) (cleanupReport, error) {
@@ -119,13 +126,13 @@ func cleanupResources(
 	ctx context.Context, git *publication.GitCommandPublisher,
 	github *publication.GitHubRESTClient, expected publication.PullRequestExpectation,
 ) (bool, bool, error) {
-	branchReplay, err := git.DeleteBranch(ctx, expected.Head, expected.CandidateCommit)
+	pullReplay, err := github.CloseDraft(ctx, expected)
 	if err != nil {
 		return false, false, err
 	}
-	pullReplay, err := github.CloseDraft(ctx, expected)
+	branchReplay, err := git.DeleteBranch(ctx, expected.Head, expected.CandidateCommit)
 	if err != nil {
-		return branchReplay, false, err
+		return false, pullReplay, err
 	}
 	return branchReplay, pullReplay, nil
 }
