@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYV1BW7N38ASB2MWCA2EJKQP",
+  "strategy": "manual-commit",
+  "branch": "beta/live-only-provider",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/cmd/workflow-service/main.go",
+    "go/cmd/workflow-service/main_test.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/fake.go",
+    "go/internal/reasoning/gateway/loopback_provider_test.go",
+    "go/internal/reasoning/gateway/minimax.go",
+    "go/internal/reasoning/gateway/minimax_test.go",
+    "go/internal/reasoning/gateway/repository_integration_test.go",
+    "go/internal/reasoning/gateway/review_fake.go",
+    "go/internal/reasoning/gateway/review_service_test.go",
+    "go/internal/reasoning/gateway/service_test.go",
+    "scripts/no-fake-provider-adapters.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 361313,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8566016,
+    "output_tokens": 29034,
+    "api_call_count": 85
+  }
+}

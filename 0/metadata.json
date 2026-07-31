@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYV1BW7N38ASB2MWCA2EJKQP",
+  "session_id": "019fb57a-9693-7e70-b00f-e004b60e84e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T02:51:59.909935685Z",
+  "branch": "beta/live-only-provider",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/cmd/workflow-service/main.go",
+    "go/cmd/workflow-service/main_test.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/fake.go",
+    "go/internal/reasoning/gateway/loopback_provider_test.go",
+    "go/internal/reasoning/gateway/minimax.go",
+    "go/internal/reasoning/gateway/minimax_test.go",
+    "go/internal/reasoning/gateway/repository_integration_test.go",
+    "go/internal/reasoning/gateway/review_fake.go",
+    "go/internal/reasoning/gateway/review_service_test.go",
+    "go/internal/reasoning/gateway/service_test.go",
+    "scripts/no-fake-provider-adapters.sh"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "a06681c2644b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 361313,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8566016,
+    "output_tokens": 29034,
+    "api_call_count": 85
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T02:51:59.85347754Z",
+    "agent_lines": 492,
+    "agent_removed": 255,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 492,
+    "total_lines_changed": 747,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 792,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272,
+        "docs/beta-release-plan.md": 465
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1139,
+      "agent_lines_removed": 483,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}
