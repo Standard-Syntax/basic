@@ -163,3 +163,22 @@ facts and completed rows are protected by PostgreSQL triggers.
   regular, owner-only `0600` file.
 - Phase 11 adds no automatic merge, deployment, arbitrary shell, unrestricted
   network, provider fallback, or cross-repository authority.
+
+## Beta Slice 3 intake boundary
+
+- `api-service` requires one clean absolute `repository_root`. Intake resolves
+  the supplied 40-character commit to committed Git objects before acceptance;
+  mutable worktree contents never define the repository map.
+- The idempotency row is locked with `FOR UPDATE` inside the same serializable
+  transaction as workflow creation, the complete immutable run binding, and
+  the stored HTTP response. Method, target, principal, request digest,
+  reservation expiry, and fencing generation are rechecked under that lock.
+- Expired reservations increment their generation. A stale generation cannot
+  commit, complete, or abandon a newer intake reservation.
+- Run bindings accepted by the new path always contain intake and repository-map
+  CAS references plus the exact base commit. Missing, malformed, digest-mismatched,
+  or base-mismatched repository maps stop stage start before leases or external
+  work.
+- Pre-commit failures leave no workflow run, binding, completed response, job,
+  or provider invocation. A crash after commit replays the stored bytes and
+  performs no Git, CAS, workflow, job, or provider operation.

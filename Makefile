@@ -64,7 +64,7 @@ integration-test:
 		go test -tags=integration -count=1 \
 			./internal/workflow ./internal/registry ./internal/reasoning/gateway \
 			./internal/execution ./internal/verification ./internal/approval \
-			./internal/publication || status=$$?; \
+			./internal/publication ./internal/controlapi || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
 

@@ -231,8 +231,11 @@ Git, and loopback REST tests.
 Both processes accept `-config /absolute/path/config.json`. Configuration is
 strict JSON: unknown fields and trailing documents are rejected. The API
 configuration includes a loopback listener, PostgreSQL URL, absolute CAS root,
-service actor UUID, body limits, and principals with UUID identity, SHA-256
-token digest, and roles. Workflow configuration includes the PostgreSQL URL,
+a required clean absolute `repository_root`, service actor UUID, body limits,
+and principals with UUID identity, SHA-256 token digest, and roles. The API
+repository root is the source of the committed repository map bound by
+`POST /v1/runs`; it must address the same repository used by the workflow
+service. Workflow configuration includes the PostgreSQL URL,
 absolute CAS root, worker-owner UUID, artifact limit, and the closed
 MiniMax-M2.7 provider profile. Unknown fields, fake proposal fields, fake mode,
 alternate endpoints/models/credential names, and trailing JSON fail closed.
@@ -254,6 +257,13 @@ and exercises implementation, execution, verification, review, restart,
 human approval, draft publication, and exact approval replay. Keep
 `make provider-smoke` separate: it uses the generic Anthropic endpoint and is
 not MiniMax runtime-E2E evidence.
+
+Run intake is the exception to the generic mutation composition: its workflow
+`CreateRun`, initial event and snapshot, complete runtime binding, and exact
+`201` response are one serializable transaction. Retry the same request bytes
+with the same key after a lost response; `Idempotent-Replay: true` means no Git,
+CAS, workflow, job, or provider work was repeated. Reusing the key with changed
+bytes returns an idempotency conflict.
 
 `make generate` also compiles the four example agent manifests. The generation
 check compares their canonical JSON and digest sidecars with the committed

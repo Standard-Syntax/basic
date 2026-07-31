@@ -77,6 +77,30 @@ func (s *Store) ExecuteRun(ctx context.Context, command RunCommand) (CommandResu
 	return result, nil
 }
 
+// ExecuteRunTx persists a run command inside a caller-owned transaction. The
+// caller is responsible for using a serializable transaction and committing or
+// rolling it back. This seam exists for application boundaries that must bind a
+// workflow transition atomically with records owned by other packages.
+func (s *Store) ExecuteRunTx(
+	ctx context.Context, tx pgx.Tx, command RunCommand,
+) (CommandResult, error) {
+	if tx == nil {
+		return CommandResult{}, fmt.Errorf("%w: nil transaction", ErrInvalid)
+	}
+	if err := validateRunCommand(command); err != nil {
+		return CommandResult{}, err
+	}
+	digest, err := commandDigest(command)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	result, err := s.executeRunTransaction(ctx, tx, command, digest)
+	if errors.Is(err, errReplayAfterConflict) {
+		return CommandResult{}, ErrCommandConflict
+	}
+	return result, err
+}
+
 func commandDigest(command RunCommand) (string, error) {
 	return typedCommandDigest(command, "command")
 }

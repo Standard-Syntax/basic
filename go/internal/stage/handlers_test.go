@@ -2,7 +2,9 @@ package stage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,52 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestStartRejectsIncompleteOrInvalidIntakeRepositoryMap(t *testing.T) {
+	base := "0123456789012345678901234567890123456789"
+	valid, err := json.Marshal(runtime.RepositorySnapshot{
+		BaseCommit: base,
+		Entries: []*reasoningv1.RepositoryEntry{{
+			Path: "README.md", Kind: "blob", Sha256: strings.Repeat("a", 64),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		binding runtime.RunBinding
+		body    []byte
+	}{
+		{name: "legacy incomplete", binding: runtime.RunBinding{BaseCommit: base}},
+		{name: "malformed", binding: boundRepositoryMap(base, []byte(`{"unknown":true}`)), body: []byte(`{"unknown":true}`)},
+		{name: "base mismatch", binding: boundRepositoryMap(strings.Repeat("f", 40), valid), body: valid},
+		{name: "digest mismatch", binding: boundRepositoryMap(base, valid), body: append(valid, ' ')},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtimeStore := &stageTestRuntime{run: test.binding}
+			artifacts := &stageTestArtifacts{values: make(map[string][]byte)}
+			if test.binding.RepositoryMap != nil {
+				artifacts.values[test.binding.RepositoryMap.Digest] = test.body
+			}
+			handlers := &Handlers{runtime: runtimeStore, artifacts: artifacts}
+			taskID := uuid.NewString()
+			result, err := handlers.start(t.Context(), runtime.Job{
+				RunID: uuid.NewString(), TaskID: &taskID, Attempt: 1,
+			}, orchestration.Identities{})
+			if err == nil || result.Continue {
+				t.Fatalf("result=%#v error=%v", result, err)
+			}
+		})
+	}
+}
+
+func boundRepositoryMap(base string, body []byte) runtime.RunBinding {
+	digest := runtime.Digest(body)
+	ref := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
+	return runtime.RunBinding{BaseCommit: base, RepositoryMap: &ref}
+}
 
 func TestExecutionExpectedRevisionSurvivesPartialExecution(t *testing.T) {
 	tests := []struct {
@@ -189,22 +237,18 @@ func (s *stageTestArtifacts) Get(
 
 type stageTestRuntime struct {
 	completed map[string]workflow.ArtifactRef
+	run       runtime.RunBinding
+	runErr    error
 }
 
-func (*stageTestRuntime) GetRun(context.Context, string) (runtime.RunBinding, error) {
-	return runtime.RunBinding{}, runtime.ErrNotFound
+func (s *stageTestRuntime) GetRun(context.Context, string) (runtime.RunBinding, error) {
+	return s.run, s.runErr
 }
 
 func (*stageTestRuntime) GetTask(
 	context.Context, string, string,
 ) (runtime.TaskBinding, error) {
 	return runtime.TaskBinding{}, runtime.ErrNotFound
-}
-
-func (*stageTestRuntime) CheckpointRepository(
-	context.Context, string, workflow.ArtifactRef,
-) error {
-	return nil
 }
 
 func (s *stageTestRuntime) CompletedResult(

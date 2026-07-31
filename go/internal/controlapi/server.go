@@ -98,6 +98,7 @@ type Server struct {
 	config      Config
 	workflow    WorkflowStore
 	runtime     IdempotencyLedger
+	intake      RunIntake
 	artifacts   ArtifactStore
 	bindings    BindingStore
 	approval    ApprovalService
@@ -117,7 +118,7 @@ type principalDigest struct {
 
 func New(
 	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
-	artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
+	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
 	publicationService PublicationService, logger *slog.Logger,
 ) (*Server, error) {
 	normalized, err := normalizeServerConfig(config)
@@ -128,7 +129,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	if len(principals) == 0 || bindings == nil || artifacts == nil ||
+	if len(principals) == 0 || bindings == nil || artifacts == nil || runIntake == nil ||
 		approvalService == nil {
 		return nil, errors.New("at least one principal is required")
 	}
@@ -140,7 +141,7 @@ func New(
 		logger = slog.Default()
 	}
 	return &Server{
-		config: normalized, workflow: workflowStore, runtime: runtimeLedger,
+		config: normalized, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
 		artifacts: artifacts, bindings: bindings, approval: approvalService,
 		publication: publicationService, principals: principals,
 		checks: checks, logger: logger,
@@ -346,6 +347,10 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		Key: key, Method: request.Method, Target: request.URL.RequestURI(),
 		PrincipalID: principal.ID, RequestDigest: runtime.Digest(raw),
 	}
+	if request.URL.Path == "/v1/runs" {
+		s.handleRunIntake(w, request, principal, body, idem)
+		return
+	}
 	reservation, err := s.runtime.BeginIdempotency(request.Context(), idem)
 	if err != nil {
 		s.writeDomainError(w, err)
@@ -397,14 +402,53 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	writeRawJSON(w, status, encoded)
 }
 
+func (s *Server) handleRunIntake(
+	w http.ResponseWriter, request *http.Request, principal Principal, body mutationBody,
+	idempotency runtime.IdempotencyRequest,
+) {
+	if !hasRole(principal, RoleOperator) {
+		s.writeDomainError(w, workflow.ErrUnauthorized)
+		return
+	}
+	if body.DecisionTime.IsZero() {
+		writeError(w, http.StatusBadRequest, "invalid_request", "decision_timestamp is required")
+		return
+	}
+	if _, err := uuid.Parse(body.RunID); err != nil || len(body.BaseCommit) != 40 ||
+		len(body.Content) == 0 || string(body.Content) == "null" {
+		s.writeDomainError(w, workflow.ErrInvalid)
+		return
+	}
+	for _, value := range body.BaseCommit {
+		if !strings.ContainsRune("0123456789abcdef", value) {
+			s.writeDomainError(w, workflow.ErrInvalid)
+			return
+		}
+	}
+	result, err := s.intake.Accept(request.Context(), RunIntakeRequest{
+		Idempotency: idempotency, Content: body.Content, BaseCommit: body.BaseCommit,
+		Command: workflow.CreateRun{
+			Meta: s.envelope(
+				idempotency.Key, principal.ID, workflow.ActorHuman, 0, body.DecisionTime,
+			),
+			ID: body.RunID,
+		},
+	})
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	if result.Replay {
+		w.Header().Set("Idempotent-Replay", "true")
+	}
+	writeRawJSON(w, result.StatusCode, result.Response)
+}
+
 func (s *Server) applyMutation(
 	request *http.Request, principal Principal, key string, body mutationBody,
 ) (int, any, error) {
 	if body.DecisionTime.IsZero() {
 		return 0, nil, errors.New("decision_timestamp is required")
-	}
-	if request.URL.Path == "/v1/runs" {
-		return s.createRun(request.Context(), principal, key, body)
 	}
 	taskID, taskSuffix, taskRoute := parseTaskPath(request.URL.Path)
 	if taskRoute && taskSuffix == "/retry" {
@@ -423,42 +467,6 @@ func (s *Server) applyMutation(
 		return 0, nil, workflow.ErrRevisionConflict
 	}
 	return s.applyRunMutation(request.Context(), principal, key, suffix, body, run)
-}
-
-func (s *Server) createRun(
-	ctx context.Context, principal Principal, key string, body mutationBody,
-) (int, any, error) {
-	if !hasRole(principal, RoleOperator) {
-		return 0, nil, workflow.ErrUnauthorized
-	}
-	if _, err := uuid.Parse(body.RunID); err != nil {
-		return 0, nil, workflow.ErrInvalid
-	}
-	if len(body.BaseCommit) != 40 || len(body.Content) == 0 ||
-		string(body.Content) == "null" {
-		return 0, nil, workflow.ErrInvalid
-	}
-	for _, value := range body.BaseCommit {
-		if !strings.ContainsRune("0123456789abcdef", value) {
-			return 0, nil, workflow.ErrInvalid
-		}
-	}
-	intake, err := s.artifacts.Put(ctx, body.Content)
-	if err != nil {
-		return http.StatusCreated, nil, err
-	}
-	result, err := s.workflow.ExecuteRun(ctx, workflow.CreateRun{
-		Meta: s.envelope(key, principal.ID, workflow.ActorHuman, 0, body.DecisionTime),
-		ID:   body.RunID,
-	})
-	if err != nil {
-		return http.StatusCreated, result, err
-	}
-	err = s.bindings.CreateRun(ctx, runtime.RunBinding{
-		RunID: body.RunID, Intake: intake, BaseCommit: body.BaseCommit,
-		CreatedAt: body.DecisionTime,
-	})
-	return http.StatusCreated, result, err
 }
 
 func (s *Server) retryTask(
@@ -925,7 +933,8 @@ func (s *Server) domainError(err error) (int, any) {
 		code, message, status = "revision_conflict", "ETag revision conflict", http.StatusPreconditionFailed
 	case errors.Is(err, runtime.ErrInProgress):
 		code, message, status = "idempotency_in_progress", "request is still processing", http.StatusConflict
-	case errors.Is(err, workflow.ErrCommandConflict), errors.Is(err, runtime.ErrConflict):
+	case errors.Is(err, workflow.ErrCommandConflict), errors.Is(err, runtime.ErrConflict),
+		errors.Is(err, runtime.ErrStaleFence), errors.Is(err, runtime.ErrTerminal):
 		code, message, status = "idempotency_conflict", "idempotency identity conflict", http.StatusConflict
 	case errors.Is(err, workflow.ErrInvalid), errors.Is(err, workflow.ErrInvalidTransition):
 		code, message, status = "invalid_transition", err.Error(), http.StatusUnprocessableEntity

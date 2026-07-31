@@ -30,6 +30,7 @@ type config struct {
 	Listen           string                 `json:"listen"`
 	DatabaseURL      string                 `json:"database_url"`
 	ArtifactRoot     string                 `json:"artifact_root"`
+	RepositoryRoot   string                 `json:"repository_root"`
 	ServiceActorID   string                 `json:"service_actor_id"`
 	MaxArtifactBytes int64                  `json:"max_artifact_bytes"`
 	MaxBodyBytes     int64                  `json:"max_body_bytes"`
@@ -104,7 +105,9 @@ func loadConfig(path string) (config, error) {
 		return config{}, errors.New("API listen address must be loopback")
 	}
 	if value.DatabaseURL == "" || !filepath.IsAbs(value.ArtifactRoot) ||
-		filepath.Clean(value.ArtifactRoot) != value.ArtifactRoot {
+		filepath.Clean(value.ArtifactRoot) != value.ArtifactRoot ||
+		!filepath.IsAbs(value.RepositoryRoot) ||
+		filepath.Clean(value.RepositoryRoot) != value.RepositoryRoot {
 		return config{}, errors.New("incomplete API configuration")
 	}
 	return value, nil
@@ -151,11 +154,18 @@ func run(ctx context.Context, value config) error {
 	if err != nil {
 		return err
 	}
+	workflowStore := workflow.NewStore(pool)
+	runIntake, err := controlapi.NewRunIntakeCoordinator(
+		pool, workflowStore, artifacts, value.RepositoryRoot,
+	)
+	if err != nil {
+		return err
+	}
 	handler, err := controlapi.New(controlapi.Config{
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
 		MaxBodyBytes:  value.MaxBodyBytes,
 		TrustedChecks: value.TrustedChecks,
-	}, workflow.NewStore(pool), runtime.NewLedger(pool), artifacts,
+	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
 	if err != nil {
 		return err

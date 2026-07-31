@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -33,8 +35,52 @@ type ArtifactWriter interface {
 }
 
 type RepositorySnapshot struct {
-	BaseCommit string
-	Entries    []*reasoningv1.RepositoryEntry
+	BaseCommit string                         `json:"base_commit"`
+	Entries    []*reasoningv1.RepositoryEntry `json:"entries"`
+}
+
+// DecodeRepositorySnapshot accepts only the deterministic intake snapshot
+// shape and verifies that it is bound to the requested base commit.
+func DecodeRepositorySnapshot(body []byte, baseCommit string) (RepositorySnapshot, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var snapshot RepositorySnapshot
+	if err := decoder.Decode(&snapshot); err != nil {
+		return RepositorySnapshot{}, fmt.Errorf("%w: decode repository map", ErrScope)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return RepositorySnapshot{}, fmt.Errorf("%w: repository map trailing content", ErrScope)
+	}
+	if err := snapshot.Validate(baseCommit); err != nil {
+		return RepositorySnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func (s RepositorySnapshot) Validate(baseCommit string) error {
+	if s.BaseCommit != baseCommit || len(s.BaseCommit) != 40 || len(s.Entries) == 0 {
+		return ErrScope
+	}
+	for _, value := range s.BaseCommit {
+		if !strings.ContainsRune("0123456789abcdef", value) {
+			return ErrScope
+		}
+	}
+	previous := ""
+	for _, entry := range s.Entries {
+		if entry == nil || entry.GetKind() != "blob" || !safeRepoPath(entry.GetPath()) ||
+			entry.GetPath() <= previous || len(entry.GetSha256()) != 64 {
+			return ErrScope
+		}
+		for _, value := range entry.GetSha256() {
+			if !strings.ContainsRune("0123456789abcdef", value) {
+				return ErrScope
+			}
+		}
+		previous = entry.GetPath()
+	}
+	return nil
 }
 
 type ContextLimits struct {
@@ -386,7 +432,11 @@ func SnapshotRepository(ctx context.Context, root, base string) (RepositorySnaps
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
-	return RepositorySnapshot{BaseCommit: commit, Entries: entries}, nil
+	snapshot := RepositorySnapshot{BaseCommit: commit, Entries: entries}
+	if err := snapshot.Validate(commit); err != nil {
+		return RepositorySnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 func BuildImplementationContext(

@@ -54,6 +54,29 @@ type fakeRuntime struct {
 	abandons  int
 }
 
+type fakeRunIntake struct {
+	workflow *fakeWorkflow
+	runtime  *fakeRuntime
+	err      error
+}
+
+func (f *fakeRunIntake) Accept(
+	_ context.Context, request RunIntakeRequest,
+) (*runtime.IdempotencyResult, error) {
+	f.runtime.begins++
+	if f.err != nil {
+		f.runtime.abandons++
+		return nil, f.err
+	}
+	f.workflow.runCommands = append(f.workflow.runCommands, request.Command)
+	f.runtime.completes++
+	result := workflow.CommandResult{
+		AggregateID: request.Command.ID, State: string(workflow.RunStateDraft), Revision: 1,
+	}
+	response, _ := json.Marshal(result)
+	return &runtime.IdempotencyResult{StatusCode: http.StatusCreated, Response: response}, nil
+}
+
 func (f *fakeRuntime) BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error) {
 	f.begins++
 	return &runtime.IdempotencyResult{FencingToken: 1}, nil
@@ -145,7 +168,9 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 		}},
 		MaxBodyBytes:  512,
 		TrustedChecks: []string{"make-check-v1"},
-	}, workflowStore, runtimeLedger, fakeArtifacts{}, &fakeBindings{},
+	}, workflowStore, runtimeLedger, &fakeRunIntake{
+		workflow: workflowStore, runtime: runtimeLedger,
+	}, fakeArtifacts{}, &fakeBindings{},
 		fakeApproval{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -203,33 +228,15 @@ func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	}
 }
 
-func TestCreateRunAbandonsRecoverablePartialFailures(t *testing.T) {
+func TestCreateRunReportsRecoverableIntakeFailure(t *testing.T) {
 	body := `{"run_id":"` + uuid.NewString() +
 		`","base_commit":"0123456789012345678901234567890123456789",` +
 		`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`
-	tests := []struct {
-		name             string
-		configure        func(*Server)
-		wantRunCommands  int
-		wantBindingCount int
-	}{
-		{
-			name: "artifact",
-			configure: func(server *Server) {
-				server.artifacts = fakeArtifacts{putErr: errors.New("artifact unavailable")}
-			},
-		},
-		{
-			name: "binding", wantRunCommands: 1,
-			configure: func(server *Server) {
-				server.bindings.(*fakeBindings).err = errors.New("binding unavailable")
-			},
-		},
-	}
+	tests := []string{"artifact", "binding", "transaction"}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
+		t.Run(test, func(t *testing.T) {
 			server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
-			test.configure(server)
+			server.intake.(*fakeRunIntake).err = errors.New(test + " unavailable")
 			request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
 			request.Header.Set("Authorization", "Bearer "+token)
 			request.Header.Set("Idempotency-Key", uuid.NewString())
@@ -237,12 +244,10 @@ func TestCreateRunAbandonsRecoverablePartialFailures(t *testing.T) {
 			server.Handler().ServeHTTP(response, request)
 			if response.Code != http.StatusInternalServerError ||
 				runtimeLedger.abandons != 1 || runtimeLedger.completes != 0 ||
-				len(workflowStore.runCommands) != test.wantRunCommands ||
-				len(server.bindings.(*fakeBindings).runs) != test.wantBindingCount {
+				len(workflowStore.runCommands) != 0 {
 				t.Fatalf(
-					"status=%d runtime=%#v commands=%d bindings=%d",
+					"status=%d runtime=%#v commands=%d",
 					response.Code, runtimeLedger, len(workflowStore.runCommands),
-					len(server.bindings.(*fakeBindings).runs),
 				)
 			}
 		})

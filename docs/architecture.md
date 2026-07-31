@@ -163,3 +163,26 @@ built from raw objects at the approved base commit, never mutable worktree
 contents. The first slice accepts one dependency-free task and pauses at one
 composite human approval. Publication remains draft-only and
 configuration-gated; an unconfigured run stays `MERGE_READY`.
+
+## Beta Slice 3 atomic run intake
+
+`POST /v1/runs` has a dedicated application coordinator in `api-service`.
+Before opening its acceptance transaction, the coordinator resolves the exact
+requested commit from the required clean absolute `repository_root`, builds a
+deterministically ordered map of committed blobs, and stages both the intake
+body and repository map in CAS. Staged but unbound CAS objects are harmless if
+acceptance fails.
+
+One serializable PostgreSQL transaction then locks and revalidates the API
+idempotency reservation and fencing generation, persists the workflow command,
+initial event and `DRAFT` snapshot, inserts the complete immutable runtime
+binding, and stores the exact HTTP `201` response. It commits once. Every
+pre-commit error exposes no run; an ambiguous or post-commit response failure is
+recovered from the stored response without repeating Git, CAS, workflow, job,
+or provider work.
+
+Stage start no longer snapshots the repository or checkpoints a repository map.
+It loads the intake-bound CAS object, verifies its digest, strict shape, sorted
+blob entries, and exact base-commit binding, then performs the existing run and
+task lease transitions. Nullable repository-map columns remain migration-only
+compatibility: an incomplete legacy binding fails closed.
