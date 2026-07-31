@@ -1,0 +1,87 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Beta Slice 2: Live Full-Process Gate
+
+## Summary
+
+Implement Slice 2 as the single branch `beta/live-process-gate`. It will separate credential-free runtime recovery evidence from the credentialed MiniMax full lifecycle, remove all remaining mixed fake/live E2E behavior, and preserve loopback-only GitHub publication.
+
+Before implementation, leave the merged local stack, fast-forward `main`, then run:
+
+```bash
+gh stack unstack --local
+git switch main
+git pull --ff-only origin main
+gh stack init --base main beta/live-process-gate
+gh stack view --json
+```
+
+Preserve untracked `.codex/`, `.entire/`, and `.opencode/`. Stack initialization was not executed during Plan Mode.
+
+## Implementation Changes
+
+- Replace the Make targets:
+
+  - `make runtime-e2e`: credential-free PostgreSQL/CAS/reconciler recovery test using pre-existing immutable artifacts; it must make no reasoning-provider call.
+  - `make beta-live-e2e`: require `ANTHROPIC_API_KEY`, build both service binaries and worker images, start disposable PostgreSQL, and run the complete live process test.
+  - Remove `minimax-live-e2e` and `MINIMAX_LIVE_E2E`.
+
+- Refactor the process fixture into an unconditional beta-live scenario:
+
+  - Remove `fakeProposals`, proposal-path configuration, fake evidence branches, and the `live` parameter.
+  - Configure only `minimax_anthropic`, `https://api.minimax.io/anthropic`, `MiniMax-M2.7`, and `ANTHROPIC_API_KEY`.
+  - Retain the disposable Git repository, real execution and verification containers, and loopback GitHub server.
+  - Keep task-specific implementation/review prompts that demand one in-scope `add.go` correction and evidence-based review.
+
+- Strengthen successful-run evidence:
+
+  - Require exactly one accepted implementation row and one accepted review row, distinct request identities, one provider request each, non-empty request IDs and token usage, and integrity-valid proposal/raw-response artifacts.
+  - Require a non-base candidate changing only `add.go`, passing independent `make check`, with exactly one verification, review, human approval, draft publication, remote harness branch, and open draft PR bound to the expected base and candidate.
+  - Restart the workflow service before approval and restart the API before replaying the same approval request with the same idempotency key. The replay must return the original response without new provider calls, approval rows, pushes, or PR creation.
+  - Scan configuration, prompts, process logs, CAS contents, PostgreSQL export, and reachable fixture Git content for the provider secret.
+
+- Add deterministic terminal-path coverage through consumer-owned test ports:
+
+  - Provider timeout/transport failure exhausts bounded retries, records one failed stage artifact, and enqueues no successor.
+  - Malformed provider JSON and an empty-change proposal become `SCHEMA_INVALID` proposal rejection with no execution.
+  - Failed verification moves the task to rework and never invokes review.
+  - `rework_required` review moves the task to rework and never exposes approval or publication.
+  - Production-adapter loopback tests continue to own provider protocol/error translation; no provider-output substitute is added to shipped composition.
+
+- Update active documentation and add a decision-log entry distinguishing deterministic infrastructure evidence, provider smoke, and the credentialed beta gate. Remove the historical mixed-fixture warnings only after the new targets work; do not rewrite historical completion facts.
+
+## Interfaces and Compatibility
+
+- No Protobuf, manifest-v1, HTTP API, database migration, workflow-authority, or provider-selection changes.
+- `beta-live-e2e` is the only new public developer command.
+- `runtime-e2e` changes meaning to deterministic infrastructure/recovery evidence and must never be presented as beta lifecycle completion.
+- GitHub remains loopback-only in Slice 2; real GitHub publication remains Slice 5.
+
+## Test Plan
+
+Run credential-free gates first:
+
+```bash
+uv sync --frozen
+make generate-check
+make check
+make integration-test
+make runtime-e2e
+go test -race ./internal/orchestration ./internal/runtime ./internal/stage
+git diff --check
+```
+
+Then load `ANTHROPIC_API_KEY` from a non-logging source and actually run:
+
+```bash
+make beta-live-e2e
+```
+
+A missing credential, skipped test, provider failure, extra/missing invocation, missing evidence, replayed side effect, or secret leak fails acceptance. `make provider-smoke` cannot substitute for this gate.
+
+## Assumptions
+
+- Slice 1 and the beta plan are merged; local `main` must be refreshed before initialization.
+- Slice 2 remains one independently buildable stack branch as prescribed by the beta plan.
+- The live gate is intentionally excluded from ordinary credential-free CI.
+- The current focused baseline passes: runtime, orchestration, and stage package tests plus `git diff --check`.
