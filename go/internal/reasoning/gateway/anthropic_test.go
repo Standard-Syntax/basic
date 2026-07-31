@@ -125,6 +125,15 @@ func implementationProjectionJSON(
 		Assumptions:               proposal.GetAssumptions(),
 		UnresolvedQuestions:       proposal.GetUnresolvedQuestions(),
 	}
+	if scope := proposal.GetScopeChangeRequest(); scope != nil {
+		value.ScopeChangeRequest = &scopeChangeProjection{
+			Summary:                         scope.GetSummary(),
+			RequestedReadablePaths:          scope.GetRequestedReadablePaths(),
+			RequestedWritablePaths:          scope.GetRequestedWritablePaths(),
+			RequestedAcceptanceCriterionIDs: scope.GetRequestedAcceptanceCriterionIds(),
+			RequestedCheckIDs:               scope.GetRequestedCheckIds(),
+		}
+	}
 	for _, change := range proposal.GetChanges() {
 		value.Changes = append(value.Changes, fileChangeProjection{
 			Path: change.GetPath(),

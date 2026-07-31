@@ -13,10 +13,15 @@ for pattern in "$removed_pattern" "$alternate_branch_pattern"; do
   if rg -n \
     --glob '*.go' \
     --glob '!**/*_test.go' \
-    --glob '!**/fake*.go' \
     "$pattern" \
     "${production_paths[@]}"; then
     status=1
+  else
+    rc=$?
+    if ((rc > 1)); then
+      echo "unable to scan shipped provider composition (rg exit $rc)" >&2
+      exit "$rc"
+    fi
   fi
 done
 

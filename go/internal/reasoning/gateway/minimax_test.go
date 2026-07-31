@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -97,7 +98,13 @@ func TestMiniMaxAdapterReadsChangedEnvironmentCredentialPerInvocation(t *testing
 	}
 	agentManifest.Prompt.ArtifactURI = prompt.URI
 	agentManifest.Prompt.SHA256 = prompt.SHA256
-	provider := newLoopbackProvider(t, implementationProjectionJSON(t, gatewayProposal(t)))
+	proposal := gatewayProposal(t)
+	proposal.ScopeChangeRequest = &reasoningv1.ScopeChangeRequest{
+		Summary:                "request bounded scope expansion",
+		RequestedWritablePaths: []string{"go/gen"},
+		RequestedCheckIds:      []string{"make-check-v1"},
+	}
+	provider := newLoopbackProvider(t, implementationProjectionJSON(t, proposal))
 	adapter, err := NewAnthropicImplementationAdapter(
 		EnvironmentCredentialSource{Name: MiniMaxAPIKeyEnv},
 		MiniMaxModels(), store,
@@ -110,12 +117,24 @@ func TestMiniMaxAdapterReadsChangedEnvironmentCredentialPerInvocation(t *testing
 		t.Fatal(err)
 	}
 	t.Setenv(MiniMaxAPIKeyEnv, "first-invocation-key")
-	if _, err := adapter.ProposeImplementation(t.Context(), agentManifest, request); err != nil {
+	first, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(MiniMaxAPIKeyEnv, "second-invocation-key")
-	if _, err := adapter.ProposeImplementation(t.Context(), agentManifest, request); err != nil {
+	second, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)
+	if err != nil {
 		t.Fatal(err)
+	}
+	for _, result := range []AdapterResult{first, second} {
+		scope := result.Proposal.GetScopeChangeRequest()
+		if scope.GetSummary() != proposal.GetScopeChangeRequest().GetSummary() ||
+			len(scope.GetRequestedWritablePaths()) != 1 ||
+			scope.GetRequestedWritablePaths()[0] != "go/gen" ||
+			len(scope.GetRequestedCheckIds()) != 1 ||
+			scope.GetRequestedCheckIds()[0] != "make-check-v1" {
+			t.Fatalf("loopback scope change = %#v", scope)
+		}
 	}
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
