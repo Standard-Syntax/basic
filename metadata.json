@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWJ5X4A96YND6KQ391V16J8",
+  "strategy": "manual-commit",
+  "branch": "beta/repository-preflight",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/cmd/workflow-service/main.go",
+    "go/cmd/workflow-service/main_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25734,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2241024,
+    "output_tokens": 2535,
+    "api_call_count": 18
+  }
+}
