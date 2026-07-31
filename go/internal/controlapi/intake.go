@@ -165,15 +165,7 @@ func (c *RunIntakeCoordinator) commitIntake(
 		return nil, false, err
 	}
 	defer func() {
-		if err == nil || commitAttempted {
-			return
-		}
-		cleanupCtx, cancel := detachedCleanupContext(ctx)
-		defer cancel()
-		if rollbackErr := tx.Rollback(cleanupCtx); rollbackErr != nil &&
-			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			err = errors.Join(err, rollbackErr)
-		}
+		err = rollbackIntake(ctx, tx, commitAttempted, err)
 	}()
 	if err := lockIntakeReservation(ctx, tx, request.Idempotency, fence); err != nil {
 		return nil, false, err
@@ -218,6 +210,19 @@ func (c *RunIntakeCoordinator) commitIntake(
 		return nil, true, fmt.Errorf("commit run intake: %w", err)
 	}
 	return response, true, nil
+}
+
+func rollbackIntake(ctx context.Context, tx pgx.Tx, commitAttempted bool, cause error) error {
+	if cause == nil || commitAttempted {
+		return cause
+	}
+	cleanupCtx, cancel := detachedCleanupContext(ctx)
+	defer cancel()
+	rollbackErr := tx.Rollback(cleanupCtx)
+	if rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
+		return errors.Join(cause, rollbackErr)
+	}
+	return cause
 }
 
 func (c *RunIntakeCoordinator) abandonReservation(
