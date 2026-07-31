@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,32 @@ func TestMiniMaxCredentialReadsEnvironmentEveryInvocation(t *testing.T) {
 	}
 	if _, err := source.Credential(context.Background()); !errors.Is(err, ErrCredentialUnavailable) {
 		t.Fatalf("missing credential = %v", err)
+	}
+}
+
+func TestMiniMaxFileCredentialRequiresOwnerOnlyFileAndRereadsRotation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "minimax")
+	if err := os.WriteFile(path, []byte("first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := FileCredentialSource{Path: path}
+	if value, err := source.Credential(t.Context()); err != nil || value != "first" {
+		t.Fatalf("first credential = %q, %v", value, err)
+	}
+	if err := os.WriteFile(path, []byte("second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := source.Credential(t.Context()); err != nil || value != "second" {
+		t.Fatalf("rotated credential = %q, %v", value, err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil { // skipcq: GSC-G302 -- verifies permissive credentials fail closed
+		t.Fatal(err)
+	}
+	if _, err := source.Credential(t.Context()); !errors.Is(err, ErrCredentialUnavailable) {
+		t.Fatalf("permissive credential = %v", err)
+	}
+	if _, err := (FileCredentialSource{Path: "relative"}).Credential(t.Context()); !errors.Is(err, ErrCredentialUnavailable) {
+		t.Fatalf("relative credential = %v", err)
 	}
 }
 

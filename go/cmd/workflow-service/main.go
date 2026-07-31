@@ -57,6 +57,7 @@ type config struct {
 	ContextMaxBytes            int64                  `json:"context_max_bytes"`
 	TaskLeaseDuration          time.Duration          `json:"task_lease_duration_nanoseconds"`
 	ClaimTTL                   time.Duration          `json:"claim_ttl_nanoseconds"`
+	ShutdownDrainTimeout       time.Duration          `json:"shutdown_drain_timeout_nanoseconds"`
 	Provider                   gateway.ProviderConfig `json:"provider"`
 	Policy                     beta.Policy            `json:"beta_policy"`
 }
@@ -182,12 +183,20 @@ func applyConfigDefaults(value *config) {
 	if value.ClaimTTL == 0 {
 		value.ClaimTTL = 30 * time.Second
 	}
+	if value.ShutdownDrainTimeout == 0 {
+		value.ShutdownDrainTimeout = 60 * time.Second
+	}
 }
 
 func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	ctx context.Context, value *config,
 ) error {
-	credentials := gateway.EnvironmentCredentialSource{Name: value.Provider.APIKeyEnv}
+	var credentials gateway.CredentialSource
+	if value.Provider.APIKeyFile != "" {
+		credentials = gateway.FileCredentialSource{Path: value.Provider.APIKeyFile}
+	} else {
+		credentials = gateway.EnvironmentCredentialSource{Name: value.Provider.APIKeyEnv}
+	}
 	if _, err := credentials.Credential(ctx); err != nil {
 		return fmt.Errorf("provider credential unavailable: %w", err)
 	}
@@ -321,7 +330,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		return err
 	}
 	slog.Info("workflow service ready", "owner_id", value.OwnerID)
-	return reconciler.Run(ctx)
+	return reconciler.RunWithDrain(ctx, value.ShutdownDrainTimeout)
 }
 
 type runtimePorts struct {

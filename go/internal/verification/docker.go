@@ -6,34 +6,37 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Standard-Syntax/basic/go/internal/dockerengine"
 	"github.com/google/uuid"
 )
 
 var imageIDPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 type DockerCheckExecutor struct {
-	Image string
-	UID   int
-	GID   int
+	Image  string
+	UID    int
+	GID    int
+	Engine dockerengine.Engine
 }
 
 func (d DockerCheckExecutor) ImageID(ctx context.Context) (string, error) {
 	if d.Image == "" || d.UID <= 0 || d.GID <= 0 {
 		return "", errors.New("verification image and non-root UID/GID are required")
 	}
-	output, err := exec.CommandContext(
-		ctx, "docker", "image", "inspect", "--format", "{{.Id}}", d.Image,
-	).CombinedOutput()
+	engine, closeEngine, err := d.engine()
 	if err != nil {
-		return "", fmt.Errorf("inspect verification image: %w: %s", err, strings.TrimSpace(string(output)))
+		return "", err
 	}
-	imageID := strings.TrimSpace(string(output))
+	defer closeEngine()
+	imageID, err := engine.ImageID(ctx, d.Image)
+	if err != nil {
+		return "", fmt.Errorf("inspect verification image: %w", err)
+	}
 	if !imageIDPattern.MatchString(imageID) {
 		return "", fmt.Errorf("%w: image identity", ErrWorkerResponse)
 	}
@@ -57,29 +60,26 @@ func (d DockerCheckExecutor) Run(
 	}
 	name := "harness-verification-" + uuid.NewString()
 	user := strconv.Itoa(d.UID) + ":" + strconv.Itoa(d.GID)
-	arguments := []string{
-		"run", "--rm", "-i", "--name", name, "--network", "none", "--read-only",
-		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--cpus", "1", "--memory", "2g", "--pids-limit", "256", "--user", user,
-		"--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=1g,mode=1777",
-		"--env", "HOME=/tmp/home", "--env", "TMPDIR=/tmp",
-		"--env", "GOCACHE=/tmp/go-build", "--env", "UV_CACHE_DIR=/tmp/uv-cache",
-		"--env", "UV_OFFLINE=1", "--env", "UV_NO_SYNC=1",
-		"--env", "UV_PROJECT_ENVIRONMENT=/opt/venv",
-		"--env", "PYTHONPATH=/workspace/python/src",
-		"--env", "PATH=/opt/bin:/opt/venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
-		"--mount", "type=bind,src=" + workspace + ",dst=/workspace",
-		"--workdir", "/workspace",
-		imageID,
-	}
-	command := exec.CommandContext(ctx, "docker", arguments...)
-	command.Stdin = bytes.NewReader(payload)
 	var output boundedBuffer
 	output.limit = 2*DefaultMaxOutputBytes + 64*1024
-	command.Stdout, command.Stderr = &output, &output
-	if err := command.Run(); err != nil {
+	engine, closeEngine, err := d.engine()
+	if err != nil {
+		return ExecutionMeasurement{}, err
+	}
+	defer closeEngine()
+	err = engine.Run(ctx, dockerengine.RunRequest{
+		Name: name, Image: imageID, User: user, WorkingDir: "/workspace",
+		Env: []string{"HOME=/tmp/home", "TMPDIR=/tmp", "GOCACHE=/tmp/go-build",
+			"UV_CACHE_DIR=/tmp/uv-cache", "UV_OFFLINE=1", "UV_NO_SYNC=1",
+			"UV_PROJECT_ENVIRONMENT=/opt/venv", "PYTHONPATH=/workspace/python/src",
+			"PATH=/opt/bin:/opt/venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"},
+		Mounts: []dockerengine.Mount{{Source: workspace, Target: "/workspace"}},
+		Tmpfs:  map[string]string{"/tmp": "rw,exec,nosuid,nodev,size=2g,mode=1777"},
+		Memory: 3 << 30, Pids: 256,
+	}, bytes.NewReader(payload), &output)
+	if err != nil {
 		if ctx.Err() != nil {
-			removeVerificationContainer(name)
+			removeVerificationContainer(engine, name)
 			return ExecutionMeasurement{}, ctx.Err()
 		}
 		return ExecutionMeasurement{}, fmt.Errorf(
@@ -109,10 +109,21 @@ func (d DockerCheckExecutor) Run(
 	}, nil
 }
 
-func removeVerificationContainer(name string) {
+func (d DockerCheckExecutor) engine() (dockerengine.Engine, func(), error) {
+	if d.Engine != nil {
+		return d.Engine, func() {}, nil
+	}
+	client, err := dockerengine.NewFromEnvironment()
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return client, func() { _ = client.Close() }, nil
+}
+
+func removeVerificationContainer(engine dockerengine.Engine, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(ctx, "docker", "rm", "-f", name).Run()
+	_ = engine.Remove(ctx, name)
 }
 
 // WorkerRequest is the verification-worker input protocol.
