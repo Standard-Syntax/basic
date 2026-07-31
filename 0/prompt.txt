@@ -1,0 +1,93 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Beta Slice 5: Real GitHub Canary Publication
+
+## Summary
+
+Implement Slice 5 as one canonical stacked PR, `beta/github-canary`, rooted on refreshed `main`. It will run the complete MiniMax lifecycle against a dedicated `Standard-Syntax/basic-beta-canary` repository and leave one real, verified draft PR for operator inspection.
+
+Before implementation:
+
+```bash
+gh stack unstack --local
+git switch main
+git fetch origin main
+git merge --ff-only origin/main
+gh stack init --base main beta/github-canary
+gh stack view --json
+```
+
+Preserve `.codex/`, `.entire/`, and `.opencode/`.
+
+## Implementation Changes
+
+- Reuse the existing strict `BETA_CONFIG` preflight shape for the canary gate, extracting shared decoding where necessary. Require:
+
+  - dedicated repository `Standard-Syntax/basic-beta-canary`;
+  - base branch `main`;
+  - canonical fixture files `add.go`, `add_test.go`, and `Makefile`;
+  - only `add.go` writable;
+  - repository-owned `make-check-v1`;
+  - pinned execution and verification image digests;
+  - `ANTHROPIC_API_KEY`;
+  - an owner-only `0600` GitHub REST token file;
+  - separately provisioned least-privilege Git push authentication.
+
+- Add `make beta-canary-e2e BETA_CONFIG=/absolute/path/to/canary.json`. It must:
+
+  - run production preflight first;
+  - build and start the real API/workflow binaries and isolated workers;
+  - create unique run, task, approval, publication, and `harness/canary/<run-id>` identities;
+  - invoke MiniMax-M2.7 exactly once for implementation and once for review;
+  - change only `add.go` and pass the repository-owned check;
+  - publish through `GitCommandPublisher` and `GitHubRESTClient` to `https://api.github.com`;
+  - refetch the real PR and verify open/draft state, exact base branch/base commit, head branch/candidate commit, verified diff, publication artifact, and URL;
+  - restart the API and replay approval, proving unchanged response, exactly one named remote branch and PR, and no additional provider invocation;
+  - emit secret-free JSON containing the run ID, publication ID, candidate commit, artifact reference, PR URL, and exact cleanup command.
+
+- Extend concrete publication clients with inspection and cleanup operations without adding close/delete authority to the runtime `PullRequestClient` or `GitPublisher` interfaces:
+
+  - inspect a PR by exact owner/repository/number;
+  - close only an open draft whose marker, base, head, and candidate match;
+  - delete only the exact named branch when its remote head still equals the recorded candidate;
+  - treat already-closed/already-deleted matching state as idempotent success and fail closed on every mismatch.
+
+- Add `make beta-canary-cleanup BETA_CONFIG=... CANARY_PUBLICATION_ID=...`. A separate command loads the completed immutable publication record and artifact, validates them against the configured canary policy, closes that one draft, and deletes that one exact branch. Cleanup never uses prefixes or broad patterns and is not part of successful canary acceptance.
+
+- Document the canary provisioning, credential scopes, exact run and cleanup commands, evidence interpretation, recovery from partial cleanup, and the continuing prohibition on merge/deploy. Record the dedicated-canary and separate-cleanup authority decision in the decision log.
+
+## Tests and Acceptance
+
+- Unit and loopback tests cover strict shared configuration, unsafe credentials, PR inspection/closure mismatches, exact branch deletion, partial cleanup replay, and absence of merge authority.
+- Bare-remote tests prove exact-SHA deletion cannot remove a changed branch.
+- The existing loopback `beta-live-e2e` remains unchanged and green.
+- Required gates:
+
+```bash
+make generate-check
+make check
+make integration-test
+make beta-live-e2e
+make beta-canary-e2e BETA_CONFIG=/absolute/path/to/canary.json
+git diff --check
+```
+
+- The two credentialed gates count only if actually executed successfully; missing credentials or an unprovisioned canary repository are reported as pending, never as passing.
+- Scan process logs, temporary configuration, CAS, PostgreSQL evidence, and reachable Git objects for both provider and GitHub secrets.
+
+## Stack Publication and Assumptions
+
+- Use several focused Conventional Commits within the single canonical Slice 5 branch, then publish the ready PR with:
+
+```bash
+gh stack submit --auto --open --remote origin
+gh stack view --json
+```
+
+- Edit the generated PR title/body to `feat(beta): add real GitHub canary publication`, including literal validation results and any credentialed gate still pending.
+- The dedicated canary repository is an operator-provisioned prerequisite; this implementation does not create repositories or credentials.
+- No Protobuf, manifest-v1, reasoning validator, workflow authority, automatic merge, deployment, or production packaging contract changes are included.
+
+---
+
+please read the review comments on pull requests and address them while staying inline with acceptance criteria
