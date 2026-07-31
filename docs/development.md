@@ -279,3 +279,8 @@ owner-controlled, and non-overlapping. The command verifies Git/remote-base
 identity, empty harness worktree roots, exact Docker image IDs, already-applied
 migrations, the MiniMax environment credential, and a regular `0600`
 publication credential file. It never applies migrations or creates resources.
+
+For the separately credentialed real GitHub gate and its exact cleanup command,
+follow [Real GitHub beta canary](beta-canary.md). `make beta-live-e2e` remains the
+loopback lifecycle gate; only a successful `make beta-canary-e2e
+BETA_CONFIG=/absolute/path/to/canary.json` proves real GitHub publication.
