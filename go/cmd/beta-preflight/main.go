@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,15 +29,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 )
 
-type config struct {
-	DatabaseURL                   string      `json:"database_url"`
-	ArtifactRoot                  string      `json:"artifact_root"`
-	WorktreeRoot                  string      `json:"worktree_root"`
-	VerificationWorkspaceRoot     string      `json:"verification_workspace_root"`
-	ProviderCredentialEnvironment string      `json:"provider_credential_environment"`
-	PublicationCredentialFile     string      `json:"publication_credential_file"`
-	Policy                        beta.Policy `json:"beta_policy"`
-}
+type config = beta.Config
 
 type report struct {
 	Status            string   `json:"status"`
@@ -56,15 +47,19 @@ func main() { os.Exit(mainExit()) }
 
 func mainExit() int {
 	path := flag.String("config", "", "absolute path to strict beta configuration")
+	canary := flag.Bool("canary", false, "require the dedicated GitHub canary policy")
 	flag.Parse()
 	value, err := loadConfig(*path)
+	if err == nil && *canary {
+		err = value.ValidateCanary()
+	}
 	if err != nil {
 		emit(report{Status: "invalid", FailureCodes: []string{"CONFIG_INVALID"}})
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	result := check(ctx, value)
+	result := check(ctx, value, *canary)
 	emit(result)
 	if result.Status != "ready" {
 		return 1
@@ -73,48 +68,35 @@ func mainExit() int {
 }
 
 func loadConfig(name string) (config, error) {
-	if !cleanAbsolute(name) {
-		return config{}, errors.New("config path must be clean and absolute")
-	}
-	file, err := os.Open(name)
-	if err != nil {
-		return config{}, err
-	}
-	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
-	decoder.DisallowUnknownFields()
-	var value config
-	if err := decoder.Decode(&value); err != nil {
-		return config{}, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return config{}, errors.New("trailing configuration")
-	}
-	if value.DatabaseURL == "" || value.ProviderCredentialEnvironment == "" ||
-		!cleanAbsolute(value.ArtifactRoot) || !cleanAbsolute(value.WorktreeRoot) ||
-		!cleanAbsolute(value.VerificationWorkspaceRoot) || !cleanAbsolute(value.PublicationCredentialFile) {
-		return config{}, errors.New("incomplete preflight configuration")
-	}
-	if err := value.Policy.Validate(); err != nil {
-		return config{}, err
-	}
-	return value, nil
+	return beta.LoadConfig(name)
 }
 
-func check(ctx context.Context, value config) report {
+func check(ctx context.Context, value config, canary bool) report {
 	_, policyDigest, _ := value.Policy.Canonical()
 	result := report{Status: "ready", RepositoryOwner: value.Policy.Repository.Owner,
 		RepositoryName: value.Policy.Repository.Name, BaseCommit: value.Policy.Repository.BaseCommit,
 		PolicyDigest: policyDigest, ExecutionImage: value.Policy.Images.Execution,
 		VerificationImage: value.Policy.Images.Verification, FailureCodes: []string{}}
 	failures := map[string]bool{}
+	gitCredential := ""
+	if value.GitPushCredentialFile != "" {
+		if err := checkCredentialFile(value.GitPushCredentialFile); err != nil {
+			failures["GIT_PUSH_CREDENTIAL_INVALID"] = true
+		} else {
+			gitCredential = value.GitPushCredentialFile
+		}
+	}
 	paths := []string{value.Policy.Repository.Root, value.ArtifactRoot, value.WorktreeRoot, value.VerificationWorkspaceRoot}
 	if err := checkRoots(paths); err != nil {
 		failures["ROOT_UNSAFE"] = true
 	}
-	if err := checkGit(ctx, value.Policy, value.WorktreeRoot); err != nil {
+	if err := checkGit(ctx, value.Policy, value.WorktreeRoot, gitCredential); err != nil {
 		failures["REPOSITORY_MISMATCH"] = true
+	}
+	if canary {
+		if err := checkCanaryFixture(ctx, value.Policy); err != nil {
+			failures["CANARY_FIXTURE_MISMATCH"] = true
+		}
 	}
 	if err := checkDocker(ctx, value.Policy.Images.Execution); err != nil {
 		failures["EXECUTION_IMAGE_MISMATCH"] = true
@@ -142,6 +124,22 @@ func check(ctx context.Context, value config) report {
 		result.Status = "not_ready"
 	}
 	return result
+}
+
+func checkCanaryFixture(ctx context.Context, policy beta.Policy) error {
+	for _, name := range []string{"add.go", "add_test.go", "Makefile"} {
+		entry, err := command(ctx, "git", "-C", policy.Repository.Root, "ls-tree",
+			policy.Repository.BaseCommit, "--", name)
+		if err != nil || !strings.HasPrefix(entry, "100644 blob ") || !strings.HasSuffix(entry, "\t"+name) {
+			return errors.New("canonical canary fixture file is missing")
+		}
+	}
+	makefile, err := command(ctx, "git", "-C", policy.Repository.Root, "show",
+		policy.Repository.BaseCommit+":Makefile")
+	if err != nil || !strings.Contains(makefile, "check:") {
+		return errors.New("canary Makefile does not own the trusted check")
+	}
+	return nil
 }
 
 func checkRoots(paths []string) error {
@@ -203,13 +201,19 @@ func beneathOrEqual(root, candidate string) bool {
 		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
 }
 
-func checkGit(ctx context.Context, policy beta.Policy, worktreeRoot string) error {
+func checkGit(ctx context.Context, policy beta.Policy, worktreeRoot, gitCredential string) error {
 	root, err := command(ctx, "git", "-C", policy.Repository.Root, "rev-parse", "--show-toplevel")
 	if err != nil || root != policy.Repository.Root {
 		return errors.New("git root mismatch")
 	}
-	if err := beta.VerifyRemoteBase(ctx, policy); err != nil {
-		return err
+	var remoteErr error
+	if gitCredential == "" {
+		remoteErr = beta.VerifyRemoteBase(ctx, policy)
+	} else {
+		remoteErr = beta.VerifyRemoteBaseWithSSHKey(ctx, policy, gitCredential)
+	}
+	if remoteErr != nil {
+		return remoteErr
 	}
 	status, err := command(ctx, "git", "-C", policy.Repository.Root, "status", "--porcelain=v1", "--untracked-files=no")
 	if err != nil || status != "" {
@@ -246,6 +250,10 @@ func checkCredentialFile(name string) error {
 	info, err := os.Lstat(name)
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 		return errors.New("invalid credential file")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return errors.New("credential file is not owner-only")
 	}
 	body, err := os.ReadFile(name)
 	if err != nil || len(bytes.TrimSpace(body)) == 0 {
@@ -284,7 +292,6 @@ func beneath(value, root string) bool {
 	rel, err := filepath.Rel(root, value)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
-func cleanAbsolute(value string) bool { return filepath.IsAbs(value) && filepath.Clean(value) == value }
 func emit(value report) {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)

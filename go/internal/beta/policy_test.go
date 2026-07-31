@@ -3,6 +3,8 @@ package beta
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -13,6 +15,48 @@ func validPolicy() Policy {
 		Paths:         Paths{Readable: []string{"docs", "go"}, Writable: []string{"go"}, Prohibited: []string{"secrets"}},
 		TrustedChecks: []string{"make-check-v1"}, Limits: Limits{MaximumTasks: 1, MaximumChangedFiles: 10, MaximumFileBytes: 1024, MaximumTotalBytes: 4096, ExecutionConcurrency: 1, VerificationConcurrency: 1},
 		Images: Images{Execution: "sha256:" + strings.Repeat("b", 64), Verification: "sha256:" + strings.Repeat("c", 64)}}
+}
+
+func TestLoadConfigIsStrictAndCanaryPolicyIsClosed(t *testing.T) {
+	root := t.TempDir()
+	policy := validPolicy()
+	policy.Repository = Repository{Owner: CanaryOwner, Name: CanaryRepository,
+		Root: filepath.Join(root, "repo"), Remote: "origin",
+		RemoteURL:  "git@github.com:Standard-Syntax/basic-beta-canary.git",
+		BaseBranch: CanaryBaseBranch, BaseCommit: strings.Repeat("a", 40)}
+	policy.Paths = Paths{Readable: []string{"Makefile", "add.go", "add_test.go"},
+		Writable: []string{"add.go"}, Prohibited: []string{"Makefile", "add_test.go"}}
+	policy.TrustedChecks = []string{"make-check-v1"}
+	policy.Limits.MaximumChangedFiles = 1
+	value := Config{DatabaseURL: "postgres://example.invalid/database",
+		ArtifactRoot: filepath.Join(root, "artifacts"), WorktreeRoot: filepath.Join(root, "worktrees"),
+		VerificationWorkspaceRoot:     filepath.Join(root, "verification"),
+		ProviderCredentialEnvironment: "ANTHROPIC_API_KEY",
+		PublicationCredentialFile:     filepath.Join(root, "github-token"),
+		GitPushCredentialFile:         filepath.Join(root, "git-key"), Policy: policy}
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(root, "canary.json")
+	if err := os.WriteFile(name, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(name)
+	if err != nil || loaded.ValidateCanary() != nil {
+		t.Fatalf("canary config rejected: load=%v policy=%v", err, loaded.ValidateCanary())
+	}
+	loaded.Policy.Paths.Readable = append(loaded.Policy.Paths.Readable, "docs")
+	if err := loaded.ValidateCanary(); err == nil {
+		t.Fatal("widened canary policy accepted")
+	}
+	body = append(body[:len(body)-1], []byte(`,"github_token":"secret"}`)...)
+	if err := os.WriteFile(name, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(name); err == nil {
+		t.Fatal("unknown secret-bearing field accepted")
+	}
 }
 
 func TestPolicyCanonicalDigestIsStable(t *testing.T) {

@@ -7,19 +7,50 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 var (
-	commitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
-	branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
+	commitPattern         = regexp.MustCompile(`^[a-f0-9]{40}$`)
+	branchPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`)
+	credentialPathPattern = regexp.MustCompile(`^/[A-Za-z0-9_./-]+$`)
 )
 
 type GitCommandPublisher struct {
 	root       string
 	remote     string
 	baseBranch string
+	sshKeyFile string
+}
+
+// NewAuthenticatedGitCommandPublisher binds Git pushes to one explicitly
+// mounted owner-only SSH key. The legacy constructor remains for loopback and
+// non-canary callers that provide authentication outside this process.
+func NewAuthenticatedGitCommandPublisher(
+	root, remote, baseBranch, sshKeyFile string,
+) (*GitCommandPublisher, error) {
+	publisher, err := NewGitCommandPublisher(root, remote, baseBranch)
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(sshKeyFile) || filepath.Clean(sshKeyFile) != sshKeyFile ||
+		!credentialPathPattern.MatchString(sshKeyFile) {
+		return nil, ErrCredentialPermissions
+	}
+	info, err := os.Lstat(sshKeyFile)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm() != 0o600 {
+		return nil, ErrCredentialPermissions
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return nil, ErrCredentialPermissions
+	}
+	publisher.sshKeyFile = sshKeyFile
+	return publisher, nil
 }
 
 func NewGitCommandPublisher(root, remote, baseBranch string) (*GitCommandPublisher, error) {
@@ -88,6 +119,40 @@ func (p *GitCommandPublisher) Publish(
 	return false, fmt.Errorf("publish candidate branch: %w", pushErr)
 }
 
+// DeleteBranch removes only the exact branch if its remote head still equals
+// candidate. A missing branch is an idempotent success.
+func (p *GitCommandPublisher) DeleteBranch(
+	ctx context.Context, branch, candidate string,
+) (bool, error) {
+	if !branchPattern.MatchString(branch) || !commitPattern.MatchString(candidate) {
+		return false, fmt.Errorf("%w: branch cleanup binding", ErrInvalidRequest)
+	}
+	head, exists, err := p.BranchHead(ctx, branch)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return true, nil
+	}
+	if head != candidate {
+		return false, ErrBranchConflict
+	}
+	ref := "refs/heads/" + branch
+	deleteErr := p.run(ctx, nil, "push", "--porcelain", "--no-verify",
+		"--force-with-lease="+ref+":"+candidate, p.remote, ":"+ref)
+	if deleteErr == nil {
+		return false, nil
+	}
+	head, exists, inspectErr := p.BranchHead(ctx, branch)
+	if inspectErr == nil && !exists {
+		return true, nil
+	}
+	if inspectErr == nil && head != candidate {
+		return false, ErrBranchConflict
+	}
+	return false, fmt.Errorf("delete publication branch: %w", deleteErr)
+}
+
 func (p *GitCommandPublisher) remoteHead(
 	ctx context.Context, branch string,
 ) (string, bool, error) {
@@ -121,6 +186,11 @@ func (p *GitCommandPublisher) run(
 		"GIT_CONFIG_KEY_1=credential.interactive",
 		"GIT_CONFIG_VALUE_1=never",
 	)
+	if p.sshKeyFile != "" {
+		command.Env = append(command.Env,
+			"GIT_SSH_COMMAND=ssh -i '"+p.sshKeyFile+"' -o IdentitiesOnly=yes -o BatchMode=yes",
+		)
+	}
 	var stderr bytes.Buffer
 	if stdout != nil {
 		command.Stdout = stdout

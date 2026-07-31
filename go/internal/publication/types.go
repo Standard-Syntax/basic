@@ -68,13 +68,24 @@ type Result struct {
 }
 
 type DraftPullRequest struct {
-	Number int64  `json:"number"`
-	URL    string `json:"html_url"`
-	State  string `json:"state"`
-	Draft  bool   `json:"draft"`
-	Head   string `json:"head"`
-	Base   string `json:"base"`
-	Marker string `json:"marker,omitempty"`
+	Number     int64  `json:"number"`
+	URL        string `json:"html_url"`
+	State      string `json:"state"`
+	Draft      bool   `json:"draft"`
+	Head       string `json:"head"`
+	Base       string `json:"base"`
+	HeadCommit string `json:"head_commit"`
+	BaseCommit string `json:"base_commit"`
+	Body       string `json:"body,omitempty"`
+	Marker     string `json:"marker,omitempty"`
+}
+
+type PullRequestExpectation struct {
+	Owner, Repo                 string
+	Number                      int64
+	URL, Marker                 string
+	Base, Head                  string
+	BaseCommit, CandidateCommit string
 }
 
 type DraftPullRequestInput struct {
@@ -127,6 +138,16 @@ type PublicationStart struct {
 	ReviewDigest         string
 	ApprovalDigest       string
 	ExpectedRunRevision  uint64
+}
+
+type CompletedPublication struct {
+	PublicationID               string
+	Repository                  string
+	BaseBranch, HeadBranch      string
+	BaseCommit, CandidateCommit string
+	PullRequestNumber           int64
+	PullRequestURL              string
+	PublicationArtifact         workflow.ArtifactRef
 }
 
 type BranchCheckpoint struct {

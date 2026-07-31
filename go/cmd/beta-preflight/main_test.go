@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,6 +21,47 @@ func preflightTestConfig(root string) config {
 			Paths:      beta.Paths{Readable: []string{"docs"}, Writable: []string{"docs"}, Prohibited: []string{"secrets"}}, TrustedChecks: []string{"make-check-v1"},
 			Limits: beta.Limits{MaximumTasks: 1, MaximumChangedFiles: 1, MaximumFileBytes: 1024, MaximumTotalBytes: 1024, ExecutionConcurrency: 1, VerificationConcurrency: 1},
 			Images: beta.Images{Execution: "sha256:" + strings.Repeat("b", 64), Verification: "sha256:" + strings.Repeat("c", 64)}}}
+}
+
+func TestCheckCanaryFixtureRequiresCanonicalFilesAndOwnedCheck(t *testing.T) {
+	root := t.TempDir()
+	command := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		body, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, body)
+		}
+		return strings.TrimSpace(string(body))
+	}
+	command("init", "-b", "main")
+	command("config", "user.name", "Canary Test")
+	command("config", "user.email", "canary@example.invalid")
+	for name, body := range map[string]string{
+		"add.go": "package fixture\n", "add_test.go": "package fixture\n",
+		"Makefile": ".PHONY: check\ncheck:\n\tgo test ./...\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command("add", ".")
+	command("commit", "-m", "fixture")
+	policy := preflightTestConfig(t.TempDir()).Policy
+	policy.Repository.Root, policy.Repository.BaseCommit = root, command("rev-parse", "HEAD")
+	if err := checkCanaryFixture(t.Context(), policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "add_test.go")); err != nil {
+		t.Fatal(err)
+	}
+	command("add", "-u")
+	command("commit", "-m", "remove test")
+	policy.Repository.BaseCommit = command("rev-parse", "HEAD")
+	if err := checkCanaryFixture(t.Context(), policy); err == nil {
+		t.Fatal("incomplete canary fixture accepted")
+	}
 }
 
 func TestLoadConfigIsStrictAndRejectsUnknownFields(t *testing.T) {

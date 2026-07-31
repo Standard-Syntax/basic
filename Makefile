@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-live-e2e provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-live-e2e beta-canary-e2e beta-canary-cleanup provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -101,6 +101,25 @@ beta-live-e2e:
 			./internal/runtime || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
+
+beta-canary-e2e:
+	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
+	cd go && go run ./cmd/beta-preflight -canary -config "$(BETA_CONFIG)"
+	mkdir -p .tools/runtime
+	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
+	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
+	cd go && BETA_CANARY=1 BETA_CONFIG="$(BETA_CONFIG)" \
+		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
+		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
+		go test -v -tags=integration -count=1 \
+			-run '^TestBetaCanaryProcessesPublishRealDraft$$' ./internal/runtime
+
+beta-canary-cleanup:
+	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
+	@test -n "$(CANARY_PUBLICATION_ID)" || { echo "CANARY_PUBLICATION_ID is required" >&2; exit 2; }
+	cd go && go run ./cmd/beta-canary-cleanup \
+		-config "$(BETA_CONFIG)" -publication "$(CANARY_PUBLICATION_ID)"
 
 provider-smoke:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }

@@ -104,6 +104,13 @@ func TestPostgresPublicationCheckpointsReplayConflictAndImmutability(t *testing.
 	if got, ok := replay.Replay(); !ok || !got.PublicationArtifact.Equal(artifact) {
 		t.Fatalf("replay=%#v ok=%v", got, ok)
 	}
+	completed, err := repository.LoadCompleted(t.Context(), start.PublicationID)
+	if err != nil || completed.Repository != start.Repository ||
+		completed.HeadBranch != start.HeadBranch || completed.CandidateCommit != start.CandidateCommit ||
+		completed.PullRequestNumber != pull.PullRequestNumber ||
+		!completed.PublicationArtifact.Equal(artifact) {
+		t.Fatalf("completed publication=%#v err=%v", completed, err)
+	}
 	conflict := start
 	conflict.RequestDigest = repeated('9', 64)
 	if _, err := repository.Begin(t.Context(), conflict); !errors.Is(err, ErrPublicationConflict) {

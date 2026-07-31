@@ -596,3 +596,37 @@ bindings. Task planning remains one dependency-free task.
 
 ### Date
 2026-07-31
+
+## DEC-027: Isolate real publication to a dedicated canary and separate cleanup authority
+
+### Decision
+Run real beta publication only against `Standard-Syntax/basic-beta-canary` and
+`main`, using one REST credential and a separate repository-scoped Git push key.
+Keep close and exact-SHA branch deletion on concrete clients invoked only by a
+separate cleanup command; do not add them to runtime publication ports.
+
+### Options considered
+Publish canaries in the product repository; reuse one broad GitHub credential;
+use a dedicated fixture repository with separate publish and cleanup authority.
+
+### Pros
+The real provider-to-draft boundary is exercised without granting merge or
+deployment authority. Immutable record/artifact validation, exact refs and
+commits, and replay-safe cleanup make every external mutation attributable.
+
+### Cons
+Operators must provision and rotate two narrowly scoped credentials, maintain
+the canonical fixture, inspect the retained draft, and invoke cleanup explicitly.
+
+### Why this option
+Loopback publication cannot prove GitHub behavior, while production-repository
+or broad-token canaries would turn a release gate into unnecessary production
+authority. Cleanup needs external mutation rights but is not part of acceptance.
+
+### Consequences
+Canary success leaves exactly one draft and branch. Cleanup fails closed on any
+identity or head mismatch and is idempotent only for the same immutable
+publication. Merge, ready-for-review, deploy, and prefix deletion remain absent.
+
+### Date
+2026-07-31

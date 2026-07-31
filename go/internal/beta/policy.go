@@ -12,7 +12,6 @@ import (
 	"io"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -114,7 +113,7 @@ func (p Policy) Validate() error {
 
 func validateRepository(value Repository) error {
 	if value.Owner == "" || value.Name == "" || value.Remote == "" || value.RemoteURL == "" ||
-		value.BaseBranch == "" || !cleanAbsolute(value.Root) || !commitPattern.MatchString(value.BaseCommit) {
+		value.BaseBranch == "" || !CleanAbsolute(value.Root) || !commitPattern.MatchString(value.BaseCommit) {
 		return errors.New("invalid repository policy")
 	}
 	return nil
@@ -196,18 +195,29 @@ func WithinAny(value string, roots []string) bool {
 	return false
 }
 
-func cleanAbsolute(value string) bool { return filepath.IsAbs(value) && filepath.Clean(value) == value }
-
 // VerifyRemoteBase rechecks the configured remote and approved branch without changing refs.
 func VerifyRemoteBase(ctx context.Context, p Policy) error {
+	return verifyRemoteBaseUsingCredential(ctx, p, "")
+}
+
+// VerifyRemoteBaseWithSSHKey performs the same non-mutating verification while
+// binding remote access to the separately provisioned canary deploy key.
+func VerifyRemoteBaseWithSSHKey(ctx context.Context, p Policy, sshKeyFile string) error {
+	if !CleanAbsolute(sshKeyFile) || !canaryCredentialPathPattern.MatchString(sshKeyFile) {
+		return errors.New("invalid Git SSH credential path")
+	}
+	return verifyRemoteBaseUsingCredential(ctx, p, sshKeyFile)
+}
+
+func verifyRemoteBaseUsingCredential(ctx context.Context, p Policy, sshKeyFile string) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
-	configured, err := git(ctx, p.Repository.Root, "remote", "get-url", p.Repository.Remote)
+	configured, err := git(ctx, p.Repository.Root, sshKeyFile, "remote", "get-url", p.Repository.Remote)
 	if err != nil || configured != p.Repository.RemoteURL {
 		return errors.New("repository remote mismatch")
 	}
-	head, err := git(ctx, p.Repository.Root, "ls-remote", "--heads", p.Repository.Remote, "refs/heads/"+p.Repository.BaseBranch)
+	head, err := git(ctx, p.Repository.Root, sshKeyFile, "ls-remote", "--heads", p.Repository.Remote, "refs/heads/"+p.Repository.BaseBranch)
 	if err != nil {
 		return fmt.Errorf("read remote base: %w", err)
 	}
@@ -215,20 +225,24 @@ func VerifyRemoteBase(ctx context.Context, p Policy) error {
 	if len(fields) != 2 || fields[0] != p.Repository.BaseCommit {
 		return errors.New("approved remote base moved")
 	}
-	resolved, err := git(ctx, p.Repository.Root, "rev-parse", "--verify", p.Repository.BaseCommit+"^{commit}")
+	resolved, err := git(ctx, p.Repository.Root, sshKeyFile, "rev-parse", "--verify", p.Repository.BaseCommit+"^{commit}")
 	if err != nil || resolved != p.Repository.BaseCommit {
 		return errors.New("approved base is not a local commit")
 	}
-	localHead, err := git(ctx, p.Repository.Root, "rev-parse", "--verify", "refs/heads/"+p.Repository.BaseBranch)
+	localHead, err := git(ctx, p.Repository.Root, sshKeyFile, "rev-parse", "--verify", "refs/heads/"+p.Repository.BaseBranch)
 	if err != nil || localHead != p.Repository.BaseCommit {
 		return errors.New("local base branch does not equal approved commit")
 	}
 	return nil
 }
 
-func git(ctx context.Context, root string, args ...string) (string, error) {
+func git(ctx context.Context, root, sshKeyFile string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
 	command.Env = append(command.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if sshKeyFile != "" {
+		command.Env = append(command.Env,
+			"GIT_SSH_COMMAND=ssh -i '"+sshKeyFile+"' -o IdentitiesOnly=yes -o BatchMode=yes")
+	}
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", args[0], err)

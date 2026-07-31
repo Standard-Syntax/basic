@@ -180,6 +180,70 @@ func TestGitHubClientRejectsInsecureNonLoopbackEndpoint(t *testing.T) {
 	}
 }
 
+func TestGitHubClientInspectsAndClosesOnlyExactDraft(t *testing.T) {
+	input := prInput()
+	baseCommit, candidate := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for name, mutate := range map[string]func(*githubPullRequest){
+		"matching":        func(*githubPullRequest) {},
+		"marker mismatch": func(value *githubPullRequest) { value.Body = "other" },
+		"base mismatch":   func(value *githubPullRequest) { value.Base.SHA = strings.Repeat("c", 40) },
+		"head mismatch":   func(value *githubPullRequest) { value.Head.SHA = strings.Repeat("d", 40) },
+		"not draft":       func(value *githubPullRequest) { value.Draft = false },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				value := testPullRequest(input.Head, input.Base, input.Body)
+				value.Head.SHA, value.Base.SHA = candidate, baseCommit
+				mutate(&value)
+				if request.Method == http.MethodPatch {
+					value.State = "closed"
+				}
+				calls.Add(1)
+				_ = json.NewEncoder(writer).Encode(value)
+			}))
+			defer server.Close()
+			client := githubClient(t, server.URL, DefaultMaxBodyBytes)
+			inspected, err := client.InspectPullRequest(t.Context(), "owner", "repo", 17)
+			if err != nil || inspected.Number != 17 {
+				t.Fatalf("inspect=%#v err=%v", inspected, err)
+			}
+			replay, err := client.CloseDraft(t.Context(), PullRequestExpectation{
+				Owner: "owner", Repo: "repo", Number: 17,
+				URL: "https://example.invalid/pull/17", Marker: input.Marker,
+				Base: input.Base, Head: input.Head, BaseCommit: baseCommit,
+				CandidateCommit: candidate,
+			})
+			if name == "matching" {
+				if err != nil || replay || calls.Load() != 3 {
+					t.Fatalf("close replay=%v calls=%d err=%v", replay, calls.Load(), err)
+				}
+			} else if !errors.Is(err, ErrPullRequestConflict) || replay || calls.Load() != 2 {
+				t.Fatalf("mismatch close replay=%v calls=%d err=%v", replay, calls.Load(), err)
+			}
+		})
+	}
+}
+
+func TestGitHubClientClosedDraftCleanupIsReplay(t *testing.T) {
+	input := prInput()
+	baseCommit, candidate := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		value := testPullRequest(input.Head, input.Base, input.Body)
+		value.State, value.Head.SHA, value.Base.SHA = "closed", candidate, baseCommit
+		_ = json.NewEncoder(writer).Encode(value)
+	}))
+	defer server.Close()
+	replay, err := githubClient(t, server.URL, DefaultMaxBodyBytes).CloseDraft(
+		t.Context(), PullRequestExpectation{Owner: "owner", Repo: "repo", Number: 17,
+			URL: "https://example.invalid/pull/17", Marker: input.Marker,
+			Base: input.Base, Head: input.Head, BaseCommit: baseCommit, CandidateCommit: candidate},
+	)
+	if err != nil || !replay {
+		t.Fatalf("closed replay=%v err=%v", replay, err)
+	}
+}
+
 func githubClient(t *testing.T, endpoint string, limit int64) *GitHubRESTClient {
 	t.Helper()
 	client, err := NewGitHubRESTClient(
