@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYV1C3V1DZ14CFYSAGXD2V73",
+  "session_id": "019fb57a-9693-7e70-b00f-e004b60e84e4",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T02:52:07.712707455Z",
+  "branch": "beta/live-only-provider",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/architecture.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "docs/phase-10-completion.md",
+    "docs/phase-11-completion.md",
+    "docs/plan-brief.md",
+    "docs/reasoning-contracts.md",
+    "docs/resource-analysis.md",
+    "docs/security.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "a06681c2644b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 366156,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8724480,
+    "output_tokens": 29297,
+    "api_call_count": 86
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T02:52:07.652055252Z",
+    "agent_lines": 182,
+    "agent_removed": 228,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 182,
+    "total_lines_changed": 410,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
