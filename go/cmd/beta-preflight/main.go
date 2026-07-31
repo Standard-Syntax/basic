@@ -159,8 +159,8 @@ func checkRoots(paths []string) error {
 }
 
 func checkRoot(root string) error {
-	info, err := os.Lstat(root)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	info, err := rootInfoWithoutSymlinks(root)
+	if err != nil || !info.IsDir() {
 		return errors.New("unsafe root")
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -168,6 +168,29 @@ func checkRoot(root string) error {
 		return errors.New("unsafe permissions")
 	}
 	return nil
+}
+
+func rootInfoWithoutSymlinks(root string) (os.FileInfo, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, errors.New("root must be clean and absolute")
+	}
+	volume := filepath.VolumeName(root)
+	current := volume + string(filepath.Separator)
+	info, err := os.Lstat(current)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("unsafe root component")
+	}
+	for _, component := range strings.Split(strings.TrimPrefix(root, current), string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err = os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return nil, errors.New("unsafe root component")
+		}
+	}
+	return info, nil
 }
 
 func rootsOverlap(left, right string) bool {

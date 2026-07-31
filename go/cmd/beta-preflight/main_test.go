@@ -75,6 +75,13 @@ func TestCheckRootsRejectsUnsafeAndOverlappingDirectories(t *testing.T) {
 	if err := checkRoots([]string{link}); err == nil {
 		t.Fatal("symlink root accepted")
 	}
+	aliasedParent := filepath.Join(root, "aliased-parent")
+	if err := os.Symlink(first, aliasedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkRoots([]string{filepath.Join(aliasedParent, "nested")}); err == nil {
+		t.Fatal("root beneath symlinked parent accepted")
+	}
 	// Deliberately create an unsafe root to prove preflight rejects it.
 	if err := os.Chmod(second, 0o770); err != nil { // skipcq: GSC-G302
 		t.Fatal(err)
