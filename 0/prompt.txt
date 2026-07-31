@@ -1,0 +1,67 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Vertical Slice 6: Beta Service Packaging
+
+## Summary
+
+Package `api-service` and `workflow-service` as pinned, non-root images and run them with PostgreSQL through a hardened beta Compose profile. Slice 6 will remain one canonical PR, `beta/service-packaging`, with focused Conventional Commits.
+
+The packaged workflow service will use Docker’s official Go SDK with API-version negotiation instead of requiring the Docker CLI. This preserves the existing worker-container isolation while keeping Docker out of the final image. [Docker Engine SDK guidance](https://docs.docker.com/reference/api/engine/sdk/)
+
+## Stack and Publication
+
+- Remove the obsolete local metadata for merged PR #82, fetch `origin`, and fast-forward local `main` to the current remote merge commit.
+- Preserve `.codex/`, `.entire/`, and `.opencode/`.
+- Run `gh stack init --base main beta/service-packaging`; do not create Slice 7 yet.
+- Keep these commits on the single branch:
+  1. `refactor(runtime): use Docker API and drain active claims`
+  2. `feat(beta): package control-plane services`
+  3. `test(beta): add packaged deployment smoke`
+  4. `docs(beta): document packaged service operations`
+- After all gates pass, create the draft PR with `gh stack submit --auto --remote origin` and verify it with `gh stack view --json`.
+
+## Implementation Changes
+
+- Replace execution and verification Docker CLI calls with a small consumer-owned Engine interface backed by `github.com/moby/moby/client`. Preserve image-digest inspection, non-root UID/GID, no network, read-only worker roots, bounded output, exact mounts, and named-container cleanup on cancellation.
+- Add file-backed MiniMax credentials that validate a clean absolute, owner-only `0600` file and reread it for every invocation. Existing host/live gates retain `ANTHROPIC_API_KEY`; packaged configuration permits exactly the file source, with no ambiguous fallback.
+- Make workflow shutdown stop new claims immediately, continue heartbeat renewal while the current claim drains, and cancel after a configured 60-second deadline. Recovery remains fence-safe if draining expires.
+- Add dependency-aware `/healthz` and `/readyz` endpoints to both services. Readiness checks PostgreSQL, applied migration digests, CAS accessibility, bound worker image availability, configuration, and credential presence without invoking MiniMax or mutating Git/workflow state.
+- Extend authenticated `GET /v1/runs/{run_id}` with stage status and terminal failure artifact references. Logs retain structured run/task/stage/job/fence fields and failure digests, never proposal bodies, credential material, or provider responses.
+- Add multi-stage `Dockerfile.api-service` and `Dockerfile.workflow-service`. Final images use fixed UID/GID `65532:65532` and contain only the service binary, CA certificates, the pinned Git runtime and its required libraries. Base images and installed Git version are pinned; source revision and component metadata use OCI labels.
+- Add `beta_deployment.v1`, a strict secret-free deployment envelope containing common beta policy, service settings, immutable service/worker image IDs, mount paths, and credential-file paths. Unknown fields and mutable image tags fail closed.
+- Add a beta Compose profile with:
+  - PostgreSQL persistent storage and health checks;
+  - host-loopback exposure only for the API;
+  - internal workflow health traffic;
+  - read-only root filesystems, dropped capabilities, `no-new-privileges`, bounded tmpfs, and explicit shutdown grace periods;
+  - repository mounts at identical host/container absolute paths, read-only for API and writable only where workflow Git operations require it;
+  - dedicated CAS, worktree, verification, manifest, prompt, configuration, and credential mounts;
+  - the Docker socket mounted only into workflow-service, with an explicitly configured supplemental socket group.
+- Add `beta_deployment_record.v1` generation containing the source commit, migration digest, manifest and prompt digests, worker and service image IDs, Git/Go/toolchain versions, and configuration digest. It contains no secrets or live-run evidence; Slice 7 will consume it.
+- Add `make beta-images` and `make beta-deploy-smoke BETA_CONFIG=/absolute/path/to/beta.json`. Update `beta-live-e2e` so supplying `BETA_CONFIG` exercises the same packaged images.
+- Document provisioning, PostgreSQL/CAS backup and restore, credential rotation, failed-claim recovery, canary cleanup, deployment-record retention, and rollback to the prior exact image set. Record the packaging/security decision in the decision log.
+
+## Test and Acceptance Plan
+
+- Unit-test strict deployment decoding, file credential ownership/mode/rotation, Docker API requests, exact image inspection, cancellation cleanup, readiness transitions, secret-safe responses, and bounded claim draining.
+- Integration-test Docker worker execution through the Engine client, migration/CAS readiness failures, terminal failure visibility, shutdown during an active claim, recovery after drain timeout, and removal of duplicate external effects.
+- Inspect both built images for fixed non-root identity, immutable image IDs, expected OCI labels, exact entrypoints, absence of Docker CLI/shell/package-manager tooling, and presence only of the approved Git runtime dependencies.
+- The deployment smoke must start PostgreSQL and both exact images, reach readiness, submit no run, make no provider/GitHub request, terminate cleanly, and leave no claimed job.
+- Run:
+  - `make generate-check`
+  - `make check`
+  - `make integration-test`
+  - `go test -race ./internal/orchestration ./internal/runtime ./internal/controlapi`
+  - `make beta-images`
+  - `make beta-deploy-smoke BETA_CONFIG=/absolute/path/to/beta.json`
+  - `make beta-live-e2e BETA_CONFIG=/absolute/path/to/beta.json`
+  - `git diff --check`
+- The credentialed packaged live gate must actually run and retain exactly two accepted MiniMax invocations. A missing credential, skipped gate, host-binary run, or deterministic recovery test is not Slice 6 acceptance.
+
+## Assumptions
+
+- PR #82 is merged and remote `main` currently points at `67b6a725691d8b783f5ab9c2a6984995275b36a4`; execution refreshes this again before initialization.
+- Slice 6 is one canonical PR, as selected; “stacked” means it is managed with `gh stack` and remains the dependency predecessor of the future `beta/release-evidence` PR.
+- The reviewed Git subprocess boundary is retained. “Minimal image” allows the explicitly pinned Git executable and required libraries.
+- The Docker daemon/socket remains trusted beta infrastructure. Socket access is restricted to workflow-service; no API, model, worker, or Python component receives it.
+- `make check` is green on the researched checkout. No stack initialization, repository edit, push, or PR creation occurs until Plan Mode ends.
