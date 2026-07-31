@@ -77,6 +77,23 @@ func mainExit() int {
 }
 
 func loadConfig(path string) (config, error) {
+	value, err := decodeConfig(path)
+	if err != nil {
+		return config{}, err
+	}
+	if value.Listen == "" {
+		value.Listen = "127.0.0.1:8080"
+	}
+	if err := validateListen(value.Listen); err != nil {
+		return config{}, err
+	}
+	if err := validateConfig(value); err != nil {
+		return config{}, err
+	}
+	return value, nil
+}
+
+func decodeConfig(path string) (config, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return config{}, errors.New("config path must be clean and absolute")
 	}
@@ -95,34 +112,39 @@ func loadConfig(path string) (config, error) {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return config{}, errors.New("configuration has trailing content")
 	}
-	if value.Listen == "" {
-		value.Listen = "127.0.0.1:8080"
-	}
-	host, _, err := net.SplitHostPort(value.Listen)
+	return value, nil
+}
+
+func validateListen(listen string) error {
+	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
-		return config{}, errors.New("listen must include host and port")
+		return errors.New("listen must include host and port")
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return config{}, errors.New("API listen address must be loopback")
+		return errors.New("API listen address must be loopback")
 	}
+	return nil
+}
+
+func validateConfig(value config) error {
 	if value.DatabaseURL == "" || !filepath.IsAbs(value.ArtifactRoot) ||
 		filepath.Clean(value.ArtifactRoot) != value.ArtifactRoot ||
 		!filepath.IsAbs(value.RepositoryRoot) ||
 		filepath.Clean(value.RepositoryRoot) != value.RepositoryRoot {
-		return config{}, errors.New("incomplete API configuration")
+		return errors.New("incomplete API configuration")
 	}
 	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot {
-		return config{}, errors.New("invalid or mismatched beta policy")
+		return errors.New("invalid or mismatched beta policy")
 	}
 	if value.Publication != nil && (value.Publication.RepositoryRoot != value.Policy.Repository.Root ||
 		value.Publication.RepositoryOwner != value.Policy.Repository.Owner ||
 		value.Publication.RepositoryName != value.Policy.Repository.Name ||
 		value.Publication.Remote != value.Policy.Repository.Remote ||
 		value.Publication.BaseBranch != value.Policy.Repository.BaseBranch) {
-		return config{}, errors.New("publication configuration does not match beta policy")
+		return errors.New("publication configuration does not match beta policy")
 	}
-	return value, nil
+	return nil
 }
 
 func run(ctx context.Context, value config) error {

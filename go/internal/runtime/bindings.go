@@ -51,17 +51,7 @@ func (r *BindingRepository) CreateRun(ctx context.Context, binding RunBinding) e
 // caller-owned transaction. RepositoryMap is mandatory for newly accepted
 // runs; nullable database columns remain only for legacy migration tolerance.
 func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) error {
-	if err := binding.Intake.Validate(); err != nil {
-		return err
-	}
-	if binding.RepositoryMap == nil || binding.Policy == nil ||
-		!validImageDigest(binding.ExecutionImageDigest) || !validImageDigest(binding.VerificationImageDigest) {
-		return ErrConflict
-	}
-	if err := binding.RepositoryMap.Validate(); err != nil {
-		return err
-	}
-	if err := binding.Policy.Validate(); err != nil {
+	if err := validateIntakeBinding(binding); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx, `INSERT INTO runtime_run_bindings
@@ -79,35 +69,61 @@ func CreateRunBindingTx(ctx context.Context, tx pgx.Tx, binding RunBinding) erro
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
+	existing, err := readIntakeBinding(ctx, tx, binding.RunID)
+	if err != nil {
+		return err
+	}
+	if !sameIntakeBinding(existing, binding) {
+		return ErrConflict
+	}
+	return nil
+}
+
+func validateIntakeBinding(binding RunBinding) error {
+	if err := binding.Intake.Validate(); err != nil {
+		return err
+	}
+	if binding.RepositoryMap == nil || binding.Policy == nil ||
+		!validImageDigest(binding.ExecutionImageDigest) || !validImageDigest(binding.VerificationImageDigest) {
+		return ErrConflict
+	}
+	if err := binding.RepositoryMap.Validate(); err != nil {
+		return err
+	}
+	return binding.Policy.Validate()
+}
+
+func readIntakeBinding(ctx context.Context, tx pgx.Tx, runID string) (RunBinding, error) {
 	var existing RunBinding
 	var repositoryURI, repositoryDigest, policyURI, policyDigest *string
 	var executionImageDigest, verificationImageDigest *string
-	err = tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
+	err := tx.QueryRow(ctx, `SELECT run_id::text,intake_uri,intake_digest,base_commit,
 		repository_map_uri,repository_map_digest,beta_policy_uri,beta_policy_digest,
 		execution_image_digest,verification_image_digest,created_at
-		FROM runtime_run_bindings WHERE run_id=$1`, binding.RunID).Scan(
+		FROM runtime_run_bindings WHERE run_id=$1`, runID).Scan(
 		&existing.RunID, &existing.Intake.URI, &existing.Intake.Digest,
 		&existing.BaseCommit, &repositoryURI, &repositoryDigest, &policyURI, &policyDigest,
 		&executionImageDigest, &verificationImageDigest, &existing.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
+		return RunBinding{}, ErrNotFound
 	}
 	if err != nil {
-		return err
+		return RunBinding{}, err
 	}
 	existing.RepositoryMap = optionalRef(repositoryURI, repositoryDigest)
 	existing.Policy = optionalRef(policyURI, policyDigest)
 	existing.ExecutionImageDigest = optionalString(executionImageDigest)
 	existing.VerificationImageDigest = optionalString(verificationImageDigest)
-	if existing.Intake != binding.Intake || existing.BaseCommit != binding.BaseCommit ||
-		existing.RepositoryMap == nil || *existing.RepositoryMap != *binding.RepositoryMap ||
-		existing.Policy == nil || *existing.Policy != *binding.Policy ||
-		existing.ExecutionImageDigest != binding.ExecutionImageDigest ||
-		existing.VerificationImageDigest != binding.VerificationImageDigest ||
-		!existing.CreatedAt.Equal(binding.CreatedAt.UTC()) {
-		return ErrConflict
-	}
-	return nil
+	return existing, nil
+}
+
+func sameIntakeBinding(existing, binding RunBinding) bool {
+	return existing.Intake == binding.Intake && existing.BaseCommit == binding.BaseCommit &&
+		existing.RepositoryMap != nil && *existing.RepositoryMap == *binding.RepositoryMap &&
+		existing.Policy != nil && *existing.Policy == *binding.Policy &&
+		existing.ExecutionImageDigest == binding.ExecutionImageDigest &&
+		existing.VerificationImageDigest == binding.VerificationImageDigest &&
+		existing.CreatedAt.Equal(binding.CreatedAt.UTC())
 }
 
 func (r *BindingRepository) GetRun(ctx context.Context, runID string) (RunBinding, error) {

@@ -43,7 +43,8 @@ func TestCredentialFileRequiresExact0600AndContent(t *testing.T) {
 	if err := checkCredentialFile(name); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(name, 0o640); err != nil { // skipcq: GSC-G302 -- intentionally unsafe test fixture.
+	// Deliberately create an unsafe credential to prove preflight rejects it.
+	if err := os.Chmod(name, 0o640); err != nil { // skipcq: GSC-G302
 		t.Fatal(err)
 	}
 	if err := checkCredentialFile(name); err == nil {
@@ -74,7 +75,8 @@ func TestCheckRootsRejectsUnsafeAndOverlappingDirectories(t *testing.T) {
 	if err := checkRoots([]string{link}); err == nil {
 		t.Fatal("symlink root accepted")
 	}
-	if err := os.Chmod(second, 0o770); err != nil { // skipcq: GSC-G302 -- intentionally unsafe test fixture.
+	// Deliberately create an unsafe root to prove preflight rejects it.
+	if err := os.Chmod(second, 0o770); err != nil { // skipcq: GSC-G302
 		t.Fatal(err)
 	}
 	if err := checkRoots([]string{second}); err == nil {

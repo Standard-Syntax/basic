@@ -136,59 +136,81 @@ func (h *Handlers) start(
 	if job.TaskID == nil {
 		return orchestration.HandlerResult{}, runtime.ErrConflict
 	}
-	binding, err := h.runtime.GetRun(ctx, job.RunID)
-	if err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	if binding.RepositoryMap == nil || binding.Policy == nil ||
-		binding.ExecutionImageDigest != h.config.Policy.Images.Execution ||
-		binding.VerificationImageDigest != h.config.Policy.Images.Verification {
-		return orchestration.HandlerResult{}, runtime.ErrNotFound
-	}
-	policyBody, err := h.artifacts.Get(ctx, *binding.Policy)
-	if err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	boundPolicy, err := beta.DecodePolicy(policyBody)
-	if err != nil {
-		return orchestration.HandlerResult{}, runtime.ErrConflict
-	}
-	_, activeDigest, _ := h.config.Policy.Canonical()
-	_, boundDigest, _ := boundPolicy.Canonical()
-	if activeDigest != boundDigest || runtime.Digest(policyBody) != binding.Policy.Digest {
-		return orchestration.HandlerResult{}, runtime.ErrConflict
-	}
-	ref := *binding.RepositoryMap
-	if err := ref.Validate(); err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	body, err := h.artifacts.Get(ctx, ref)
-	if err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	if runtime.Digest(body) != ref.Digest {
-		return orchestration.HandlerResult{}, runtime.ErrConflict
-	}
-	if _, err := runtime.DecodeRepositorySnapshot(body, binding.BaseCommit); err != nil {
-		return orchestration.HandlerResult{}, err
-	}
-	run, err := h.workflow.GetRun(ctx, job.RunID)
+	ref, err := h.validateStartBinding(ctx, job.RunID)
 	if err != nil {
 		return orchestration.HandlerResult{}, err
 	}
 	at := h.now().UTC()
+	if err := h.startRunIfReady(ctx, job.RunID, ids.CommandID, at); err != nil {
+		return orchestration.HandlerResult{}, err
+	}
+	if err := h.leaseTaskIfReady(ctx, job, ids.CommandID, at); err != nil {
+		return orchestration.HandlerResult{}, err
+	}
+	return orchestration.HandlerResult{Artifact: ref, Continue: true}, nil
+}
+
+func (h *Handlers) validateStartBinding(ctx context.Context, runID string) (workflow.ArtifactRef, error) {
+	binding, err := h.runtime.GetRun(ctx, runID)
+	if err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	if binding.RepositoryMap == nil || binding.Policy == nil ||
+		binding.ExecutionImageDigest != h.config.Policy.Images.Execution ||
+		binding.VerificationImageDigest != h.config.Policy.Images.Verification {
+		return workflow.ArtifactRef{}, runtime.ErrNotFound
+	}
+	policyBody, err := h.artifacts.Get(ctx, *binding.Policy)
+	if err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	boundPolicy, err := beta.DecodePolicy(policyBody)
+	if err != nil {
+		return workflow.ArtifactRef{}, runtime.ErrConflict
+	}
+	_, activeDigest, _ := h.config.Policy.Canonical()
+	_, boundDigest, _ := boundPolicy.Canonical()
+	if activeDigest != boundDigest || runtime.Digest(policyBody) != binding.Policy.Digest {
+		return workflow.ArtifactRef{}, runtime.ErrConflict
+	}
+	ref := *binding.RepositoryMap
+	if err := ref.Validate(); err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	body, err := h.artifacts.Get(ctx, ref)
+	if err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	if runtime.Digest(body) != ref.Digest {
+		return workflow.ArtifactRef{}, runtime.ErrConflict
+	}
+	if _, err := runtime.DecodeRepositorySnapshot(body, binding.BaseCommit); err != nil {
+		return workflow.ArtifactRef{}, err
+	}
+	return ref, nil
+}
+
+func (h *Handlers) startRunIfReady(ctx context.Context, runID, commandID string, at time.Time) error {
+	run, err := h.workflow.GetRun(ctx, runID)
+	if err != nil {
+		return err
+	}
 	if run.State == workflow.RunStateReady {
 		if _, err := h.workflow.ExecuteRun(ctx, workflow.StartRun{
-			Meta: h.envelope(ids.CommandID, h.config.ServiceActorID,
+			Meta: h.envelope(commandID, h.config.ServiceActorID,
 				workflow.ActorWorkflowService, run.Revision, at),
 			ID: run.ID,
 		}); err != nil {
-			return orchestration.HandlerResult{}, err
+			return err
 		}
 	}
+	return nil
+}
+
+func (h *Handlers) leaseTaskIfReady(ctx context.Context, job runtime.Job, commandID string, at time.Time) error {
 	task, err := h.workflow.GetTask(ctx, job.RunID, *job.TaskID)
 	if err != nil {
-		return orchestration.HandlerResult{}, err
+		return err
 	}
 	if task.State == workflow.TaskStateReady {
 		lease := workflow.LeaseRef{
@@ -199,14 +221,14 @@ func (h *Handlers) start(
 			FencingToken: job.Attempt,
 		}
 		if _, err := h.workflow.ExecuteTask(ctx, workflow.LeaseTask{
-			Meta: h.envelope(orchestration.StableID(ids.CommandID, "lease"),
+			Meta: h.envelope(orchestration.StableID(commandID, "lease"),
 				h.config.ServiceActorID, workflow.ActorWorkflowService, task.Revision, at),
 			Run: job.RunID, ID: *job.TaskID, Lease: lease,
 		}); err != nil {
-			return orchestration.HandlerResult{}, err
+			return err
 		}
 	}
-	return orchestration.HandlerResult{Artifact: ref, Continue: true}, nil
+	return nil
 }
 
 func (h *Handlers) implementationRequest(

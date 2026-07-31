@@ -360,11 +360,7 @@ func BuildApprovedTaskGraph(
 	trustedChecks map[string]struct{},
 	policy beta.Policy,
 ) (workflow.ArtifactRef, workflow.ArtifactRef, *reasoningv1.PlannedTask, error) {
-	if err := policy.Validate(); err != nil || !slices.Equal(request.GetReadablePaths(), policy.Paths.Readable) ||
-		!slices.Equal(request.GetWritablePaths(), policy.Paths.Writable) ||
-		!slices.Equal(request.GetProhibitedPaths(), policy.Paths.Prohibited) ||
-		request.GetTaskCountLimit() != uint32(policy.Limits.MaximumTasks) ||
-		request.GetParallelismLimit() != uint32(policy.Limits.ExecutionConcurrency) {
+	if err := validatePlanningPolicy(request, policy); err != nil {
 		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, fmt.Errorf("%w: task policy mismatch", ErrScope)
 	}
 	mapped, err := contracts.MapTaskPlanningRequest(request)
@@ -375,51 +371,90 @@ func BuildApprovedTaskGraph(
 	if err != nil {
 		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
 	}
-	if len(graph.Tasks) != 1 || len(graph.Tasks[0].Dependencies) != 0 ||
-		len(proposal.GetTasks()) != 1 {
-		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil,
-			fmt.Errorf("%w: first slice requires one dependency-free task", ErrScope)
+	if err := validatePlannedTask(graph, proposal, trustedChecks, policy); err != nil {
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
 	}
-	for _, check := range graph.Tasks[0].RequiredCheckIDs {
-		if _, ok := trustedChecks[check]; !ok {
-			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil,
-				fmt.Errorf("%w: untrusted check %q", ErrScope, check)
-		}
+	graphRef, taskRef, err := storeApprovedTaskGraph(ctx, store, proposal)
+	if err != nil {
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
+	}
+	return graphRef, taskRef, proto.Clone(proposal.GetTasks()[0]).(*reasoningv1.PlannedTask), nil
+}
+
+func validatePlanningPolicy(request *reasoningv1.TaskPlanningRequest, policy beta.Policy) error {
+	if err := policy.Validate(); err != nil ||
+		!slices.Equal(request.GetReadablePaths(), policy.Paths.Readable) ||
+		!slices.Equal(request.GetWritablePaths(), policy.Paths.Writable) ||
+		!slices.Equal(request.GetProhibitedPaths(), policy.Paths.Prohibited) ||
+		request.GetTaskCountLimit() != uint32(policy.Limits.MaximumTasks) ||
+		request.GetParallelismLimit() != uint32(policy.Limits.ExecutionConcurrency) {
+		return ErrScope
+	}
+	return nil
+}
+
+func validatePlannedTask(
+	graph contracts.TaskGraphProposal, proposal *reasoningv1.TaskGraphProposal,
+	trustedChecks map[string]struct{}, policy beta.Policy,
+) error {
+	if len(graph.Tasks) != 1 || len(graph.Tasks[0].Dependencies) != 0 || len(proposal.GetTasks()) != 1 {
+		return fmt.Errorf("%w: first slice requires one dependency-free task", ErrScope)
 	}
 	planned := graph.Tasks[0]
+	if err := validateRequiredChecks(planned.RequiredCheckIDs, trustedChecks); err != nil {
+		return err
+	}
+	return validatePlannedPaths(planned, policy.Paths)
+}
+
+func validateRequiredChecks(values []string, trusted map[string]struct{}) error {
+	for _, check := range values {
+		if _, ok := trusted[check]; !ok {
+			return fmt.Errorf("%w: untrusted check %q", ErrScope, check)
+		}
+	}
+	return nil
+}
+
+func validatePlannedPaths(planned contracts.PlannedTask, paths beta.Paths) error {
 	for _, value := range planned.ReadablePaths {
-		if !beta.WithinAny(value, policy.Paths.Readable) {
-			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
+		if !beta.WithinAny(value, paths.Readable) {
+			return ErrScope
 		}
 	}
 	for _, value := range planned.WritablePaths {
-		if !beta.WithinAny(value, policy.Paths.Writable) {
-			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
+		if !beta.WithinAny(value, paths.Writable) {
+			return ErrScope
 		}
 	}
-	for _, value := range policy.Paths.Prohibited {
+	for _, value := range paths.Prohibited {
 		if !beta.WithinAny(value, planned.ProhibitedPaths) {
-			return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, ErrScope
+			return ErrScope
 		}
 	}
+	return nil
+}
+
+func storeApprovedTaskGraph(
+	ctx context.Context, store ArtifactWriter, proposal *reasoningv1.TaskGraphProposal,
+) (workflow.ArtifactRef, workflow.ArtifactRef, error) {
 	graphBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
 	if err != nil {
-		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, err
 	}
 	graphRef, err := store.Put(ctx, graphBody)
 	if err != nil {
-		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, err
 	}
 	taskBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal.GetTasks()[0])
 	if err != nil {
-		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, err
 	}
 	taskRef, err := store.Put(ctx, taskBody)
 	if err != nil {
-		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, nil, err
+		return workflow.ArtifactRef{}, workflow.ArtifactRef{}, err
 	}
-	return graphRef, taskRef,
-		proto.Clone(proposal.GetTasks()[0]).(*reasoningv1.PlannedTask), nil
+	return graphRef, taskRef, nil
 }
 
 func SnapshotRepository(ctx context.Context, root, base string) (RepositorySnapshot, error) {

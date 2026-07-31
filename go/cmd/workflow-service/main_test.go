@@ -101,7 +101,7 @@ func TestMissingCredentialFailsBeforeDatabaseOrOrchestration(t *testing.T) {
 		t.Fatal(err)
 	}
 	value.DatabaseURL = "not a database URL"
-	err = run(context.Background(), value)
+	err = run(context.Background(), &value)
 	if !errors.Is(err, gateway.ErrCredentialUnavailable) {
 		t.Fatalf("startup error = %v", err)
 	}

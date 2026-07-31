@@ -80,7 +80,7 @@ func mainExit() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, value); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, &value); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("workflow service stopped", "error", err)
 		return 1
 	}
@@ -185,7 +185,7 @@ func applyConfigDefaults(value *config) {
 }
 
 func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
-	ctx context.Context, value config,
+	ctx context.Context, value *config,
 ) error {
 	credentials := gateway.EnvironmentCredentialSource{Name: value.Provider.APIKeyEnv}
 	if _, err := credentials.Credential(ctx); err != nil {
@@ -372,7 +372,7 @@ func bootstrapManifest(
 }
 
 func providerAdapters(
-	value config, credentials gateway.CredentialSource, artifacts gateway.ArtifactStore,
+	value *config, credentials gateway.CredentialSource, artifacts gateway.ArtifactStore,
 ) (gateway.ImplementationAdapter, gateway.ReviewAdapter, error) {
 	models := gateway.MiniMaxModels()
 	options := []gateway.AnthropicOption{
