@@ -95,7 +95,7 @@ func loadConfig(path string) (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	return normalizeConfig(value)
+	return normalizeConfig(&value)
 }
 
 func decodeConfig(path string) (config, error) {
@@ -117,7 +117,7 @@ func decodeConfig(path string) (config, error) {
 	return value, nil
 }
 
-func normalizeConfig(value config) (config, error) {
+func normalizeConfig(value *config) (config, error) {
 	var err error
 	value.Provider, err = value.Provider.Normalize()
 	if err != nil {
@@ -138,8 +138,8 @@ func normalizeConfig(value config) (config, error) {
 		value.Policy.Images.Verification != value.VerificationWorkerImage {
 		return config{}, errors.New("invalid or mismatched beta policy")
 	}
-	applyConfigDefaults(&value)
-	return value, nil
+	applyConfigDefaults(value)
+	return *value, nil
 }
 
 func cleanAbsolutePath(path string) bool {
@@ -155,7 +155,7 @@ func validateCleanAbsolutePaths(kind string, paths []string) error {
 	return nil
 }
 
-func completeConfig(value config) bool {
+func completeConfig(value *config) bool {
 	required := []string{
 		value.DatabaseURL, value.OwnerID, value.ServiceActorID, value.ReasoningActorID,
 		value.ExecutionActorID, value.VerificationActorID, value.ReviewActorID,

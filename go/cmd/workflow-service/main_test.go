@@ -37,7 +37,8 @@ func validTestConfig() config {
 }
 
 func TestWorkflowProviderDefaultsAreClosedMiniMaxProfile(t *testing.T) {
-	value, err := normalizeConfig(validTestConfig())
+	input := validTestConfig()
+	value, err := normalizeConfig(&input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +83,7 @@ func TestWorkflowConfigurationRejectsRemovedAndUnknownFields(t *testing.T) {
 func TestWorkflowConfigurationRejectsFakeAndTrailingJSON(t *testing.T) {
 	value := validTestConfig()
 	value.Provider.Mode = "fake"
-	if _, err := normalizeConfig(value); err == nil {
+	if _, err := normalizeConfig(&value); err == nil {
 		t.Fatal("fake provider mode was accepted")
 	}
 	path := writeTestConfig(t, validTestConfig(), `{}`)
@@ -96,7 +97,8 @@ func TestMissingCredentialFailsBeforeDatabaseOrOrchestration(t *testing.T) {
 	if err := os.Unsetenv(gateway.MiniMaxAPIKeyEnv); err != nil {
 		t.Fatal(err)
 	}
-	value, err := normalizeConfig(validTestConfig())
+	input := validTestConfig()
+	value, err := normalizeConfig(&input)
 	if err != nil {
 		t.Fatal(err)
 	}
