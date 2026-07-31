@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYX52Z0HVS15R3QQ54NG9B2S",
+  "session_id": "019fba07-b8e2-70d2-9a34-9ed43aacaf7c",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T22:35:31.814196772Z",
+  "branch": "beta/service-packaging",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/dockerengine/client.go",
+    "go/internal/reasoning/gateway/minimax_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "d9de93f519d9",
+  "checkpoint_transcript_start": 1637,
+  "transcript_lines_at_start": 1637,
+  "compact_transcript_start": 395,
+  "token_usage": {
+    "input_tokens": 77203,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5811456,
+    "output_tokens": 6327,
+    "api_call_count": 39
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T22:35:31.686479397Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 4,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
