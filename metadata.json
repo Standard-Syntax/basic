@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWAZ6WD2GS9P31FPEPZ8R6W",
+  "strategy": "manual-commit",
+  "branch": "beta/atomic-run-intake",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/controlapi/intake.go",
+    "go/internal/controlapi/intake_integration_test.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/runtime/process_e2e_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 160653,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 5753856,
+    "output_tokens": 14640,
+    "api_call_count": 69
+  }
+}
