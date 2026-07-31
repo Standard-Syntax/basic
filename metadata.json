@@ -3,9 +3,20 @@
   "checkpoint_id": "01KYX1DCEXFSS364C8P9HGS35B",
   "strategy": "manual-commit",
   "branch": "beta/service-packaging",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "go.work.sum"
+    "Dockerfile.api-service",
+    "Dockerfile.workflow-service",
+    "compose.yaml",
+    "go.work.sum",
+    "go/cmd/api-service/main.go",
+    "go/cmd/beta-compose-env/main.go",
+    "go/cmd/beta-deployment-record/main.go",
+    "go/cmd/workflow-service/main.go",
+    "go/internal/beta/deployment.go",
+    "go/internal/beta/record.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/runtime/ledger.go"
   ],
   "sessions": [
     {
@@ -14,13 +25,20 @@
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
       "prompt": "/0/prompt.txt"
+    },
+    {
+      "metadata": "/1/metadata.json",
+      "transcript": "/1/full.jsonl",
+      "compact_transcript": "/1/transcript.jsonl",
+      "content_hash": "/1/content_hash.txt",
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 1533133,
+    "input_tokens": 1606257,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 83446272,
-    "output_tokens": 146313,
-    "api_call_count": 588
+    "cache_read_tokens": 88552192,
+    "output_tokens": 169238,
+    "api_call_count": 631
   }
 }
