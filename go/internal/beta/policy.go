@@ -12,7 +12,6 @@ import (
 	"io"
 	"os/exec"
 	"path"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -114,7 +113,7 @@ func (p Policy) Validate() error {
 
 func validateRepository(value Repository) error {
 	if value.Owner == "" || value.Name == "" || value.Remote == "" || value.RemoteURL == "" ||
-		value.BaseBranch == "" || !cleanAbsolute(value.Root) || !commitPattern.MatchString(value.BaseCommit) {
+		value.BaseBranch == "" || !CleanAbsolute(value.Root) || !commitPattern.MatchString(value.BaseCommit) {
 		return errors.New("invalid repository policy")
 	}
 	return nil
@@ -196,8 +195,6 @@ func WithinAny(value string, roots []string) bool {
 	return false
 }
 
-func cleanAbsolute(value string) bool { return filepath.IsAbs(value) && filepath.Clean(value) == value }
-
 // VerifyRemoteBase rechecks the configured remote and approved branch without changing refs.
 func VerifyRemoteBase(ctx context.Context, p Policy) error {
 	return verifyRemoteBaseUsingCredential(ctx, p, "")
@@ -206,7 +203,7 @@ func VerifyRemoteBase(ctx context.Context, p Policy) error {
 // VerifyRemoteBaseWithSSHKey performs the same non-mutating verification while
 // binding remote access to the separately provisioned canary deploy key.
 func VerifyRemoteBaseWithSSHKey(ctx context.Context, p Policy, sshKeyFile string) error {
-	if !cleanAbsolute(sshKeyFile) || !canaryCredentialPathPattern.MatchString(sshKeyFile) {
+	if !CleanAbsolute(sshKeyFile) || !canaryCredentialPathPattern.MatchString(sshKeyFile) {
 		return errors.New("invalid Git SSH credential path")
 	}
 	return verifyRemoteBaseUsingCredential(ctx, p, sshKeyFile)
