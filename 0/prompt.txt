@@ -1,0 +1,74 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Vertical Slice 4: Production Repository Preflight
+
+## Summary
+
+Implement Slice 4 on one branch, `beta/repository-preflight`, based on the merged Slice 3 commit. The branch will add a non-mutating readiness command, immutable run-bound repository policy, digest-pinned workers, and fail-closed validation before reasoning or mutation.
+
+Stack initialization was not executed because Plan Mode forbids repository mutation. During implementation:
+
+```bash
+git fetch origin main
+git switch main
+git merge --ff-only origin/main
+gh stack init --base main beta/repository-preflight
+gh stack view --json
+```
+
+Preserve `.codex/`, `.entire/`, and `.opencode/`. Remote `main` currently points to Slice 3 merge commit `ae8de633`; the local `main` is stale. The current baseline passes `make check`.
+
+## Interfaces and implementation
+
+- Introduce a strict, versioned beta configuration shared by `api-service`, `workflow-service`, and a new `beta-preflight` command. Preserve existing operational settings while adding:
+  - exact repository owner/name, root, remote name and expected URL;
+  - approved base branch and 40-character base commit;
+  - readable, writable, and prohibited path policy;
+  - trusted check IDs;
+  - maximum changed files, per-file bytes, total bytes, and concurrency;
+  - execution and verification image IDs in immutable `sha256:<64-hex>` form.
+- Keep `POST /v1/runs` wire-compatible, but require its `base_commit` to equal the configured approved commit. Task-planning authority fields must match the run-bound policy; model output may narrow scope but cannot widen paths, checks, limits, concurrency, or task count.
+- Add `beta-preflight -config /absolute/path/to/beta.json` and `make beta-preflight BETA_CONFIG=...`. It must:
+  - validate clean, existing, non-symlinked, non-overlapping roots and owner-only writable artifact/workspace directories;
+  - prove the Git top-level root, configured remote URL, base branch head, local commit type/reachability, and exact remote-head/base-commit equality;
+  - reject registered or filesystem worktrees beneath the harness worktree root;
+  - check Docker availability and require each configured image to inspect to its exact configured digest;
+  - connect read-only to PostgreSQL and verify every embedded migration version/name/digest is already present, without calling migration application;
+  - read and discard the MiniMax environment credential and GitHub `0600` credential file solely to confirm availability;
+  - emit deterministic JSON containing only readiness status, repository identities, policy/base/image/migration digests, and redacted failure codes. Exit `0` when ready, `1` when checks fail, and `2` for invalid configuration.
+- Extend the shared migration helper with a read-only verification operation. Aggregate expected migrations from all owning packages and fail on a missing ledger, pending migration, unexpected name, or digest drift.
+- Add migration `0020` extending immutable run bindings with the beta-policy artifact and both worker image digests. Keep columns nullable only for historical rows; new intake requires all values and stage start rejects legacy/incomplete bindings.
+- During Slice 3’s existing pre-transaction staging, canonicalize and store the beta policy in CAS. Persist its artifact and image digests inside the same serializable transaction as run creation, repository map, idempotent response, and runtime binding.
+- Before starting a run or acquiring a lease, verify the run-bound policy and image digests against the active workflow configuration. Use the digest directly for both Docker workers; do not resolve or execute mutable tags.
+- Apply run-bound limits to execution and verification concurrency and validate task-graph scopes/checks against the policy. Preserve the one dependency-free task restriction.
+- Recheck the configured remote base immediately before intake staging. Retain publication’s existing checks before branch push and immediately before PR creation.
+- Update active architecture, security, resource, development, live-harness, beta-plan, README, and decision-log documentation. Record the immutable-preflight-policy decision and clearly document the one-task beta limitation.
+
+## Test plan
+
+- Unit-test strict beta configuration, canonical policy digesting, path normalization, scope relationships, limit ceilings, digest-only image references, unknown fields, and secret-safe output.
+- Exercise every preflight failure independently: wrong repository identity/URL, moved or unreachable base, unsafe roots or permissions, worktree collision, unavailable Docker, image mismatch, missing or drifted migration, missing provider credential, and invalid publication credential.
+- Add a disposable Git/PostgreSQL/Docker fixture proving successful preflight leaves workflow rows, CAS contents, Git refs/status/worktrees, provider counters, Git pushes, and GitHub calls unchanged.
+- Extend atomic-intake crash/replay coverage for the policy artifact and image columns. Exact replay must return the original response without repeating Git, CAS, workflow, job, or provider work.
+- Test that policy widening, untrusted checks, limit expansion, changed image bindings, legacy bindings, and base drift fail before leases, provider calls, candidates, or publication.
+- Run the complete gates:
+
+```bash
+make generate-check
+make check
+make integration-test
+go test -race ./internal/runtime ./internal/controlapi ./internal/stage
+make beta-preflight BETA_CONFIG=/absolute/path/to/beta.json
+make beta-live-e2e
+git diff --check
+gh stack view --json
+```
+
+Slice 4 is not accepted unless the credentialed live gate actually runs successfully; a skip or missing credential remains unverified work.
+
+## Assumptions
+
+- No Protobuf, manifest-v1, reasoning, workflow-state, approval, or publication authority contract changes are needed.
+- Preflight is a command rather than a new network API because the release plan’s acceptance interface is `make beta-preflight`.
+- Docker image IDs are the locally executable immutable identity used by both workers; mutable names and tags are rejected in beta configuration.
+- Preflight validates readiness but performs no migration, directory creation, CAS write, Git mutation, provider request, or GitHub request.

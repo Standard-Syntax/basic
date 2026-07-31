@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWF8C9S1SQMBVV0KQQ0DH7T",
+  "session_id": "019fb8d5-18d0-7283-9620-ac335ecda024",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T16:13:59.814557383Z",
+  "branch": "beta/repository-preflight",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "Makefile",
+    "README.md",
+    "docs/architecture.md",
+    "docs/beta-release-plan.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "docs/resource-analysis.md",
+    "docs/security.md",
+    "go/cmd/api-service/main.go",
+    "go/cmd/api-service/main_test.go",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/cmd/workflow-service/main.go",
+    "go/cmd/workflow-service/main_test.go",
+    "go/internal/approval/repository.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/controlapi/intake.go",
+    "go/internal/controlapi/intake_integration_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/execution/repository.go",
+    "go/internal/migration/migration.go",
+    "go/internal/publication/repository.go",
+    "go/internal/reasoning/gateway/repository.go",
+    "go/internal/registry/registry.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/builder.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/stage/handlers.go",
+    "go/internal/stage/handlers_test.go",
+    "go/internal/verification/repository.go",
+    "go/internal/workflow/migrate.go",
+    "go/internal/workflow/migrations/0020_beta_policy_bindings.sql"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "a9a16b35fd20",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 233073,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15439104,
+    "output_tokens": 41185,
+    "api_call_count": 129
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T16:13:59.752676177Z",
+    "agent_lines": 1138,
+    "agent_removed": 40,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1138,
+    "total_lines_changed": 1178,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 1138,
+      "agent_lines_removed": 40,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}

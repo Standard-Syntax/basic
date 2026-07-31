@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYWF8C9S1SQMBVV0KQQ0DH7T",
+  "strategy": "manual-commit",
+  "branch": "beta/repository-preflight",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "README.md",
+    "docs/architecture.md",
+    "docs/beta-release-plan.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "docs/resource-analysis.md",
+    "docs/security.md",
+    "go/cmd/api-service/main.go",
+    "go/cmd/api-service/main_test.go",
+    "go/cmd/beta-preflight/main.go",
+    "go/cmd/beta-preflight/main_test.go",
+    "go/cmd/workflow-service/main.go",
+    "go/cmd/workflow-service/main_test.go",
+    "go/internal/approval/repository.go",
+    "go/internal/beta/policy.go",
+    "go/internal/beta/policy_test.go",
+    "go/internal/controlapi/intake.go",
+    "go/internal/controlapi/intake_integration_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/execution/repository.go",
+    "go/internal/migration/migration.go",
+    "go/internal/publication/repository.go",
+    "go/internal/reasoning/gateway/repository.go",
+    "go/internal/registry/registry.go",
+    "go/internal/runtime/bindings.go",
+    "go/internal/runtime/builder.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/stage/handlers.go",
+    "go/internal/stage/handlers_test.go",
+    "go/internal/verification/repository.go",
+    "go/internal/workflow/migrate.go",
+    "go/internal/workflow/migrations/0020_beta_policy_bindings.sql"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 233073,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 15439104,
+    "output_tokens": 41185,
+    "api_call_count": 129
+  }
+}
