@@ -21,8 +21,13 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
 	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/controlapi"
+	"github.com/Standard-Syntax/basic/go/internal/execution"
+	"github.com/Standard-Syntax/basic/go/internal/migration"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
+	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
+	"github.com/Standard-Syntax/basic/go/internal/registry"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
+	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -62,7 +67,11 @@ func main() {
 func mainExit() int {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	configPath := flag.String("config", "", "absolute path to strict JSON configuration")
+	healthcheck := flag.String("healthcheck", "", "probe one local health endpoint")
 	flag.Parse()
+	if *healthcheck != "" {
+		return probeHealth(*healthcheck)
+	}
 	value, err := loadConfig(*configPath)
 	if err != nil {
 		slog.Error("load API configuration", "error", err)
@@ -72,6 +81,19 @@ func mainExit() int {
 	defer stop()
 	if err := run(ctx, value); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("API service stopped", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func probeHealth(endpoint string) int {
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get(endpoint)
+	if err != nil {
+		return 1
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
 		return 1
 	}
 	return 0
@@ -122,8 +144,8 @@ func validateListen(listen string) error {
 		return errors.New("listen must include host and port")
 	}
 	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("API listen address must be loopback")
+	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) {
+		return errors.New("API listen address must be loopback or container-wildcard")
 	}
 	return nil
 }
@@ -148,7 +170,9 @@ func validateConfig(value config) error {
 	return nil
 }
 
-func run(ctx context.Context, value config) error {
+func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
+	ctx context.Context, value config,
+) error {
 	migrateCtx, cancelMigrate := context.WithTimeout(ctx, 30*time.Second)
 	err := workflow.Migrate(migrateCtx, value.DatabaseURL)
 	if err == nil {
@@ -201,6 +225,22 @@ func run(ctx context.Context, value config) error {
 		MaxBodyBytes:  value.MaxBodyBytes,
 		TrustedChecks: value.TrustedChecks,
 		Policy:        value.Policy,
+		Ready: func(readyCtx context.Context) error {
+			if err := pool.Ping(readyCtx); err != nil {
+				return err
+			}
+			if _, err := migration.Verify(readyCtx, value.DatabaseURL,
+				workflow.MigrationSource(), registry.MigrationSource(), gateway.MigrationSource(),
+				execution.MigrationSource(), verification.MigrationSource(),
+				approval.MigrationSource(), publication.MigrationSource()); err != nil {
+				return err
+			}
+			if _, err := os.Stat(value.ArtifactRoot); err != nil {
+				return err
+			}
+			_, err := os.Stat(value.RepositoryRoot)
+			return err
+		},
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
 	if err != nil {

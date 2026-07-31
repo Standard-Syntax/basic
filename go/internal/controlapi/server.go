@@ -66,6 +66,7 @@ type IdempotencyLedger interface {
 	AbandonIdempotency(context.Context, string, uint64) error
 	Enqueue(context.Context, runtime.Job) error
 	CancelRun(context.Context, string, time.Time) error
+	RunStages(context.Context, string) ([]runtime.StageStatus, error)
 }
 
 type ArtifactStore interface {
@@ -98,6 +99,7 @@ type Config struct {
 	MaxBodyBytes   int64
 	TrustedChecks  []string
 	Policy         beta.Policy
+	Ready          func(context.Context) error
 }
 
 type Server struct {
@@ -215,6 +217,19 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
+	if request.URL.Path == "/readyz" {
+		if s.config.Ready != nil {
+			ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
+			err := s.config.Ready(ctx)
+			cancel()
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+				return
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return
+	}
 	principal, ok := s.authenticate(request)
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthenticated", "valid bearer token required")
@@ -244,10 +259,6 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		s.logger.Info("control API request", attributes...)
 	}()
 	w = counted
-	if request.URL.Path == "/readyz" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-		return
-	}
 	if request.URL.Path == "/metrics" {
 		writeJSON(w, http.StatusOK, map[string]uint64{
 			"requests_total":                    s.requests.Load(),
@@ -321,8 +332,13 @@ func (s *Server) handleGet(w http.ResponseWriter, request *http.Request, princip
 			s.writeDomainError(w, err)
 			return
 		}
+		stages, err := s.runtime.RunStages(request.Context(), runID)
+		if err != nil {
+			s.writeDomainError(w, err)
+			return
+		}
 		w.Header().Set("ETag", revisionETag(run.Revision))
-		writeJSON(w, http.StatusOK, map[string]any{"run": run, "tasks": tasks})
+		writeJSON(w, http.StatusOK, map[string]any{"run": run, "tasks": tasks, "stages": stages})
 		return
 	}
 	if suffix == "/events" {

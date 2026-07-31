@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,8 +20,10 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
 	"github.com/Standard-Syntax/basic/go/internal/beta"
+	"github.com/Standard-Syntax/basic/go/internal/dockerengine"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
+	"github.com/Standard-Syntax/basic/go/internal/migration"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
@@ -33,6 +37,7 @@ import (
 )
 
 type config struct {
+	Listen                     string                 `json:"listen"`
 	DatabaseURL                string                 `json:"database_url"`
 	ArtifactRoot               string                 `json:"artifact_root"`
 	OwnerID                    string                 `json:"owner_id"`
@@ -69,7 +74,11 @@ func main() {
 func mainExit() int {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	configPath := flag.String("config", "", "absolute path to strict JSON configuration")
+	healthcheck := flag.String("healthcheck", "", "probe one local health endpoint")
 	flag.Parse()
+	if *healthcheck != "" {
+		return probeHealth(*healthcheck)
+	}
 	if *configPath == "" {
 		slog.Error("configuration is required")
 		return 2
@@ -83,6 +92,19 @@ func mainExit() int {
 	defer stop()
 	if err := run(ctx, &value); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("workflow service stopped", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func probeHealth(endpoint string) int {
+	client := &http.Client{Timeout: 5 * time.Second}
+	response, err := client.Get(endpoint)
+	if err != nil {
+		return 1
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
 		return 1
 	}
 	return 0
@@ -133,6 +155,12 @@ func normalizeConfig(value *config) (config, error) {
 	}
 	if !completeConfig(value) {
 		return config{}, errors.New("incomplete configuration")
+	}
+	if value.Listen == "" {
+		value.Listen = "127.0.0.1:8081"
+	}
+	if _, _, err := net.SplitHostPort(value.Listen); err != nil {
+		return config{}, errors.New("workflow listen must include host and port")
 	}
 	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot ||
 		value.Policy.Images.Execution != value.ExecutionWorkerImage ||
@@ -266,6 +294,11 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		return err
 	}
 	workflowStore := workflow.NewStore(pool)
+	engine, err := dockerengine.NewFromEnvironment()
+	if err != nil {
+		return err
+	}
+	defer engine.Close()
 	executionService, err := execution.NewService(execution.Config{
 		RepositoryRoot: value.RepositoryRoot, WorktreeRoot: value.WorktreeRoot,
 		WorkerImage: value.ExecutionWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID,
@@ -276,7 +309,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 			MaxFileBytes:  value.Policy.Limits.MaximumFileBytes,
 			MaxTotalBytes: value.Policy.Limits.MaximumTotalBytes, Timeout: execution.DefaultTimeout},
 	}, artifacts, execution.DockerApplicator{
-		Image: value.ExecutionWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID,
+		Image: value.ExecutionWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID, Engine: engine,
 	}, workflowStore, execution.NewPostgresExecutionLedger(pool))
 	if err != nil {
 		return err
@@ -287,7 +320,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	}, artifacts, workflowStore, verification.FileWorkspacePreparer{
 		RepositoryRoot: value.RepositoryRoot, WorkspaceRoot: value.VerificationWorkspaceRoot,
 	}, verification.DockerCheckExecutor{
-		Image: value.VerificationWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID,
+		Image: value.VerificationWorkerImage, UID: value.WorkerUID, GID: value.WorkerGID, Engine: engine,
 	}, verification.NewPostgresVerificationLedger(pool))
 	if err != nil {
 		return err
@@ -330,7 +363,77 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		return err
 	}
 	slog.Info("workflow service ready", "owner_id", value.OwnerID)
-	return reconciler.RunWithDrain(ctx, value.ShutdownDrainTimeout)
+	serviceCtx, cancelService := context.WithCancel(ctx)
+	defer cancelService()
+	health := &http.Server{Addr: value.Listen, Handler: workflowHealthHandler(serviceCtx, value, pool, artifacts, credentials, engine),
+		ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second}
+	healthErrors := make(chan error, 1)
+	go func() { healthErrors <- health.ListenAndServe() }()
+	reconcileDone := make(chan error, 1)
+	go func() { reconcileDone <- reconciler.RunWithDrain(serviceCtx, value.ShutdownDrainTimeout) }()
+	var runErr error
+	select {
+	case runErr = <-reconcileDone:
+	case runErr = <-healthErrors:
+		if errors.Is(runErr, http.ErrServerClosed) {
+			runErr = nil
+		}
+	}
+	cancelService()
+	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = health.Shutdown(shutdown)
+	return runErr
+}
+
+func workflowHealthHandler(parent context.Context, value *config, pool *pgxpool.Pool,
+	artifacts *artifact.Store, credentials gateway.CredentialSource, engine dockerengine.Engine,
+) http.Handler {
+	_ = artifacts
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		writeHealth(w, http.StatusOK, "ok")
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, request *http.Request) {
+		ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+		defer cancel()
+		if parent.Err() != nil || pool.Ping(ctx) != nil || workflowReady(ctx, value, credentials, engine) != nil {
+			writeHealth(w, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		writeHealth(w, http.StatusOK, "ready")
+	})
+	return mux
+}
+
+func workflowReady(ctx context.Context, value *config, credentials gateway.CredentialSource, engine dockerengine.Engine) error {
+	if _, err := migration.Verify(ctx, value.DatabaseURL, workflow.MigrationSource(), registry.MigrationSource(),
+		gateway.MigrationSource(), execution.MigrationSource(), verification.MigrationSource(),
+		approval.MigrationSource(), publication.MigrationSource()); err != nil {
+		return err
+	}
+	if _, err := credentials.Credential(ctx); err != nil {
+		return err
+	}
+	for _, image := range []string{value.ExecutionWorkerImage, value.VerificationWorkerImage} {
+		id, err := engine.ImageID(ctx, image)
+		if err != nil || id != image {
+			return errors.New("worker image unavailable")
+		}
+	}
+	for _, path := range []string{value.ArtifactRoot, value.RepositoryRoot, value.WorktreeRoot, value.VerificationWorkspaceRoot,
+		value.ImplementationManifestPath, value.ImplementationPromptPath, value.ReviewManifestPath, value.ReviewPromptPath} {
+		if _, err := os.Stat(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeHealth(w http.ResponseWriter, status int, state string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = fmt.Fprintf(w, "{\"status\":%q}\n", state)
 }
 
 type runtimePorts struct {
