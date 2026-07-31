@@ -5,12 +5,8 @@
   "branch": "beta/service-packaging",
   "checkpoints_count": 1,
   "files_touched": [
-    "Makefile",
-    "go/cmd/beta-compose-env/main.go",
-    "go/internal/beta/deployment_test.go",
-    "go/internal/controlapi/server_test.go",
-    "go/internal/runtime/process_e2e_test.go",
-    "scripts/inspect-beta-images.sh"
+    "compose.yaml",
+    "go/cmd/beta-compose-env/main.go"
   ],
   "sessions": [
     {
@@ -22,10 +18,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 194339,
+    "input_tokens": 8648,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 8505600,
-    "output_tokens": 43104,
-    "api_call_count": 83
+    "cache_read_tokens": 749312,
+    "output_tokens": 1829,
+    "api_call_count": 5
   }
 }
