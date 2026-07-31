@@ -200,7 +200,7 @@ func cleanAbsolute(value string) bool { return filepath.IsAbs(value) && filepath
 
 // VerifyRemoteBase rechecks the configured remote and approved branch without changing refs.
 func VerifyRemoteBase(ctx context.Context, p Policy) error {
-	return verifyRemoteBase(ctx, p, "")
+	return verifyRemoteBaseUsingCredential(ctx, p, "")
 }
 
 // VerifyRemoteBaseWithSSHKey performs the same non-mutating verification while
@@ -209,10 +209,10 @@ func VerifyRemoteBaseWithSSHKey(ctx context.Context, p Policy, sshKeyFile string
 	if !cleanAbsolute(sshKeyFile) || !canaryCredentialPathPattern.MatchString(sshKeyFile) {
 		return errors.New("invalid Git SSH credential path")
 	}
-	return verifyRemoteBase(ctx, p, sshKeyFile)
+	return verifyRemoteBaseUsingCredential(ctx, p, sshKeyFile)
 }
 
-func verifyRemoteBase(ctx context.Context, p Policy, sshKeyFile string) error {
+func verifyRemoteBaseUsingCredential(ctx context.Context, p Policy, sshKeyFile string) error {
 	if err := p.Validate(); err != nil {
 		return err
 	}
