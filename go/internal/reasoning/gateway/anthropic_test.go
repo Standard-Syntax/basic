@@ -245,16 +245,33 @@ func TestAnthropicImplementationAcceptsDocumentedThinkingBeforeOneTextBlock(t *t
 }
 
 func TestAnthropicImplementationRejectsUnexpectedOrMultipleContentBlocks(t *testing.T) {
+	thinking := anthropic.ContentBlockUnion{
+		Type: "thinking", Thinking: "untrusted reasoning", Signature: "fixture-signature",
+	}
 	for _, test := range []struct {
-		name  string
-		block anthropic.ContentBlockUnion
+		name   string
+		mutate func(*anthropic.Message)
 	}{
-		{name: "second text", block: anthropic.ContentBlockUnion{Type: "text", Text: "{}"}},
-		{name: "tool use", block: anthropic.ContentBlockUnion{Type: "tool_use", ID: "tool-1"}},
+		{name: "second text", mutate: func(message *anthropic.Message) {
+			message.Content = append(
+				message.Content, anthropic.ContentBlockUnion{Type: "text", Text: "{}"},
+			)
+		}},
+		{name: "tool use", mutate: func(message *anthropic.Message) {
+			message.Content = append(
+				message.Content, anthropic.ContentBlockUnion{Type: "tool_use", ID: "tool-1"},
+			)
+		}},
+		{name: "thinking after text", mutate: func(message *anthropic.Message) {
+			message.Content = append(message.Content, thinking)
+		}},
+		{name: "duplicate thinking", mutate: func(message *anthropic.Message) {
+			message.Content = append([]anthropic.ContentBlockUnion{thinking, thinking}, message.Content...)
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			message := anthropicMessage(t, validImplementationProjection(t))
-			message.Content = append(message.Content, test.block)
+			test.mutate(message)
 			sender := &captureMessageSender{reply: message}
 			adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
 			result, err := adapter.ProposeImplementation(t.Context(), agentManifest, request)

@@ -678,10 +678,17 @@ func providerText(message *anthropic.Message) (string, *MalformedOutput) {
 		}
 	}
 	var text string
+	thinkingSeen := false
 	for index := range message.Content {
 		block := &message.Content[index]
 		switch block.Type {
 		case "thinking":
+			if thinkingSeen || text != "" {
+				return "", &MalformedOutput{
+					Message: "provider response must contain one optional thinking block before one text block",
+				}
+			}
+			thinkingSeen = true
 			// MiniMax documents a signed thinking block before its text block.
 			// It stays only in the raw response artifact and is never proposal input.
 			continue
