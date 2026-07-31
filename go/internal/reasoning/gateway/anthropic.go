@@ -678,7 +678,8 @@ func providerText(message *anthropic.Message) (string, *MalformedOutput) {
 		}
 	}
 	var text string
-	for _, block := range message.Content {
+	for index := range message.Content {
+		block := &message.Content[index]
 		switch block.Type {
 		case "thinking":
 			// MiniMax documents a signed thinking block before its text block.
