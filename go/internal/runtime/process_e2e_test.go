@@ -26,6 +26,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/manifest"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -263,7 +264,7 @@ func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 		WHERE aggregate_id IN ($1,$2)`, runID, taskID).Scan(&events); err != nil || events < 10 {
 		t.Fatalf("events = %d, %v", events, err)
 	}
-	assertSecretAbsent(t, apiKey, databaseURL, artifactRoot, repository,
+	assertSecretAbsent(t, apiKey, pool, artifactRoot, repository,
 		[]string{
 			apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
 			manifestPaths[0], manifestPaths[1],
@@ -837,7 +838,9 @@ func snapshotSideEffects(
 
 func assertSecretAbsent(
 	t *testing.T,
-	secret, databaseURL, artifactRoot, repository string,
+	secret string,
+	pool *pgxpool.Pool,
+	artifactRoot, repository string,
 	configPaths []string,
 	processes []*process,
 ) {
@@ -876,12 +879,35 @@ func assertSecretAbsent(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("pg_dump", "--no-owner", "--no-privileges", databaseURL)
-	dump, err := command.Output()
+	rows, err := pool.Query(t.Context(), `SELECT schemaname, tablename
+		FROM pg_catalog.pg_tables
+		WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+		ORDER BY schemaname, tablename`)
 	if err != nil {
-		t.Fatalf("dump PostgreSQL secret evidence: %v", err)
+		t.Fatalf("list PostgreSQL evidence tables: %v", err)
 	}
-	check("PostgreSQL evidence", dump)
+	tables, err := pgx.CollectRows(rows, pgx.RowToStructByPos[struct {
+		Schema string
+		Table  string
+	}])
+	if err != nil {
+		t.Fatalf("collect PostgreSQL evidence tables: %v", err)
+	}
+	connection, err := pool.Acquire(t.Context())
+	if err != nil {
+		t.Fatalf("acquire PostgreSQL evidence connection: %v", err)
+	}
+	defer connection.Release()
+	for _, table := range tables {
+		var dump bytes.Buffer
+		name := pgx.Identifier{table.Schema, table.Table}.Sanitize()
+		if _, err := connection.Conn().PgConn().CopyTo(
+			t.Context(), &dump, "COPY "+name+" TO STDOUT WITH (FORMAT csv, HEADER true)",
+		); err != nil {
+			t.Fatalf("export PostgreSQL evidence table %s: %v", name, err)
+		}
+		check("PostgreSQL evidence table "+name, dump.Bytes())
+	}
 	assertSecretAbsentFromGit(t, secret, repository)
 }
 
