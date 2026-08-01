@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 )
 
 const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -42,7 +43,7 @@ func buildCandidate(
 	if err != nil {
 		return "", "", nil, false, err
 	}
-	defer os.Remove(indexPath)
+	defer os.RemoveAll(filepath.Dir(indexPath))
 	if err := applyCandidateChanges(
 		ctx, config.RepositoryRoot, indexPath, worktree, mappedRequest, proposal.Changes,
 	); err != nil {
@@ -76,17 +77,11 @@ func buildCandidate(
 func prepareCandidateIndex(
 	ctx context.Context, repository, worktreeRoot, baseCommit string,
 ) (string, error) {
-	index, err := os.CreateTemp(worktreeRoot, ".candidate-index-*")
+	indexRoot, err := os.MkdirTemp(worktreeRoot, ".candidate-index-*")
 	if err != nil {
-		return "", fmt.Errorf("create candidate index: %w", err)
+		return "", fmt.Errorf("create candidate index directory: %w", err)
 	}
-	indexPath := index.Name()
-	if err := index.Close(); err != nil {
-		return "", fmt.Errorf("close candidate index: %w", err)
-	}
-	if err := os.Remove(indexPath); err != nil {
-		return "", fmt.Errorf("prepare candidate index: %w", err)
-	}
+	indexPath := filepath.Join(indexRoot, "index")
 	if _, err := gitIndexOutput(
 		ctx, repository, indexPath, nil, "read-tree", baseCommit,
 	); err != nil {
@@ -390,7 +385,7 @@ func gitIndexOutputEnv(
 		"-C", repository,
 	}
 	command := exec.CommandContext(ctx, "git", append(base, arguments...)...)
-	command.Env = append(os.Environ(),
+	command.Env = subprocess.Git(
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_OPTIONAL_LOCKS=0",

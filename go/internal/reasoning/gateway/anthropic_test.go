@@ -379,7 +379,7 @@ func TestAnthropicImplementationGuardsCredentialsAndContentSecrets(t *testing.T)
 	sender := &captureMessageSender{reply: anthropicMessage(t, validImplementationProjection(t))}
 	adapter, agentManifest, request := anthropicImplementationFixture(t, sender)
 	store := adapter.runtime.artifacts.(*memoryArtifactStore)
-	prompt, err := store.Put(t.Context(), []byte("authorization: bearer leaked"))
+	prompt, err := store.Put(t.Context(), []byte("authorization: Abcd1234-SecretToken-XYZ"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,6 +396,23 @@ func TestAnthropicImplementationGuardsCredentialsAndContentSecrets(t *testing.T)
 	if !errors.Is(err, ErrCredentialUnavailable) ||
 		strings.Contains(err.Error(), "test-credential") {
 		t.Fatalf("credential leaked through error: %v", err)
+	}
+}
+
+func TestSecretAssignmentHeuristicAllowsTemplatesAndRejectsPlausibleSecrets(t *testing.T) {
+	for _, value := range []string{"${ANTHROPIC_API_KEY}", "{{ .Values.apiKey }}", "REDACTED_EXAMPLE_CREDENTIAL"} {
+		if likelySecretAssignment(value) {
+			t.Fatalf("placeholder %q classified as secret", value)
+		}
+	}
+	if !likelySecretAssignment("Abcd1234-SecretToken-XYZ") {
+		t.Fatal("plausible high-entropy assignment was not classified")
+	}
+	err := guardProviderContent("active-key", "repository_context", []byte("active-key"))
+	var typed *ContentSecretError
+	if !errors.As(err, &typed) || typed.Source != "repository_context" ||
+		strings.Contains(err.Error(), "active-key") {
+		t.Fatalf("typed secret error = %#v %v", typed, err)
 	}
 }
 

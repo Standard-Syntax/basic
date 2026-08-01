@@ -22,6 +22,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
 	"github.com/Standard-Syntax/basic/go/internal/registry"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 )
@@ -102,7 +103,9 @@ func buildRecord(ctx context.Context, deployment *beta.Deployment) (beta.Deploym
 }
 
 func command(name string, args ...string) (string, error) {
-	body, err := exec.Command(name, args...).CombinedOutput()
+	cmd := exec.Command(name, args...)
+	cmd.Env = subprocess.Git()
+	body, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(body)), err
 }
 

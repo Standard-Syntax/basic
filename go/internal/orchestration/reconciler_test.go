@@ -6,19 +6,21 @@ import (
 	"testing"
 	"time"
 
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
 )
 
 type memoryLedger struct {
-	job       runtime.Job
-	found     bool
-	completed []completeCall
-	retried   []retryCall
-	failed    []failureCall
-	renewals  int
-	renew     func(context.Context) error
+	job         runtime.Job
+	found       bool
+	completed   []completeCall
+	retried     []retryCall
+	rescheduled []retryCall
+	failed      []failureCall
+	renewals    int
+	renew       func(context.Context) error
 }
 
 type completeCall struct {
@@ -79,6 +81,34 @@ func (m *memoryLedger) Retry(
 		jobID: jobID, owner: owner, fence: fence, available: available,
 	})
 	return nil
+}
+func (m *memoryLedger) RescheduleTransient(
+	_ context.Context, jobID, owner string, fence uint64, available time.Time,
+) error {
+	m.rescheduled = append(m.rescheduled, retryCall{
+		jobID: jobID, owner: owner, fence: fence, available: available,
+	})
+	return nil
+}
+
+func TestOnceReschedulesTransientDatabaseConflictWithoutRetryCharge(t *testing.T) {
+	owner, fixedNow := uuid.NewString(), time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: uuid.NewString(), Stage: StageReasoning,
+		FencingToken: 7, RetryCount: 2,
+	}}
+	reconciler, err := New(Config{OwnerID: owner, ClaimTTL: time.Minute,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: 10 * time.Millisecond},
+		ledger, &memoryArtifacts{}, handlersReturning(postgresutil.ErrTransient), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler.now = func() time.Time { return fixedNow }
+	worked, err := reconciler.Once(t.Context())
+	if err != nil || !worked || len(ledger.rescheduled) != 1 || len(ledger.retried) != 0 || len(ledger.failed) != 0 {
+		t.Fatalf("worked=%v err=%v rescheduled=%v retried=%v failed=%v",
+			worked, err, ledger.rescheduled, ledger.retried, ledger.failed)
+	}
 }
 func (m *memoryLedger) Fail(
 	_ context.Context, jobID, owner string, fence uint64,

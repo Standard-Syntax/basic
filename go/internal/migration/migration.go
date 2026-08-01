@@ -238,7 +238,7 @@ func applyOne(ctx context.Context, connection *pgx.Conn, value item) error {
 		}
 		return nil
 	}
-	if err != pgx.ErrNoRows {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("read migration %d: %w", value.version, err)
 	}
 	tx, err := connection.Begin(ctx)

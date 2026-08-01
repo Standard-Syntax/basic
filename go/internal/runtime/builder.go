@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"google.golang.org/protobuf/proto"
@@ -510,32 +513,100 @@ func BuildImplementationContext(
 	if commit != snapshot.BaseCommit || limits.MaxFiles <= 0 || limits.MaxBytes <= 0 {
 		return nil, ErrScope
 	}
-	var result []*reasoningv1.RepositoryContextFile
-	var total int64
+	selected := make([]*reasoningv1.RepositoryEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if !withinAny(entry.Path, readable) {
 			continue
 		}
-		if len(result) == limits.MaxFiles {
+		if len(selected) == limits.MaxFiles {
 			return nil, ErrScopeLimit
 		}
-		body, err := gitOutput(ctx, root, "show", commit+":"+entry.Path)
-		if err != nil {
+		selected = append(selected, entry)
+	}
+	if len(selected) == 0 {
+		return nil, ErrScope
+	}
+	return readContextBatch(ctx, root, commit, selected, limits.MaxBytes)
+}
+
+func readContextBatch(
+	ctx context.Context, root, commit string, entries []*reasoningv1.RepositoryEntry, maximum int64,
+) ([]*reasoningv1.RepositoryContextFile, error) {
+	command := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "--batch", "-Z")
+	command.Env = subprocess.Git()
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	abort := func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+	}
+	for _, entry := range entries {
+		if !safeRepoPath(entry.Path) {
+			_ = stdin.Close()
+			abort()
+			return nil, ErrScope
+		}
+		if _, err := io.WriteString(stdin, commit+":"+entry.Path+"\x00"); err != nil {
+			_ = stdin.Close()
+			abort()
 			return nil, err
 		}
-		total += int64(len(body))
-		if total > limits.MaxBytes {
+	}
+	if err := stdin.Close(); err != nil {
+		abort()
+		return nil, err
+	}
+	reader := bufio.NewReader(stdout)
+	result := make([]*reasoningv1.RepositoryContextFile, 0, len(entries))
+	remaining := maximum
+	for _, entry := range entries {
+		header, err := reader.ReadString(0)
+		if err != nil {
+			abort()
+			return nil, fmt.Errorf("read Git batch header: %w", err)
+		}
+		fields := strings.Fields(strings.TrimSuffix(header, "\x00"))
+		if len(fields) != 3 || fields[1] != "blob" {
+			abort()
+			return nil, ErrScope
+		}
+		size, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil || size < 0 || size > remaining {
+			abort()
 			return nil, ErrScopeLimit
 		}
+		body := make([]byte, size)
+		if _, err := io.ReadFull(reader, body); err != nil {
+			abort()
+			return nil, err
+		}
+		terminator, err := reader.ReadByte()
+		if err != nil || terminator != 0 {
+			abort()
+			return nil, ErrScope
+		}
+		remaining -= size
 		if Digest(body) != entry.Sha256 {
+			abort()
 			return nil, ErrScope
 		}
 		result = append(result, &reasoningv1.RepositoryContextFile{
 			Path: entry.Path, Sha256: entry.Sha256, Content: string(body),
 		})
 	}
-	if len(result) == 0 {
-		return nil, ErrScope
+	if err := command.Wait(); err != nil {
+		return nil, fmt.Errorf("read Git batch: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return result, nil
 }
@@ -554,7 +625,8 @@ func gitOutput(ctx context.Context, root string, args ...string) ([]byte, error)
 func safeRepoPath(value string) bool {
 	return value != "" && value == path.Clean(value) && !path.IsAbs(value) &&
 		value != "." && value != ".git" && !strings.HasPrefix(value, "../") &&
-		!strings.HasPrefix(value, ".git/")
+		!strings.HasPrefix(value, ".git/") && !strings.Contains(value, `\`) &&
+		!strings.ContainsFunc(value, func(character rune) bool { return character < 0x20 || character == 0x7f })
 }
 
 func withinAny(value string, roots []string) bool {

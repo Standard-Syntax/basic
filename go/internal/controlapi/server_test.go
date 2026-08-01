@@ -14,6 +14,8 @@ import (
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/beta"
+	"github.com/Standard-Syntax/basic/go/internal/orchestration"
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -24,6 +26,8 @@ type fakeWorkflow struct {
 	runCommands  []workflow.RunCommand
 	taskCommands []workflow.TaskCommand
 	run          *workflow.Run
+	task         *workflow.Task
+	taskResult   workflow.CommandResult
 }
 
 func (f *fakeWorkflow) ExecuteRun(_ context.Context, command workflow.RunCommand) (workflow.CommandResult, error) {
@@ -32,6 +36,9 @@ func (f *fakeWorkflow) ExecuteRun(_ context.Context, command workflow.RunCommand
 }
 func (f *fakeWorkflow) ExecuteTask(_ context.Context, command workflow.TaskCommand) (workflow.CommandResult, error) {
 	f.taskCommands = append(f.taskCommands, command)
+	if f.taskResult.State != "" {
+		return f.taskResult, nil
+	}
 	return workflow.CommandResult{AggregateID: command.TaskID()}, nil
 }
 func (f *fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
@@ -40,7 +47,11 @@ func (f *fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
 	}
 	return workflow.Run{}, workflow.ErrNotFound
 }
-func (*fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, error) {
+
+func (f *fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, error) {
+	if f.task != nil {
+		return *f.task, nil
+	}
 	return workflow.Task{}, workflow.ErrNotFound
 }
 func (*fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error) {
@@ -58,7 +69,9 @@ type fakeRuntime struct {
 	completes         int
 	abandons          int
 	intakeHasDeadline bool
+	intakeContextErr  error
 	stages            []runtime.StageStatus
+	enqueued          []runtime.Job
 }
 
 type fakeRunIntake struct {
@@ -71,6 +84,7 @@ func (f *fakeRunIntake) Accept(
 	ctx context.Context, request RunIntakeRequest,
 ) (*runtime.IdempotencyResult, error) {
 	_, f.runtime.intakeHasDeadline = ctx.Deadline()
+	f.runtime.intakeContextErr = ctx.Err()
 	f.runtime.begins++
 	if f.err != nil {
 		f.runtime.abandons++
@@ -99,7 +113,13 @@ func (f *fakeRuntime) AbandonIdempotency(context.Context, string, uint64) error 
 	f.abandons++
 	return nil
 }
-func (*fakeRuntime) Enqueue(context.Context, runtime.Job) error { return nil }
+func (*fakeRuntime) RenewIdempotency(context.Context, string, uint64, time.Duration) error {
+	return nil
+}
+func (f *fakeRuntime) Enqueue(_ context.Context, job runtime.Job) error {
+	f.enqueued = append(f.enqueued, job)
+	return nil
+}
 func (*fakeRuntime) CancelRun(context.Context, string, time.Time) error {
 	return nil
 }
@@ -209,6 +229,90 @@ func TestNormalizeServerConfigCanonicalizesTrustedCheckOrder(t *testing.T) {
 	if _, err := compileTrustedChecks([]string{"build", "build"}); err == nil {
 		t.Fatal("duplicate trusted check accepted")
 	}
+	if config.TaskMaxAttempts != DefaultTaskMaxAttempts {
+		t.Fatalf("default task attempts = %d", config.TaskMaxAttempts)
+	}
+	for _, attempts := range []uint32{1, 11} {
+		if _, err := normalizeServerConfig(Config{
+			ServiceActorID: uuid.NewString(), TaskMaxAttempts: attempts,
+		}); err == nil {
+			t.Fatalf("task attempts %d accepted", attempts)
+		}
+	}
+}
+
+func TestCompilePrincipalsRejectsUnknownAndDuplicateRoles(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	for _, roles := range [][]Role{{"unknown"}, {RoleOperator, RoleOperator}} {
+		_, err := compilePrincipals([]Principal{{
+			ID: uuid.NewString(), TokenSHA256: digest, Roles: roles,
+		}})
+		if err == nil {
+			t.Fatalf("roles %v accepted", roles)
+		}
+	}
+}
+
+func TestTransientDatabaseConflictMapsToRetryable503(t *testing.T) {
+	server, _, _, _ := testServer(t, RoleOperator)
+	status, body := server.domainError(postgresutil.ErrTransient)
+	encoded, _ := json.Marshal(body)
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(encoded), "transient_conflict") {
+		t.Fatalf("status=%d body=%s", status, encoded)
+	}
+}
+
+func TestMutationRoutesRejectAllNonPostMethodsBeforeReadingBody(t *testing.T) {
+	server, _, ledger, token := testServer(t, RoleOperator)
+	for _, method := range []string{http.MethodHead, http.MethodPut, http.MethodPatch, http.MethodDelete, "BREW"} {
+		request := httptest.NewRequest(method, "/v1/runs", strings.NewReader("not-json"))
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != http.MethodPost {
+			t.Fatalf("%s response=%d allow=%q body=%s", method, response.Code, response.Header().Get("Allow"), response.Body)
+		}
+	}
+	if ledger.begins != 0 {
+		t.Fatalf("method rejection reserved %d idempotency keys", ledger.begins)
+	}
+}
+
+func TestRetryTaskQueuesNextAttemptAndExhaustionReturns422(t *testing.T) {
+	server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
+	runID, taskID := uuid.NewString(), uuid.NewString()
+	workflowStore.task = &workflow.Task{
+		ID: taskID, RunID: runID, Revision: 5, State: workflow.TaskStateReworkRequired,
+		CurrentAttempt: 1, MaxAttempts: 2,
+	}
+	workflowStore.taskResult = workflow.CommandResult{
+		AggregateID: taskID, State: string(workflow.TaskStateReady), Revision: 6, Replay: true,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+taskID+"/retry", strings.NewReader(
+		`{"run_id":"`+runID+`","decision_timestamp":"2026-08-01T12:00:00Z"}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	request.Header.Set("If-Match", `"5"`)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || len(runtimeLedger.enqueued) != 1 ||
+		runtimeLedger.enqueued[0].Attempt != 2 || runtimeLedger.enqueued[0].Stage != orchestration.StageStart {
+		t.Fatalf("response=%d %s jobs=%+v", response.Code, response.Body, runtimeLedger.enqueued)
+	}
+
+	runtimeLedger.enqueued = nil
+	workflowStore.task.CurrentAttempt = 2
+	workflowStore.taskResult.State = string(workflow.TaskStateFailed)
+	request = httptest.NewRequest(http.MethodPost, "/v1/tasks/"+taskID+"/retry", strings.NewReader(
+		`{"run_id":"`+runID+`","decision_timestamp":"2026-08-01T12:01:00Z"}`))
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	request.Header.Set("If-Match", `"5"`)
+	response = httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnprocessableEntity || len(runtimeLedger.enqueued) != 0 {
+		t.Fatalf("exhausted response=%d %s jobs=%+v", response.Code, response.Body, runtimeLedger.enqueued)
+	}
 }
 
 func testPolicy(root, commit, remoteURL string) beta.Policy {
@@ -282,6 +386,22 @@ func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	server.Handler().ServeHTTP(badResponse, bad)
 	if badResponse.Code != http.StatusBadRequest {
 		t.Fatalf("strict JSON status = %d: %s", badResponse.Code, badResponse.Body)
+	}
+}
+
+func TestRunIntakeSurvivesClientCancellation(t *testing.T) {
+	server, _, runtimeLedger, token := testServer(t, RoleOperator)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := `{"run_id":"` + uuid.NewString() + `","base_commit":"0123456789012345678901234567890123456789",` +
+		`"content":{"objective":"fix"},"decision_timestamp":"2026-08-01T12:00:00Z"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body)).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || runtimeLedger.intakeContextErr != nil {
+		t.Fatalf("response=%d %s intake context=%v", response.Code, response.Body, runtimeLedger.intakeContextErr)
 	}
 }
 

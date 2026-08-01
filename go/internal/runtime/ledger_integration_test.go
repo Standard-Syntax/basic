@@ -310,6 +310,14 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	if _, err := ledger.BeginIdempotency(ctx, request); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("live reservation = %v", err)
 	}
+	if err := ledger.RenewIdempotency(ctx, request.Key, first.FencingToken, time.Minute); err != nil {
+		t.Fatalf("renew reservation: %v", err)
+	}
+	var renewed bool
+	if err := pool.QueryRow(ctx, `SELECT reservation_expires_at > now()+interval '50 seconds'
+		FROM runtime_api_idempotency WHERE idempotency_key=$1`, request.Key).Scan(&renewed); err != nil || !renewed {
+		t.Fatalf("reservation not renewed: renewed=%v err=%v", renewed, err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE runtime_api_idempotency
 		SET reservation_expires_at=now()-interval '1 second'
 		WHERE idempotency_key=$1`, request.Key); err != nil {
@@ -318,6 +326,11 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	recovered, err := ledger.BeginIdempotency(ctx, request)
 	if err != nil || recovered.Replay || recovered.FencingToken != 2 {
 		t.Fatalf("recovered reservation = %#v, %v", recovered, err)
+	}
+	if err := ledger.RenewIdempotency(
+		ctx, request.Key, first.FencingToken, time.Minute,
+	); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("stale renewal = %v", err)
 	}
 	if err := ledger.AbandonIdempotency(
 		ctx, request.Key, first.FencingToken,

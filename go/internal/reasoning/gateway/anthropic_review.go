@@ -46,7 +46,6 @@ func (a *AnthropicReviewAdapter) ProposeReview(
 	if err != nil {
 		return ReviewAdapterResult{}, err
 	}
-	defer clearString(&key)
 	system, user, err := a.runtime.renderReview(ctx, key, agentManifest, request)
 	if err != nil {
 		return ReviewAdapterResult{}, err
@@ -123,7 +122,7 @@ func (r *anthropicRuntime) renderReview(
 	if err != nil {
 		return "", "", fmt.Errorf("load verified manifest prompt: %w", err)
 	}
-	if err := guardProviderContent(key, prompt); err != nil {
+	if err := guardProviderContent(key, "review_prompt", prompt); err != nil {
 		return "", "", err
 	}
 	requestJSON, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(request)
@@ -141,7 +140,7 @@ func (r *anthropicRuntime) renderReview(
 		if readErr != nil {
 			return "", "", fmt.Errorf("load verified input artifact: %w", readErr)
 		}
-		if err := guardProviderContent(key, body); err != nil {
+		if err := guardProviderContent(key, "review_artifact", body); err != nil {
 			return "", "", err
 		}
 		contextValue.InputArtifacts = append(contextValue.InputArtifacts, renderedArtifact{

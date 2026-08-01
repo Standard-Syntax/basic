@@ -60,14 +60,15 @@ func (d DockerCheckExecutor) Run(
 	}
 	name := "harness-verification-" + uuid.NewString()
 	user := strconv.Itoa(d.UID) + ":" + strconv.Itoa(d.GID)
-	var output boundedBuffer
-	output.limit = 2*DefaultMaxOutputBytes + 64*1024
+	output := dockerengine.NewBoundedWriter(2*DefaultMaxOutputBytes + 64*1024)
 	engine, closeEngine, err := d.engine()
 	if err != nil {
 		return ExecutionMeasurement{}, err
 	}
 	defer closeEngine()
-	err = engine.Run(ctx, dockerengine.RunRequest{
+	runCtx, cancelRun := context.WithTimeout(ctx, definition.Timeout+15*time.Second)
+	defer cancelRun()
+	err = engine.Run(runCtx, dockerengine.RunRequest{
 		Name: name, Image: imageID, User: user, WorkingDir: "/workspace",
 		Env: []string{"HOME=/tmp/home", "TMPDIR=/tmp", "GOCACHE=/tmp/go-build",
 			"UV_CACHE_DIR=/tmp/uv-cache", "UV_OFFLINE=1", "UV_NO_SYNC=1",
@@ -76,7 +77,7 @@ func (d DockerCheckExecutor) Run(
 		Mounts: []dockerengine.Mount{{Source: workspace, Target: "/workspace"}},
 		Tmpfs:  map[string]string{"/tmp": "rw,exec,nosuid,nodev,size=2g,mode=1777"},
 		Memory: 3 << 30, Pids: 256,
-	}, bytes.NewReader(payload), &output)
+	}, bytes.NewReader(payload), output)
 	if err != nil {
 		if ctx.Err() != nil {
 			removeVerificationContainer(engine, name)
@@ -86,7 +87,7 @@ func (d DockerCheckExecutor) Run(
 			"verification worker: %w: %s", err, strings.TrimSpace(string(output.Bytes())),
 		)
 	}
-	if output.overflow {
+	if output.Overflow() {
 		return ExecutionMeasurement{}, ErrWorkerResponse
 	}
 	var response WorkerResponse
@@ -147,26 +148,3 @@ type WorkerResponse struct {
 	PeakRSSBytes    int64     `json:"peak_rss_bytes"`
 	OutputTruncated bool      `json:"output_truncated"`
 }
-
-type boundedBuffer struct {
-	buffer   bytes.Buffer
-	limit    int64
-	overflow bool
-}
-
-func (b *boundedBuffer) Write(value []byte) (int, error) {
-	remaining := b.limit - int64(b.buffer.Len())
-	if remaining > 0 {
-		count := int64(len(value))
-		if count > remaining {
-			count = remaining
-		}
-		_, _ = b.buffer.Write(value[:count])
-	}
-	if int64(len(value)) > remaining {
-		b.overflow = true
-	}
-	return len(value), nil
-}
-
-func (b *boundedBuffer) Bytes() []byte { return b.buffer.Bytes() }

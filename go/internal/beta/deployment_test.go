@@ -31,6 +31,11 @@ func TestDeploymentStrictlyRejectsUnknownFieldsAndMutableImages(t *testing.T) {
 	if err := value.Validate(); err == nil {
 		t.Fatal("mutable image accepted")
 	}
+	value = validDeployment()
+	value.DockerSocketGroup = 0
+	if err := value.Validate(); err == nil {
+		t.Fatal("root Docker socket group fallback accepted")
+	}
 	body, _ := json.Marshal(validDeployment())
 	body = append(body[:len(body)-1], []byte(`,"unknown":true}`)...)
 	path := filepath.Join(t.TempDir(), "beta.json")

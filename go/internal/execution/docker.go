@@ -35,7 +35,7 @@ func (d DockerApplicator) Apply(
 		return err
 	}
 	defer closeEngine()
-	var output bytes.Buffer
+	output := dockerengine.NewBoundedWriter(1 << 20)
 	err = engine.Run(ctx, dockerengine.RunRequest{
 		Name: containerName, Image: d.Image, User: user,
 		Mounts: []dockerengine.Mount{
@@ -44,13 +44,13 @@ func (d DockerApplicator) Apply(
 		},
 		Tmpfs:  map[string]string{"/tmp": "rw,noexec,nosuid,nodev,size=16m"},
 		Memory: 512 << 20, Pids: 64,
-	}, bytes.NewReader(payload), &output)
+	}, bytes.NewReader(payload), output)
 	if err != nil {
 		if ctx.Err() != nil {
 			removeContainer(engine, containerName)
 			return fmt.Errorf("execution worker: %w", ctx.Err())
 		}
-		return fmt.Errorf("execution worker: %w: %s", err, output.String())
+		return fmt.Errorf("execution worker: %w: %s", err, string(output.Bytes()))
 	}
 	return nil
 }

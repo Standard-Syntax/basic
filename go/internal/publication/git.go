@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 )
 
 var (
@@ -176,21 +178,11 @@ func (p *GitCommandPublisher) run(
 ) error {
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Dir = p.root
-	command.Env = append(os.Environ(),
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_ASKPASS=",
-		"SSH_ASKPASS=",
-		"GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=core.hooksPath",
-		"GIT_CONFIG_VALUE_0=/dev/null",
-		"GIT_CONFIG_KEY_1=credential.interactive",
-		"GIT_CONFIG_VALUE_1=never",
-	)
-	if p.sshKeyFile != "" {
-		command.Env = append(command.Env,
-			"GIT_SSH_COMMAND=ssh -i '"+p.sshKeyFile+"' -o IdentitiesOnly=yes -o BatchMode=yes",
-		)
+	environment, err := subprocess.RemoteGit(p.sshKeyFile)
+	if err != nil {
+		return ErrCredentialPermissions
 	}
+	command.Env = environment
 	var stderr bytes.Buffer
 	if stdout != nil {
 		command.Stdout = stdout

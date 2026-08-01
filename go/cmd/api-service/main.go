@@ -40,6 +40,7 @@ type config struct {
 	ServiceActorID   string                 `json:"service_actor_id"`
 	MaxArtifactBytes int64                  `json:"max_artifact_bytes"`
 	MaxBodyBytes     int64                  `json:"max_body_bytes"`
+	TaskMaxAttempts  uint32                 `json:"task_max_attempts,omitempty"`
 	TrustedChecks    []string               `json:"trusted_checks"`
 	Principals       []controlapi.Principal `json:"principals"`
 	Publication      *publicationConfig     `json:"publication,omitempty"`
@@ -160,6 +161,13 @@ func validateConfig(value config) error {
 	if err := value.Policy.Validate(); err != nil || value.Policy.Repository.Root != value.RepositoryRoot {
 		return errors.New("invalid or mismatched beta policy")
 	}
+	if err := controlapi.ValidatePrincipals(value.Principals); err != nil {
+		return err
+	}
+	if value.TaskMaxAttempts != 0 &&
+		(value.TaskMaxAttempts < controlapi.DefaultTaskMaxAttempts || value.TaskMaxAttempts > 10) {
+		return errors.New("task_max_attempts must be between 2 and 10")
+	}
 	if value.Publication != nil && (value.Publication.RepositoryRoot != value.Policy.Repository.Root ||
 		value.Publication.RepositoryOwner != value.Policy.Repository.Owner ||
 		value.Publication.RepositoryName != value.Policy.Repository.Name ||
@@ -222,9 +230,10 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	}
 	handler, err := controlapi.New(controlapi.Config{
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
-		MaxBodyBytes:  value.MaxBodyBytes,
-		TrustedChecks: value.TrustedChecks,
-		Policy:        value.Policy,
+		MaxBodyBytes:    value.MaxBodyBytes,
+		TaskMaxAttempts: value.TaskMaxAttempts,
+		TrustedChecks:   value.TrustedChecks,
+		Policy:          value.Policy,
 		Ready: func(readyCtx context.Context) error {
 			if err := pool.Ping(readyCtx); err != nil {
 				return err

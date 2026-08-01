@@ -651,8 +651,10 @@ and rollback bind the same immutable image identities.
 
 ### Cons
 The trusted Docker socket remains powerful beta infrastructure, operators must
-provision its supplemental group explicitly, and Engine API compatibility is a
-new service dependency.
+provision its positive supplemental group explicitly, and Engine API compatibility
+is a new service dependency. Group zero is never an accepted fallback. This is
+an explicit bounded beta risk; DEC-028 does not claim that the narrow client
+interface reduces the Docker daemon's host-level authority.
 
 ### Why this option
 Removing container isolation would weaken execution and verification. Shipping

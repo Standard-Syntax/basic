@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/beta"
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5"
@@ -55,7 +56,10 @@ type RunIntakeCoordinator struct {
 	inject         func(IntakeFaultPoint) error
 }
 
-const intakeCleanupTimeout = 5 * time.Second
+const (
+	intakeCleanupTimeout  = 10 * time.Second
+	idempotencyRenewEvery = 10 * time.Second
+)
 
 type stagedRunIntake struct {
 	intake        workflow.ArtifactRef
@@ -94,23 +98,36 @@ func (c *RunIntakeCoordinator) fault(point IntakeFaultPoint) error {
 
 func (c *RunIntakeCoordinator) Accept(
 	ctx context.Context, request RunIntakeRequest,
-) (*runtime.IdempotencyResult, error) {
+) (result *runtime.IdempotencyResult, err error) {
 	if err := validateRunIntakeRequest(request); err != nil {
 		return nil, err
+	}
+	if request.Idempotency.ReservationTTL <= 0 {
+		request.Idempotency.ReservationTTL = 30 * time.Second
 	}
 	reservation, err := c.ledger.BeginIdempotency(ctx, request.Idempotency)
 	if err != nil || reservation.Replay {
 		return reservation, err
 	}
 	fence := reservation.FencingToken
+	workCtx, cancelWork := context.WithCancel(ctx)
+	renewed := make(chan error, 1)
+	go c.renewReservation(workCtx, cancelWork, request.Idempotency, fence, renewed)
+	defer func() {
+		cancelWork()
+		renewErr := <-renewed
+		if renewErr != nil && (err == nil || errors.Is(err, context.Canceled)) {
+			result, err = nil, renewErr
+		}
+	}()
 	if err := c.fault(FaultAfterReservation); err != nil {
 		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
-	staged, err := c.stageArtifacts(ctx, request)
+	staged, err := c.stageArtifacts(workCtx, request)
 	if err != nil {
 		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
-	response, commitAttempted, err := c.commitIntake(ctx, request, fence, staged)
+	response, commitAttempted, err := c.commitIntake(workCtx, request, fence, staged)
 	if err != nil {
 		if commitAttempted {
 			return nil, err
@@ -123,6 +140,32 @@ func (c *RunIntakeCoordinator) Accept(
 	return &runtime.IdempotencyResult{
 		StatusCode: http.StatusCreated, Response: response, FencingToken: fence,
 	}, nil
+}
+
+func (c *RunIntakeCoordinator) renewReservation(
+	ctx context.Context, cancel context.CancelFunc, request runtime.IdempotencyRequest,
+	fence uint64, done chan<- error,
+) {
+	ticker := time.NewTicker(idempotencyRenewEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			done <- nil
+			return
+		case <-ticker.C:
+			renewCtx, renewCancel := detachedCleanupContext(ctx)
+			err := c.ledger.RenewIdempotency(
+				renewCtx, request.Key, fence, request.ReservationTTL,
+			)
+			renewCancel()
+			if err != nil {
+				cancel()
+				done <- err
+				return
+			}
+		}
+	}
 }
 
 func validateRunIntakeRequest(request RunIntakeRequest) error {
@@ -185,6 +228,18 @@ func (c *RunIntakeCoordinator) stageArtifacts(
 }
 
 func (c *RunIntakeCoordinator) commitIntake(
+	ctx context.Context, request RunIntakeRequest, fence uint64, staged stagedRunIntake,
+) (response []byte, commitAttempted bool, err error) {
+	type result struct{ response []byte }
+	value, err := postgresutil.RetryTransaction(ctx, func() (result, error) {
+		body, attempted, transactionErr := c.commitIntakeOnce(ctx, request, fence, staged)
+		commitAttempted = commitAttempted || attempted
+		return result{response: body}, transactionErr
+	})
+	return value.response, commitAttempted, err
+}
+
+func (c *RunIntakeCoordinator) commitIntakeOnce(
 	ctx context.Context, request RunIntakeRequest, fence uint64, staged stagedRunIntake,
 ) (response []byte, commitAttempted bool, err error) {
 	tx, err := c.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})

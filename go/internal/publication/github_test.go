@@ -255,6 +255,18 @@ func githubClient(t *testing.T, endpoint string, limit int64) *GitHubRESTClient 
 	return client
 }
 
+func TestGitHubRepositoryPathsRejectEscapingSegments(t *testing.T) {
+	for _, value := range []string{"../owner", "owner/repo", ".", "owner?query"} {
+		if _, err := exactPullPath(value, "repo", 1); err == nil {
+			t.Fatalf("owner segment %q accepted", value)
+		}
+	}
+	path, err := exactPullPath("owner-name", "repo.name", 17)
+	if err != nil || path != "/repos/owner-name/repo.name/pulls/17" {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+}
+
 func prInput() DraftPullRequestInput {
 	marker := "<!-- harness-publication-id:00000000-0000-4000-8000-000000000001 -->"
 	return DraftPullRequestInput{

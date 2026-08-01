@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 )
 
 const PolicyVersion = "1.0"
@@ -238,11 +240,11 @@ func verifyRemoteBaseUsingCredential(ctx context.Context, p Policy, sshKeyFile s
 
 func git(ctx context.Context, root, sshKeyFile string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, "git", append([]string{"-C", root}, args...)...)
-	command.Env = append(command.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if sshKeyFile != "" {
-		command.Env = append(command.Env,
-			"GIT_SSH_COMMAND=ssh -i '"+sshKeyFile+"' -o IdentitiesOnly=yes -o BatchMode=yes")
+	environment, err := subprocess.RemoteGit(sshKeyFile)
+	if err != nil {
+		return "", err
 	}
+	command.Env = environment
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", args[0], err)

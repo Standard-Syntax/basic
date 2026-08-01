@@ -42,20 +42,10 @@ type Service struct {
 func NewService(
 	artifacts ArtifactStore,
 	workflowStore WorkflowStore,
-	configuredLedger ...ApprovalLedger,
+	ledger ApprovalLedger,
 ) (*Service, error) {
-	if artifacts == nil || workflowStore == nil {
-		return nil, errors.New("approval artifact store and workflow store are required")
-	}
-	if len(configuredLedger) > 1 {
-		return nil, errors.New("at most one approval ledger is allowed")
-	}
-	var ledger ApprovalLedger = NewMemoryApprovalLedger()
-	if len(configuredLedger) == 1 {
-		ledger = configuredLedger[0]
-	}
-	if ledger == nil {
-		return nil, errors.New("approval ledger is required")
+	if artifacts == nil || workflowStore == nil || ledger == nil {
+		return nil, errors.New("approval artifact store, workflow store, and ledger are required")
 	}
 	return &Service{artifacts: artifacts, workflow: workflowStore, ledger: ledger}, nil
 }

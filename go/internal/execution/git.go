@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	repositoryutil "github.com/Standard-Syntax/basic/go/internal/repository"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 )
 
 func createWorktree(
@@ -66,7 +67,7 @@ func gitOutput(ctx context.Context, repository string, arguments ...string) ([]b
 		"-C", repository,
 	}
 	command := exec.CommandContext(ctx, "git", append(base, arguments...)...)
-	command.Env = append(os.Environ(),
+	command.Env = subprocess.Git(
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_OPTIONAL_LOCKS=0",

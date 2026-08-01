@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -43,7 +44,17 @@ type Engine interface {
 }
 
 // Client is an API-version-negotiating Docker Engine client.
-type Client struct{ api *client.Client }
+type dockerAPI interface {
+	ImageInspect(context.Context, string, ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	ContainerCreate(context.Context, client.ContainerCreateOptions) (client.ContainerCreateResult, error)
+	ContainerAttach(context.Context, string, client.ContainerAttachOptions) (client.ContainerAttachResult, error)
+	ContainerWait(context.Context, string, client.ContainerWaitOptions) client.ContainerWaitResult
+	ContainerStart(context.Context, string, client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
+	Close() error
+}
+
+type Client struct{ api dockerAPI }
 
 // NewFromEnvironment connects using Docker's standard host configuration.
 func NewFromEnvironment() (*Client, error) {
@@ -70,7 +81,7 @@ func (c *Client) ImageID(ctx context.Context, image string) (string, error) {
 // for its terminal status. Callers retain cancellation cleanup authority.
 func (c *Client) Run(
 	ctx context.Context, request RunRequest, input io.Reader, output io.Writer,
-) error {
+) (runErr error) {
 	mounts := make([]mount.Mount, 0, len(request.Mounts))
 	for _, item := range request.Mounts {
 		mounts = append(mounts, mount.Mount{
@@ -98,6 +109,19 @@ func (c *Client) Run(
 	if err != nil {
 		return fmt.Errorf("create worker container: %w", err)
 	}
+	cleanupArmed := true
+	defer func() {
+		if !cleanupArmed {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if _, err := c.api.ContainerRemove(
+			cleanupCtx, created.ID, client.ContainerRemoveOptions{Force: true},
+		); err != nil && runErr == nil {
+			runErr = fmt.Errorf("remove worker container: %w", err)
+		}
+	}()
 	attached, err := c.api.ContainerAttach(ctx, created.ID, client.ContainerAttachOptions{
 		Stream: true, Stdin: true, Stdout: true, Stderr: true,
 	})
@@ -106,7 +130,7 @@ func (c *Client) Run(
 	}
 	defer attached.Close()
 	wait := c.api.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{
-		Condition: container.WaitConditionNotRunning,
+		Condition: container.WaitConditionRemoved,
 	})
 	if _, err := c.api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start worker container: %w", err)
@@ -139,6 +163,8 @@ func (c *Client) Run(
 		if status.StatusCode != 0 {
 			return fmt.Errorf("worker container exited with status %d", status.StatusCode)
 		}
+		// The removed wait condition confirms terminal AutoRemove completed.
+		cleanupArmed = false
 		return nil
 	}
 }

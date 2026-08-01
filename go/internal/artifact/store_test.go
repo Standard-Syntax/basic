@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 )
@@ -103,5 +104,54 @@ func TestOpenStoreDoesNotCreateMissingRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read-only open created the artifact root: %v", err)
+	}
+}
+
+func TestWritableOpenSweepsOnlyOldRegularTemporaryFiles(t *testing.T) {
+	root := t.TempDir()
+	shard := filepath.Join(root, "ab")
+	if err := os.Mkdir(shard, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(shard, ".tmp-11111111-1111-4111-8111-111111111111")
+	recent := filepath.Join(shard, ".tmp-22222222-2222-4222-8222-222222222222")
+	nonconforming := filepath.Join(shard, ".tmp-not-a-uuid")
+	symlink := filepath.Join(shard, ".tmp-33333333-3333-4333-8333-333333333333")
+	for _, path := range []string{old, recent, nonconforming} {
+		if err := os.WriteFile(path, []byte("temporary"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(old, symlink); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-25 * time.Hour)
+	for _, path := range []string{old, nonconforming, symlink} {
+		if err := os.Chtimes(path, stale, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readOnly, err := OpenStore(root, DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); err != nil {
+		t.Fatalf("read-only open swept file: %v", err)
+	}
+	writable, err := NewStore(root, DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writable.Close()
+	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old temporary file remains: %v", err)
+	}
+	for _, path := range []string{recent, nonconforming, symlink} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("preserved %s: %v", path, err)
+		}
 	}
 }

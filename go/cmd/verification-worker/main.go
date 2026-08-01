@@ -60,6 +60,7 @@ func run(input io.Reader, output io.Writer) error {
 		}
 		return syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 	}
+	command.WaitDelay = 5 * time.Second
 	var combined boundedBuffer
 	combined.limit = request.OutputBytes
 	command.Stdout, command.Stderr = &combined, &combined

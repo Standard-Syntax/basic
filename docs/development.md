@@ -235,7 +235,13 @@ Both processes accept `-config /absolute/path/config.json`. Configuration is
 strict JSON: unknown fields and trailing documents are rejected. The API
 configuration includes a loopback listener, PostgreSQL URL, absolute CAS root,
 a required clean absolute `repository_root`, service actor UUID, body limits,
-and principals with UUID identity, SHA-256 token digest, and roles. The API
+`task_max_attempts` (omitted defaults to `2`, accepted range `2` through `10`),
+and principals with UUID identity, SHA-256 token digest, and deduplicated roles
+from `operator`, `approver`, and `elevated_approver`. Model output cannot alter
+the attempt budget. The single-tenant beta read policy permits every
+authenticated principal holding any one of those known roles to read runs,
+events, stages, and pending approvals; mutation routes retain their narrower
+role checks. The API
 repository root is the source of the committed repository map bound by
 `POST /v1/runs`; it must address the same repository used by the workflow
 service. Workflow configuration includes the PostgreSQL URL,
@@ -253,7 +259,8 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
-`If-Match: "<revision>"`. `make beta-live-e2e` is the full two-process MiniMax
+`If-Match: "<revision>"`. Mutation routes accept only `POST`; read routes accept
+only `GET`, and method failures return `405` with `Allow`. `make beta-live-e2e` is the full two-process MiniMax
 gate: it builds both service binaries and worker images, starts disposable
 PostgreSQL, uses a disposable Git repository and loopback GitHub publication,
 and exercises implementation, execution, verification, review, restart,

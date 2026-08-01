@@ -27,6 +27,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/registry"
 	"github.com/Standard-Syntax/basic/go/internal/review"
 	runtimeledger "github.com/Standard-Syntax/basic/go/internal/runtime"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -645,6 +646,12 @@ func digest(body []byte) string {
 }
 
 func commandOutput(ctx context.Context, name string, arguments ...string) (string, error) {
-	body, err := exec.CommandContext(ctx, name, arguments...).Output()
+	command := exec.CommandContext(ctx, name, arguments...)
+	if name == "git" {
+		command.Env = subprocess.Git()
+	} else {
+		command.Env = subprocess.Docker("", "")
+	}
+	body, err := command.Output()
 	return strings.TrimSpace(string(body)), err
 }

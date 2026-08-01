@@ -29,11 +29,11 @@ func TestDockerExecutorRejectsMutableOrMalformedImageIdentity(t *testing.T) {
 }
 
 func TestBoundedBufferRetainsPrefixAndSignalsOverflow(t *testing.T) {
-	buffer := boundedBuffer{limit: 4}
+	buffer := dockerengine.NewBoundedWriter(4)
 	if count, err := buffer.Write([]byte("abcdef")); err != nil || count != 6 {
 		t.Fatalf("write = %d, %v", count, err)
 	}
-	if string(buffer.Bytes()) != "abcd" || !buffer.overflow {
-		t.Fatalf("buffer = %q overflow=%v", buffer.Bytes(), buffer.overflow)
+	if string(buffer.Bytes()) != "abcd" || !buffer.Overflow() {
+		t.Fatalf("buffer = %q overflow=%v", buffer.Bytes(), buffer.Overflow())
 	}
 }

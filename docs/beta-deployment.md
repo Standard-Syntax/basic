@@ -24,7 +24,8 @@ paths, and policy/image disagreement fail closed.
    `0.0.0.0:8081`; Compose publishes only API on host loopback.
 4. Build and inspect the images, then replace the envelope's image IDs with the
    reported IDs. Resolve the Docker socket group with
-   `stat -c '%g' /var/run/docker.sock` and record it in the envelope.
+   `stat -c '%g' /var/run/docker.sock` and record it in the envelope. The value
+   must be positive; group `0` is rejected and has no root-group fallback.
 
 ```bash
 make beta-images
@@ -33,6 +34,12 @@ docker image inspect --format '{{.Id}}' \
   basic-execution-worker:beta basic-verification-worker:beta
 make beta-deploy-smoke BETA_CONFIG=/absolute/path/to/beta.json
 ```
+
+The ordinary PostgreSQL development service remains in `compose.yaml`. Beta
+services are in `compose.beta.yaml`; invoke them with both files. Every beta
+image, service configuration, durable root, database secret, and Docker group
+substitution is required. Only explicitly optional publication credential
+mounts retain the `/dev/null` fallback.
 
 The smoke uses an isolated Compose project, waits for dependency-aware
 readiness, submits no run, makes no provider or GitHub request, verifies that no
