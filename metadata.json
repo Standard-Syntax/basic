@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYXXF2KJZVZN0T3V6MP6TQEV",
+  "strategy": "manual-commit",
+  "branch": "beta/release-readiness-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/beta-release.md",
+    "go/cmd/beta-deployment-record/main.go",
+    "go/cmd/beta-readiness/main.go",
+    "go/cmd/beta-readiness/main_test.go",
+    "go/internal/beta/directory.go",
+    "go/internal/beta/directory_test.go",
+    "go/internal/beta/record.go",
+    "go/internal/release/verifier.go",
+    "go/internal/release/verifier_test.go",
+    "go/internal/verification/types.go",
+    "go/internal/verification/types_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 129453,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2895360,
+    "output_tokens": 26499,
+    "api_call_count": 38
+  }
+}
