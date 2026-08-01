@@ -148,6 +148,98 @@ func TestCommandSeamReceivesSixtySecondDeadline(t *testing.T) {
 	}
 }
 
+func TestRunCommandNormalizesExpiredCommandContext(t *testing.T) {
+	verifier := &Verifier{command: func(ctx context.Context, _ string, _ ...string) (string, error) {
+		<-ctx.Done()
+		return "", errors.New("process terminated")
+	}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+	defer cancel()
+	_, err := verifier.runCommand(ctx, "git", "--version")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("command error = %v", err)
+	}
+}
+
+func TestSourceCommandErrorsPreserveCause(t *testing.T) {
+	want := errors.New("toolchain unavailable")
+	verifier := &Verifier{command: func(context.Context, string, ...string) (string, error) {
+		return "", want
+	}}
+	manifest := testManifest()
+	err := verifier.verifySourceAndToolchains(t.Context(), &manifest)
+	if !errors.Is(err, want) || failedCheck(err) != checkSourceCheckout {
+		t.Fatalf("source error = %v, check = %q", err, failedCheck(err))
+	}
+}
+
+func TestVerifyClassifiesExpiredCallerContextAsInconclusive(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+	}{
+		{"canceled", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			return ctx, func() {}
+		}},
+		{"deadline", func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := test.ctx()
+			defer cancel()
+			manifest := testManifest()
+			report, err := NewVerifier().Verify(ctx, &manifest)
+			if err == nil || report.Status != "inconclusive" || report.FailedCheck != checkTimeout {
+				t.Fatalf("report/error = %#v, %v", report, err)
+			}
+		})
+	}
+}
+
+func TestStableFailedCheckValuesAndUnknownFallback(t *testing.T) {
+	checks := []string{
+		checkConfiguration, checkSourceCheckout, checkToolchains, checkMigrations,
+		checkFiles, checkImages, checkWorkflowRuntime, checkReasoning,
+		checkVerification, checkReview, checkApproval, checkPublication,
+		checkGitHubDraft, checkHumanDecision, checkManifestCount, checkManifestSize,
+		checkPromptCount, checkPromptSize, checkTimeout, checkUnknown,
+	}
+	for _, check := range checks {
+		t.Run(check, func(t *testing.T) {
+			if got := failedCheck(failed(check, errors.New("detail"))); got != check {
+				t.Fatalf("failed check = %q", got)
+			}
+		})
+	}
+	if got := failedCheck(errors.New("unwrapped")); got != checkUnknown {
+		t.Fatalf("unwrapped failed check = %q", got)
+	}
+}
+
+func TestDirectoryFailureClassification(t *testing.T) {
+	tests := []struct {
+		name, countCheck, sizeCheck, want string
+		err                               error
+	}{
+		{"manifest count", checkManifestCount, checkManifestSize, checkManifestCount, &beta.EvidenceCountLimitError{}},
+		{"manifest size", checkManifestCount, checkManifestSize, checkManifestSize, &beta.EvidenceSizeLimitError{}},
+		{"prompt count", checkPromptCount, checkPromptSize, checkPromptCount, &beta.EvidenceCountLimitError{}},
+		{"prompt size", checkPromptCount, checkPromptSize, checkPromptSize, &beta.EvidenceSizeLimitError{}},
+		{"unsafe file", checkManifestCount, checkManifestSize, checkFiles, errors.New("symlink")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := failedCheck(classifyDirectoryFailure(test.err, test.countCheck, test.sizeCheck)); got != test.want {
+				t.Fatalf("failed check = %q", got)
+			}
+		})
+	}
+}
+
 func TestEvidenceBindingPredicates(t *testing.T) {
 	tests := []struct {
 		name  string

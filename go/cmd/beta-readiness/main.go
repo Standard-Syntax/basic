@@ -46,6 +46,9 @@ func run(arguments []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		body, _ := json.Marshal(report)
 		fmt.Fprintln(stdout, string(body))
+		if report.Status == "inconclusive" {
+			return 3
+		}
 		return 1
 	}
 	body, err := json.Marshal(report)
