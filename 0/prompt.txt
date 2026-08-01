@@ -1,0 +1,51 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Harden Beta Release Readiness
+
+## Summary
+
+Implement findings 2–9 in one reviewable PR; do not implement finding 1 because the canary API and workflow writers are both fixed at 4 MiB, so the described oversized-artifact mismatch cannot occur. Preserve the existing readiness-report schema version and persisted ledger JSON compatibility.
+
+## Implementation Changes
+
+- Make readiness execution bounded:
+  - Thread `context.Context` through the command seam and use `exec.CommandContext`.
+  - Apply a 60-second timeout to each Git/uv/Docker command and a five-minute overall CLI timeout.
+  - Preserve stdout-only comparisons and caller cancellation.
+
+- Add redacted diagnostics:
+  - Add `failed_check,omitempty` to `release.Report`.
+  - Populate it through typed internal failures rather than matching or printing error strings.
+  - Use stable values for configuration, source checkout, toolchains, migrations, files, images, workflow/runtime, reasoning, verification, review, approval, publication, GitHub draft, and human decision failures.
+  - Document the additive report field and retain exit codes 0/1/2.
+
+- Tighten verification-ledger binding:
+  - Select the completed row by the artifact’s `VerificationID`, decode its full `result_json`, and require matching verification ID, candidate commit, report artifact reference, and passed result.
+  - Add explicit JSON tags using the existing PascalCase keys on `verification.Result`, preserving all previously stored ledger rows and replay behavior.
+  - Remove the global candidate-commit count predicate.
+
+- Harden evidence handling:
+  - Have reasoning verification return the validated review invocation, eliminating the unguarded `invocations[1]`.
+  - Replace duplicate directory hashing with one shared beta helper that rejects symlinks/non-regular files, allows at most 64 files, limits each file to 1 MiB, and hashes by streaming. Use it for both deployment-record generation and readiness verification.
+  - Add `set -euo pipefail` to the multi-command `beta-canary-e2e` recipe so setup stops at the first failure.
+  - Remove unused `DeploymentRecord.Digest` and narrow `verifySupplyChain` to return only the configuration consumed by its caller.
+
+## Tests and Acceptance
+
+- Add table-driven positive and single-binding-mutation tests for run, task, runtime, invocation, publication, configuration, verification, review, and approval predicates.
+- Test source/toolchain rejection for mismatched commit, dirty checkout, version mismatch, caller cancellation, and the 60-second deadline visible through the injected command seam.
+- Test completed-ledger validation against wrong verification ID, candidate commit, report artifact, state, and pass result; assert the persisted JSON key spelling remains backward compatible.
+- Test readiness CLI exit 0, redacted exit 1 with `failed_check`, and invalid-manifest exit 2 without leaking underlying errors.
+- Test directory hashing at the exact size/count boundaries and rejection of oversized, excess, symlinked, and non-regular inputs.
+- Run `make generate-check`, `make check`, `make integration-test`, focused race tests for the touched Go packages, and `git diff --check`. Report `beta-canary-e2e` and a real `beta-readiness` run as pending unless their operator-owned credentials and retained manifest are available.
+
+## GitHub Stack Publication
+
+- After leaving Plan Mode, remove only the merged stack’s local tracking, fast-forward local `main` to `origin/main`, and initialize a fresh one-layer stack:
+  - `gh stack unstack --local`
+  - `git switch main`
+  - `git merge --ff-only origin/main`
+  - `gh stack init --base main beta/release-readiness-hardening`
+- Preserve `.codex/`, `.entire/`, `.opencode/`, and unrelated changes.
+- Create narrow, buildable Conventional Commits for readiness correctness/tests and bounded canary evidence collection.
+- Submit the finished stack as ready for review with `gh stack submit --auto --open`, verify it using `gh stack view --json`, and report the PR URL and hosted-check state without approving or merging it.
