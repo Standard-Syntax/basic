@@ -1,0 +1,78 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Lifecycle and Failure-Path Hardening
+
+## Summary
+
+Implement the confirmed review findings against freshly updated `main`, prioritizing lifecycle integrity, idempotency fencing, retry correctness, and container isolation. Preserve existing artifact, workflow, and publication contracts.
+
+Treat M10 as a bounded, documented beta risk rather than introducing a Docker proxy. Do not implement M11’s proposed task-lease change: verification already uses a separate owner-fenced ledger, and the task lease would not distinguish competing job claimants.
+
+## Interface and Behavior Changes
+
+- Extend internal idempotency requests with a reservation TTL and add fenced reservation renewal. Default to a 30-second lease renewed every 10 seconds.
+- Add trusted API configuration `task_max_attempts`: omitted means `2`; accepted range is `2–10`. Model output cannot control this budget.
+- Make the approval ledger a required `NewService` argument; tests must explicitly request the memory ledger.
+- Restrict mutation routes to `POST`; return `405` with `Allow` for other methods. Permit reads to authenticated principals holding any recognized beta role, rejecting unknown roles during configuration.
+- Return `422` when an operator retry exhausts the attempt budget; return `200` only when the task becomes `READY` and its next job is durably queued.
+- Introduce an internal transient database classification for SQLSTATE `40001` and `40P01`; exhausted API conflicts return a retryable `503`.
+- No protobuf, reasoning-policy, report, or artifact wire-format changes.
+
+## Implementation Changes
+
+1. **Detached mutations and durable retries — H1, H2, H3, L3**
+   - Run intake and composite approval under `context.WithTimeout(context.WithoutCancel(request.Context()), ...)`: retain the 30-second intake budget and use a two-minute composite-approval budget.
+   - Run idempotency completion/abandonment under a detached 10-second cleanup context.
+   - Renew the reservation through application and cleanup; cancel work if renewal loses its fence. Size the reservation independently of the operation deadline so intake has headroom.
+   - Wrap all three serializable transaction entry points in a shared five-attempt retry helper using jittered exponential backoff from 10 ms, capped at 250 ms.
+   - Add a job-ledger transient reschedule path so exhausted serialization/deadlock conflicts release the reconciler claim with bounded backoff without incrementing the run retry counter.
+   - Replace shift-based retry timing with saturating arithmetic capped at one minute.
+
+2. **Operator recovery and HTTP authorization — H5, M7, M8, L5, L6**
+   - Persist the configured attempt budget when the approved task graph creates tasks.
+   - After `RetryTask`, atomically or replay-safely ensure that a `READY` result has a stable `StageStart` job for `CurrentAttempt+1`. Replays must repair a previously missed enqueue without duplicating jobs.
+   - Do not enqueue exhausted tasks; expose their terminal `FAILED` result as `422`.
+   - Remove the dead local task-state assignment.
+   - Validate methods before reading mutation bodies or reserving idempotency keys. Cover `HEAD`, `PUT`, `PATCH`, `DELETE`, and arbitrary verbs.
+   - Validate and deduplicate configured roles against `operator`, `approver`, and `elevated_approver`; document the all-known-roles read policy as the single-tenant beta authorization model.
+
+3. **Container and verification boundaries — H4, M1, M2, M4, M10**
+   - Hide the Docker client behind a narrow internal interface so tests can capture create/start/attach/remove calls.
+   - After container creation, force-remove with a detached bounded context on every attach, start, wait, or stream failure; disarm cleanup only after terminal removal/auto-removal is confirmed.
+   - Share a bounded output writer between execution and verification. Cap execution diagnostics at 1 MiB while retaining verification’s existing calculated limit.
+   - Set verification-worker `WaitDelay` to five seconds and bound the outer executor call to the declared check timeout plus 15 seconds.
+   - Add exact-profile tests for network isolation, read-only root, dropped capabilities, no-new-privileges, PID/memory limits, mounts, user, and environment.
+   - Keep direct Docker socket access under DEC-028, but require an explicit positive Docker GID, remove the root-group fallback, and regression-test/document the accepted authority boundary.
+   - Add repository materialization tests for absolute paths, `..`, `.git`, backslashes, control characters, and symlink-mode entries.
+
+4. **Git, provider, and parsing hardening — M3, M5, M6, L1, L2, L4, L7, L8, L10**
+   - Replace inherited subprocess environments with closed allowlists. Local Git receives locale/path plus operation-specific Git variables; remote Git additionally receives prompt-disable and validated SSH settings. Beta preflight passes only required Docker variables to Docker commands.
+   - Validate SSH-key paths at the command-construction sink using the existing absolute safe-path grammar; never interpolate an unchecked path into `GIT_SSH_COMMAND`.
+   - Construct one Anthropic client and shared transport per runtime with environment defaults disabled; apply the API key as a request option for each send/retry.
+   - Replace per-file `git show` calls with one NUL-framed `git cat-file --batch` process. Inspect object type and declared size before allocating or reading, and reject immediately when the remaining context budget is exceeded.
+   - Replace candidate-index create/remove/reuse with a private temporary directory containing the index.
+   - Remove the misleading string-scrubbing helper and document that credentials are not cached or logged but cannot be reliably erased from Go’s immutable string heap.
+   - Keep provider-content scanning fail-closed for exact active-credential matches. Treat assignment-like values as secrets only when they are at least 20 characters, contain at least three character classes and eight unique characters, and are not variable/template placeholders or explicit example/redaction markers. Return a typed error containing only the safe source identifier.
+   - Build GitHub API paths with validated owner/repository segments and `url.JoinPath`; use `url.Values` for queries.
+   - Use `errors.Is` for `pgx.ErrNoRows`.
+
+5. **Deployment and storage safety — M9, L9**
+   - Convert required beta image, configuration, durable-root, database-secret, and Docker-GID substitutions to Compose required-variable expressions. Retain `/dev/null` only for explicitly optional credential mounts.
+   - On writable artifact-store startup only, descriptor-relatively delete regular `.tmp-<uuid>` files older than 24 hours. Never sweep during read-only store opening, follow links, or remove recent/nonconforming entries.
+
+## Test and Acceptance Plan
+
+- Add fake-clock and PostgreSQL tests for reservation renewal, expired-fence rejection, client cancellation at every composite checkpoint, cleanup after cancellation, same-key replay, and operations exceeding 30 seconds without reclamation.
+- Force real `40001`/`40P01` conflicts in integration tests and verify bounded retry, `503` classification, and reconciler rescheduling without consuming retry budget.
+- Prove retry success yields both `READY` state and one queued job; prove replay repairs enqueue, exhaustion returns `422`, and default/configured attempt budgets are honored.
+- Add subprocess-environment tests with hostile `GIT_DIR`, `GIT_WORK_TREE`, SSH paths, and provider credentials; assert none escape to children.
+- Add large-blob/context-budget, output-flood, orphan-container, inherited-pipe, secret-placeholder, URL-escaping, artifact-sweeper, and required-Compose-variable tests.
+- Add claim-loss regressions confirming verification ownership and stable review replay prevent stale writers; do not add task `LeaseRef` fields to verification/review commands.
+- Run `git diff --check`, targeted Go tests, `make generate-check`, `make check`, `make integration-test`, and `make runtime-e2e`. Run deployment/live gates only with real operator configuration and credentials, reporting any unavailable credentialed gate as unverified.
+
+## Assumptions and Handoff
+
+- Start from refreshed `origin/main`, not the currently checked-out merged stack branch. Revalidate the findings after refresh and omit anything already corrected upstream.
+- Suggested implementation handoff: `gh stack unstack --local`, switch to `main`, fast-forward from `origin/main`, then create a fresh one-layer stack for lifecycle hardening.
+- M11 is excluded because its proposed task lease neither represents nor fences the runtime job claim; the existing verification owner fence is the correct boundary.
+- M10 remains an explicitly accepted beta residual risk, narrowed by required configuration and regression coverage rather than a new proxy or daemon architecture.
