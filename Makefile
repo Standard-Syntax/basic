@@ -160,7 +160,8 @@ beta-canary-e2e:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-preflight -canary -config "$(BETA_CONFIG)"
 	$(MAKE) beta-images
-	@api_image=$$(docker image inspect --format '{{.Id}}' basic-api-service:beta); \
+	@set -euo pipefail; \
+		api_image=$$(docker image inspect --format '{{.Id}}' basic-api-service:beta); \
 		workflow_image=$$(docker image inspect --format '{{.Id}}' basic-workflow-service:beta); \
 		execution_image=$$(docker image inspect --format '{{.Id}}' basic-execution-worker:beta); \
 		verification_image=$$(docker image inspect --format '{{.Id}}' basic-verification-worker:beta); \

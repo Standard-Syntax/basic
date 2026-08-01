@@ -1,8 +1,6 @@
 package beta
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -71,15 +69,6 @@ func (r DeploymentRecord) Validate() error {
 		return err
 	}
 	return validateDigestMap("prompt", r.PromptDigests)
-}
-
-func (r DeploymentRecord) Digest() (string, error) {
-	body, err := json.Marshal(r)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func validateDigestMap(label string, values map[string]string) error {
