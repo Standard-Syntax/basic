@@ -667,3 +667,37 @@ Deployment records contain no credentials or claims of live provider evidence.
 
 ### Date
 2026-07-31
+
+## DEC-029: Release readiness revalidates durable evidence read-only
+
+### Decision
+Represent one beta candidate with a strict secret-free release manifest and
+verify its supply-chain, PostgreSQL, CAS, Git, Docker, and exact GitHub draft
+bindings through a read-only command before accepting a human go decision.
+
+### Options considered
+Trust completion prose; copy selected command output into a report; revalidate
+the immutable deployment record and complete live canary evidence.
+
+### Pros
+The release decision is reproducible, cross-bound to the exact candidate and
+images, and cannot be synthesized from a provider smoke, loopback publication,
+or green deterministic suite.
+
+### Cons
+Operators must retain three strict configuration/evidence files, preserve the
+canary durable stores and draft until verification, and supply a read-only
+GitHub credential during readiness.
+
+### Why this option
+Release authority depends on durable facts across stores that do not share one
+transaction. Prose and copied status lines cannot prove their continued
+identity or replay safety.
+
+### Consequences
+The canary uses packaged services and reports exact artifact/image identities.
+`beta-readiness` performs no repair or mutation, emits only redacted check
+names, and cannot turn successful checks into the required human `go` record.
+
+### Date
+2026-07-31

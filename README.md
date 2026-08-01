@@ -67,6 +67,9 @@ See [docs/development.md](docs/development.md) for exact commands and
 For the current beta provider profile and process-level live acceptance status,
 see [docs/live-harness.md](docs/live-harness.md).
 
+The controlled beta cut, human decision, and durable evidence verification
+procedure is in [docs/beta-release.md](docs/beta-release.md).
+
 Production repository readiness is checked without mutation with
 `make beta-preflight BETA_CONFIG=/absolute/path/to/beta-preflight.json`. The
 same immutable `beta_policy` is consumed by both services. The beta supports

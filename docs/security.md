@@ -189,3 +189,19 @@ facts and completed rows are protected by PostgreSQL triggers.
 - `beta-preflight` does not create directories, apply migrations, write CAS,
   update Git refs, call a provider, push, or contact GitHub. Its JSON contains
   only allowlisted identities/digests and stable redacted failure codes.
+
+## Beta Slice 7 release boundary
+
+- The release manifest is strict, bounded, secret-free JSON. It contains
+  immutable identities and credential-file/config paths, never credential
+  values, provider bodies, or database exports.
+- Readiness opens an existing CAS without creation and uses a read-only
+  PostgreSQL connection. It cannot mutate workflow, evidence, Git, GitHub, or
+  Docker state; GitHub access is one exact pull-request read.
+- Readiness requires one accepted task, exactly two accepted live MiniMax
+  invocations, exact candidate/artifact cross-bindings, immutable image IDs,
+  one completed draft publication, an open matching real draft, and an explicit
+  human `go`. A `no_go` decision is valid evidence but cannot pass readiness.
+- The packaged canary copies operator credentials into disposable owner-only
+  mounts for the fixed service UID. It never changes the provisioned credential
+  files and retains the existing exact-identity cleanup boundary.

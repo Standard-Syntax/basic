@@ -159,12 +159,16 @@ beta-canary-e2e:
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-preflight -canary -config "$(BETA_CONFIG)"
-	mkdir -p .tools/runtime
-	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
-	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
-	cd go && BETA_CANARY=1 BETA_CONFIG="$(BETA_CONFIG)" \
-		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
-		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
+	$(MAKE) beta-images
+	@api_image=$$(docker image inspect --format '{{.Id}}' basic-api-service:beta); \
+		workflow_image=$$(docker image inspect --format '{{.Id}}' basic-workflow-service:beta); \
+		execution_image=$$(docker image inspect --format '{{.Id}}' basic-execution-worker:beta); \
+		verification_image=$$(docker image inspect --format '{{.Id}}' basic-verification-worker:beta); \
+		docker_gid=$$(stat -c '%g' /var/run/docker.sock); \
+		cd go && BETA_CANARY=1 BETA_CONFIG="$(BETA_CONFIG)" RUNTIME_PACKAGED=1 \
+		RUNTIME_API_BINARY="$$api_image" RUNTIME_WORKFLOW_BINARY="$$workflow_image" \
+		RUNTIME_EXECUTION_IMAGE="$$execution_image" \
+		RUNTIME_VERIFICATION_IMAGE="$$verification_image" RUNTIME_DOCKER_GID="$$docker_gid" \
 		go test -v -tags=integration -count=1 \
 			-run '^TestBetaCanaryProcessesPublishRealDraft$$' ./internal/runtime
 

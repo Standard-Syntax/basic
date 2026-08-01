@@ -196,3 +196,15 @@ Stage start compares the complete bound policy and image identities with active
 configuration before starting a run or acquiring a lease. Task-planning
 authority must match the bound policy; proposals may narrow it but cannot widen
 paths, checks, limits, concurrency, or the one dependency-free task boundary.
+
+## Beta Slice 7 release evidence
+
+`beta_release_manifest.v1` embeds the exact Slice 6 deployment record, the
+packaged canary identities and four terminal artifact references, complete
+toolchain identity, and a human go/no-go record. `beta-readiness` is a read-only
+composition boundary: it opens the existing CAS without creating it, connects
+to PostgreSQL with `default_transaction_read_only`, revalidates the checked-in
+migration ledger and cross-stage artifact bodies, inspects the installed image
+IDs and clean source commit, and reads the exact GitHub pull request. It emits
+no workflow command and has no approval, publication, cleanup, merge, or
+deployment authority.

@@ -87,6 +87,11 @@ export ANTHROPIC_API_KEY='...'
 make beta-canary-e2e BETA_CONFIG=/absolute/path/to/canary.json
 ```
 
+The target builds and starts the exact pinned, non-root beta service and worker
+images rather than host service binaries. Operator credentials are copied into
+disposable owner-only service mounts; the provisioned source files are not
+reowned or modified.
+
 Success requires production preflight, exactly one accepted implementation
 invocation and one accepted independent-review invocation, a one-file `add.go`
 candidate that passes the repository-owned check, an exact remote branch named
@@ -95,12 +100,14 @@ commits match the immutable publication. The API is restarted and the same
 approval is replayed byte-for-byte; provider ledger counts, branch state, and
 the unique draft must remain unchanged.
 
-The final JSON line contains `run_id`, `publication_id`, `candidate_commit`, the
-publication `artifact_reference`, `pull_request_url`, and the exact
-`cleanup_command`. Treat the gate as pending—not passing—unless this credentialed
-command exits 0 and that real URL is inspected. Process logs, generated configs,
-CAS, PostgreSQL evidence, and reachable Git objects are scanned for the provider
-token, REST token, and Git push key.
+The final JSON line contains `run_id`, `task_id`, `publication_id`,
+`candidate_commit`, verification/review/approval/publication artifact
+references, all four image IDs, `pull_request_url`, and the exact
+`cleanup_command`. Retain it for `beta_release_manifest.v1`. Treat the gate as
+pending—not passing—unless this credentialed command exits 0 and that real URL
+is inspected. Process logs, generated configs, CAS, PostgreSQL evidence, and
+reachable Git objects are scanned for the provider token, REST token, and Git
+push key.
 
 ## Cleanup and partial recovery
 
