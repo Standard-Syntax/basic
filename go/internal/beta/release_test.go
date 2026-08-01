@@ -104,8 +104,8 @@ func TestDeploymentRecordStrictLoad(t *testing.T) {
 	if loaded.SourceCommit != value.SourceCommit {
 		t.Fatal("deployment record identity changed")
 	}
-	unknown := append(body[:len(body)-1], []byte(`,"unknown":true}`)...)
-	if err := os.WriteFile(path, unknown, 0o600); err != nil {
+	body = append(body[:len(body)-1], []byte(`,"unknown":true}`)...)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := LoadDeploymentRecord(path); err == nil {

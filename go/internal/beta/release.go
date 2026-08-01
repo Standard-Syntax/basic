@@ -79,7 +79,7 @@ func LoadReleaseManifest(path string) (ReleaseManifest, error) {
 	return value, nil
 }
 
-func (m ReleaseManifest) Validate() error {
+func (m *ReleaseManifest) Validate() error {
 	if m.SchemaVersion != ReleaseManifestVersion || !CleanAbsolute(m.SourceRepositoryRoot) ||
 		!CleanAbsolute(m.DeploymentConfigPath) || !CleanAbsolute(m.DeploymentRecordPath) ||
 		!CleanAbsolute(m.CanaryConfigPath) {
@@ -99,7 +99,7 @@ func (m ReleaseManifest) Validate() error {
 	return m.Decision.Validate()
 }
 
-func (m ReleaseManifest) Digest() (string, error) {
+func (m *ReleaseManifest) Digest() (string, error) {
 	body, err := json.Marshal(m)
 	if err != nil {
 		return "", err
