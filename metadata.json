@@ -5,7 +5,6 @@
   "branch": "beta/release-evidence",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/beta/release.go",
     "go/internal/beta/release_test.go"
   ],
   "sessions": [
@@ -14,14 +13,14 @@
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
-      "prompt": "/0/prompt.txt"
+      "prompt": ""
     }
   ],
   "token_usage": {
-    "input_tokens": 202270,
+    "input_tokens": 2551,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2405632,
-    "output_tokens": 4085,
-    "api_call_count": 15
+    "cache_read_tokens": 596224,
+    "output_tokens": 415,
+    "api_call_count": 3
   }
 }
