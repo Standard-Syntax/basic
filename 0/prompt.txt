@@ -1,0 +1,73 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Beta Release Readiness Remediation
+
+## Summary
+
+Create one fresh stack layer, `beta/release-readiness-remediation`, from the updated `main` containing merged PR #88. Preserve `beta_readiness_report.v1`, persisted verification JSON, the existing readiness boundaries, and the untracked `.codex/`, `.entire/`, and `.opencode/` directories.
+
+## Implementation Changes
+
+- Prepare the fresh stack during implementation:
+
+  ```bash
+  gh stack unstack --local
+  git switch main
+  git fetch origin main
+  git merge --ff-only origin/main
+  gh stack init --base main beta/release-readiness-remediation
+  gh stack view --json
+  ```
+
+- Strengthen verification readiness:
+
+  - Keep the exact `VerificationID` row/result binding check.
+  - Then count every completed verification whose `CandidateCommit` matches the manifest and require exactly one.
+  - Preserve the existing generic `verification ledger binding mismatch` failure and PascalCase ledger JSON compatibility.
+  - Add a PostgreSQL integration test with one failed completed attempt and one passed completed attempt for the same candidate; citing the passing row must still fail readiness.
+
+- Separate indeterminate execution from negative evidence:
+
+  - On any verification error, classify `context.Canceled`, `context.DeadlineExceeded`, or an expired caller context as `status:"inconclusive"` and `failed_check:"timeout"`.
+  - Preserve context causes when source/toolchain commands fail, and normalize a per-command deadline to `commandCtx.Err()` so process termination is not misclassified.
+  - Keep the five-minute overall and 60-second command deadlines.
+  - Return CLI exit `3` for `inconclusive`; retain `0` ready, `1` not ready, and `2` invalid manifest.
+
+- Make failed-check classification fail loudly:
+
+  - Change the unwrapped-error fallback from `configuration` to `unknown`.
+  - Retain all existing 14 boundary values.
+  - Add stable cap values selected by the user: `manifest_count_limit`, `manifest_size_limit`, `prompt_count_limit`, and `prompt_size_limit`.
+  - Keep `files` for digest mismatches, symlinks, non-regular files, and other unsafe-file failures.
+
+- Harden directory hashing:
+
+  - Replace raw `unix.Open`/`O_NOFOLLOW` handling with `os.OpenRoot`, `fs.WalkDir(root.FS(), ".")`, and `root.Open(relativePath)`.
+  - Continue rejecting discovered symlinks and non-regular files, checking size both before and after open, sorting relative slash paths, and streaming at most 1 MiB plus one byte.
+  - Remove the dead `os.NewFile(nil)` handling and redundant root symlink mode condition.
+  - Expose typed count/size limit errors so readiness can map manifest and prompt failures to the four stable diagnostics.
+
+- Update `docs/beta-release.md` to document exit `3`, `inconclusive`, `timeout`, `unknown`, the four limit checks, and the shared limits of 64 files and 1 MiB per file.
+
+## Test Plan
+
+- Table-test every stable regular failed-check constant and verify an unwrapped error returns `unknown`.
+- Test top-level cancellation and deadline classification, per-command timeout propagation, CLI exit `3`, JSON status/check fields, and continued redaction of underlying errors.
+- Test exact verification binding plus uniqueness with duplicate completed rows for one candidate; add `internal/release` to the integration-test package list.
+- Test rooted traversal with nested paths, intermediate symlinks, and a post-discovery replacement pointing outside the root; retain exact-boundary, oversized, excess-count, non-regular, and stable-digest cases.
+- Run:
+
+  ```bash
+  make generate-check
+  make check
+  make integration-test
+  go test -race ./internal/beta ./internal/release ./cmd/beta-readiness
+  git diff --check
+  gh stack view --json
+  ```
+
+## Assumptions
+
+- This is one reviewable remediation layer; no push or pull request is part of implementation unless separately requested.
+- The report schema version remains `beta_readiness_report.v1`; the new statuses, checks, and exit code are additive contract changes.
+- Credentialed canary/readiness execution remains operator-owned and cannot be claimed without the retained manifest, configuration, and credentials.
