@@ -1,6 +1,9 @@
 package beta
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,9 +28,10 @@ func TestDirectoryDigestsAcceptsExactBoundaries(t *testing.T) {
 	if err != nil || len(values) != MaxEvidenceFiles {
 		t.Fatalf("digests = %d, %v", len(values), err)
 	}
-	want, err := digestFile(filepath.Join(root, "file-00"))
-	if err != nil || values["file-00"] != want {
-		t.Fatalf("boundary digest = %q, %v", values["file-00"], err)
+	sum := sha256.Sum256([]byte(large))
+	want := hex.EncodeToString(sum[:])
+	if values["file-00"] != want {
+		t.Fatalf("boundary digest = %q", values["file-00"])
 	}
 }
 
@@ -75,6 +79,75 @@ func TestDirectoryDigestsRejectsUnsafeInputs(t *testing.T) {
 				t.Fatalf("error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestDirectoryDigestsReturnsTypedLimitErrors(t *testing.T) {
+	oversized := t.TempDir()
+	if err := os.WriteFile(filepath.Join(oversized, "large"), make([]byte, MaxEvidenceFileSize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DirectoryDigests(oversized); err == nil {
+		t.Fatal("oversized file was accepted")
+	} else {
+		var target *EvidenceSizeLimitError
+		if !errors.As(err, &target) {
+			t.Fatalf("size error = %T, %v", err, err)
+		}
+	}
+
+	excess := t.TempDir()
+	for index := 0; index <= MaxEvidenceFiles; index++ {
+		name := filepath.Join(excess, strings.Repeat("x", index/26+1)+string(rune('a'+index%26)))
+		if err := os.WriteFile(name, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := DirectoryDigests(excess); err == nil {
+		t.Fatal("excess files were accepted")
+	} else {
+		var target *EvidenceCountLimitError
+		if !errors.As(err, &target) {
+			t.Fatalf("count error = %T, %v", err, err)
+		}
+	}
+}
+
+func TestDirectoryDigestsRejectsIntermediateSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "value"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "nested")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DirectoryDigests(root); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("intermediate symlink error = %v", err)
+	}
+}
+
+func TestDirectoryDigestsRejectsPostDiscoveryReplacementOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "value"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "value"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	afterWalk := func() error {
+		if err := os.Rename(nested, filepath.Join(root, "discovered")); err != nil {
+			return err
+		}
+		return os.Symlink(outside, nested)
+	}
+	if _, err := directoryDigests(root, afterWalk); err == nil {
+		t.Fatal("post-discovery replacement outside the root was accepted")
 	}
 }
 

@@ -51,6 +51,12 @@ const (
 	checkPublication     = "publication"
 	checkGitHubDraft     = "github_draft"
 	checkHumanDecision   = "human_decision"
+	checkManifestCount   = "manifest_count_limit"
+	checkManifestSize    = "manifest_size_limit"
+	checkPromptCount     = "prompt_count_limit"
+	checkPromptSize      = "prompt_size_limit"
+	checkTimeout         = "timeout"
+	checkUnknown         = "unknown"
 )
 
 type Report struct {
@@ -80,7 +86,7 @@ func failedCheck(err error) string {
 	if errors.As(err, &target) {
 		return target.check
 	}
-	return checkConfiguration
+	return checkUnknown
 }
 
 type invocationEvidence struct {
@@ -93,29 +99,38 @@ type invocationEvidence struct {
 func NewVerifier() *Verifier { return &Verifier{command: commandOutput} }
 
 func (v *Verifier) Verify(ctx context.Context, manifest *beta.ReleaseManifest) (Report, error) {
+	report := Report{SchemaVersion: ReportVersion, Status: "not_ready"}
 	digest, err := manifest.Digest()
 	if err != nil {
-		return Report{}, err
+		return classifyFailure(ctx, report, err)
 	}
-	report := Report{SchemaVersion: ReportVersion, Status: "not_ready", ReleaseManifestDigest: digest}
+	report.ReleaseManifestDigest = digest
 	canary, err := v.verifySupplyChain(ctx, manifest)
 	if err != nil {
-		report.FailedCheck = failedCheck(err)
-		return report, err
+		return classifyFailure(ctx, report, err)
 	}
 	report.Checks = append(report.Checks, "supply_chain")
 	if err := verifyDurableEvidence(ctx, manifest, &canary); err != nil {
-		report.FailedCheck = failedCheck(err)
-		return report, err
+		return classifyFailure(ctx, report, err)
 	}
 	report.Checks = append(report.Checks, "durable_evidence", "github_draft")
 	if manifest.Decision.Status != "go" {
-		report.FailedCheck = checkHumanDecision
-		return report, failed(checkHumanDecision, errors.New("human release decision is no-go"))
+		return classifyFailure(ctx, report,
+			failed(checkHumanDecision, errors.New("human release decision is no-go")))
 	}
 	report.Checks = append(report.Checks, "human_go_decision")
 	report.Status = "ready"
 	return report, nil
+}
+
+func classifyFailure(ctx context.Context, report Report, err error) (Report, error) {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		report.Status = "inconclusive"
+		report.FailedCheck = checkTimeout
+		return report, err
+	}
+	report.FailedCheck = failedCheck(err)
+	return report, err
 }
 
 func (v *Verifier) verifySupplyChain(
@@ -135,7 +150,7 @@ func (v *Verifier) verifySupplyChain(
 		return beta.Config{}, failed(checkMigrations, err)
 	}
 	if err := verifyFiles(&deployment, &record); err != nil {
-		return beta.Config{}, failed(checkFiles, err)
+		return beta.Config{}, err
 	}
 	if err := verifyImages(ctx, &record); err != nil {
 		return beta.Config{}, failed(checkImages, err)
@@ -191,22 +206,37 @@ func verifyImages(ctx context.Context, record *beta.DeploymentRecord) error {
 
 func (v *Verifier) verifySourceAndToolchains(ctx context.Context, manifest *beta.ReleaseManifest) error {
 	head, err := v.runCommand(ctx, "git", "-C", manifest.SourceRepositoryRoot, "rev-parse", "HEAD")
-	if err != nil || head != manifest.Deployment.SourceCommit {
+	if err != nil {
+		return failed(checkSourceCheckout, fmt.Errorf("read release source commit: %w", err))
+	}
+	if head != manifest.Deployment.SourceCommit {
 		return failed(checkSourceCheckout, errors.New("release source commit mismatch"))
 	}
 	status, err := v.runCommand(ctx, "git", "-C", manifest.SourceRepositoryRoot, "status", "--porcelain")
-	if err != nil || status != "" {
+	if err != nil {
+		return failed(checkSourceCheckout, fmt.Errorf("read release source status: %w", err))
+	}
+	if status != "" {
 		return failed(checkSourceCheckout, errors.New("release source checkout is not clean"))
 	}
 	gitVersion, err := v.runCommand(ctx, "git", "--version")
-	if err != nil || gitVersion != manifest.Toolchains.Git || gitVersion != manifest.Deployment.GitVersion ||
+	if err != nil {
+		return failed(checkToolchains, fmt.Errorf("read release Git version: %w", err))
+	}
+	if gitVersion != manifest.Toolchains.Git || gitVersion != manifest.Deployment.GitVersion ||
 		runtime.Version() != manifest.Toolchains.Go || runtime.Version() != manifest.Deployment.GoVersion ||
 		runtime.Version() != manifest.Deployment.ToolchainVersion {
 		return failed(checkToolchains, errors.New("release Git or Go toolchain mismatch"))
 	}
 	uvVersion, uvErr := v.runCommand(ctx, "uv", "--version")
+	if uvErr != nil {
+		return failed(checkToolchains, fmt.Errorf("read release uv version: %w", uvErr))
+	}
 	dockerVersion, dockerErr := v.runCommand(ctx, "docker", "--version")
-	if uvErr != nil || dockerErr != nil || uvVersion != manifest.Toolchains.UV || dockerVersion != manifest.Toolchains.Docker {
+	if dockerErr != nil {
+		return failed(checkToolchains, fmt.Errorf("read release Docker version: %w", dockerErr))
+	}
+	if uvVersion != manifest.Toolchains.UV || dockerVersion != manifest.Toolchains.Docker {
 		return failed(checkToolchains, errors.New("release uv or Docker toolchain mismatch"))
 	}
 	return nil
@@ -215,7 +245,11 @@ func (v *Verifier) verifySourceAndToolchains(ctx context.Context, manifest *beta
 func (v *Verifier) runCommand(ctx context.Context, name string, arguments ...string) (string, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
-	return v.command(commandCtx, name, arguments...)
+	output, err := v.command(commandCtx, name, arguments...)
+	if commandCtx.Err() != nil {
+		return output, commandCtx.Err()
+	}
+	return output, err
 }
 
 func verifyMigrations(ctx context.Context, databaseURL, expectedDigest string) error {
@@ -234,14 +268,32 @@ func verifyMigrations(ctx context.Context, databaseURL, expectedDigest string) e
 
 func verifyFiles(deployment *beta.Deployment, record *beta.DeploymentRecord) error {
 	manifests, err := beta.DirectoryDigests(deployment.Mounts.Manifests)
-	if err != nil || !reflect.DeepEqual(manifests, record.ManifestDigests) {
-		return errors.New("release manifest file digests mismatch")
+	if err != nil {
+		return classifyDirectoryFailure(err, checkManifestCount, checkManifestSize)
+	}
+	if !reflect.DeepEqual(manifests, record.ManifestDigests) {
+		return failed(checkFiles, errors.New("release manifest file digests mismatch"))
 	}
 	prompts, err := beta.DirectoryDigests(deployment.Mounts.Prompts)
-	if err != nil || !reflect.DeepEqual(prompts, record.PromptDigests) {
-		return errors.New("release prompt file digests mismatch")
+	if err != nil {
+		return classifyDirectoryFailure(err, checkPromptCount, checkPromptSize)
+	}
+	if !reflect.DeepEqual(prompts, record.PromptDigests) {
+		return failed(checkFiles, errors.New("release prompt file digests mismatch"))
 	}
 	return nil
+}
+
+func classifyDirectoryFailure(err error, countCheck, sizeCheck string) error {
+	var countLimit *beta.EvidenceCountLimitError
+	if errors.As(err, &countLimit) {
+		return failed(countCheck, err)
+	}
+	var sizeLimit *beta.EvidenceSizeLimitError
+	if errors.As(err, &sizeLimit) {
+		return failed(sizeCheck, err)
+	}
+	return failed(checkFiles, err)
 }
 
 func verifyDurableEvidence(ctx context.Context, manifest *beta.ReleaseManifest, canary *beta.Config) error {
@@ -500,6 +552,12 @@ func verifyVerificationEvidence(
 	var result verification.Result
 	if strictJSON(resultBody, &result) != nil ||
 		!validVerificationResult(state, &result, &verificationReport, manifest) {
+		return errors.New("verification ledger binding mismatch")
+	}
+	var candidateCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM verification_ledger
+		WHERE state='completed' AND result_json->>'CandidateCommit'=$1`,
+		manifest.Canary.CandidateCommit).Scan(&candidateCount); err != nil || candidateCount != 1 {
 		return errors.New("verification ledger binding mismatch")
 	}
 	return nil

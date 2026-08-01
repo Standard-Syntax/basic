@@ -40,6 +40,13 @@ func TestReadinessCLIExitContractAndRedaction(t *testing.T) {
 			}, wantCode: 1, wantOutput: `"failed_check":"verification"`,
 		},
 		{
+			name: "inconclusive", load: func(string) (beta.ReleaseManifest, error) { return beta.ReleaseManifest{}, nil },
+			verify: func(context.Context, *beta.ReleaseManifest) (release.Report, error) {
+				return release.Report{SchemaVersion: release.ReportVersion, Status: "inconclusive", FailedCheck: "timeout"},
+					errors.New("secret timeout detail")
+			}, wantCode: 3, wantOutput: `"status":"inconclusive"`,
+		},
+		{
 			name: "invalid manifest", load: func(string) (beta.ReleaseManifest, error) {
 				return beta.ReleaseManifest{}, errors.New("secret parser detail")
 			}, wantCode: 2, wantOutput: `"status":"invalid_manifest"`,
@@ -57,6 +64,9 @@ func TestReadinessCLIExitContractAndRedaction(t *testing.T) {
 			}
 			if strings.Contains(combined, "secret") {
 				t.Fatalf("diagnostic leaked underlying error: %s", combined)
+			}
+			if test.wantCode == 3 && !strings.Contains(combined, `"failed_check":"timeout"`) {
+				t.Fatalf("inconclusive timeout diagnostic = %s", combined)
 			}
 			if test.wantCode == 2 && stdout.Len() != 0 {
 				t.Fatalf("invalid manifest wrote stdout: %s", stdout.String())

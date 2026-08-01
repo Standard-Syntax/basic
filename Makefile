@@ -63,7 +63,7 @@ integration-test:
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		go test -tags=integration -count=1 \
 			./internal/migration ./internal/workflow ./internal/registry ./internal/reasoning/gateway \
-			./internal/execution ./internal/verification ./internal/approval \
+			./internal/execution ./internal/verification ./internal/release ./internal/approval \
 			./internal/publication ./internal/controlapi || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
