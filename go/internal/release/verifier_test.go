@@ -63,6 +63,31 @@ func TestCommandOutputComparesStandardOutputOnly(t *testing.T) {
 	}
 }
 
+type sourceCommand struct{ dirty bool }
+
+func (command sourceCommand) run(ctx context.Context, name string, arguments ...string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	invocation := name + " " + strings.Join(arguments, " ")
+	switch {
+	case strings.Contains(invocation, "rev-parse"):
+		return strings.Repeat("c", 40), nil
+	case strings.Contains(invocation, "status --porcelain") && command.dirty:
+		return " M changed", nil
+	case strings.Contains(invocation, "status --porcelain"):
+		return "", nil
+	case name == "git":
+		return "git version test", nil
+	case name == "uv":
+		return "uv test", nil
+	case name == "docker":
+		return "docker test", nil
+	default:
+		return "", errors.New("unexpected command")
+	}
+}
+
 func TestSourceAndToolchainChecks(t *testing.T) {
 	manifest := testManifest()
 	tests := []struct {
@@ -84,29 +109,7 @@ func TestSourceAndToolchainChecks(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&value)
 			}
-			verifier := &Verifier{command: func(ctx context.Context, name string, arguments ...string) (string, error) {
-				if err := ctx.Err(); err != nil {
-					return "", err
-				}
-				command := name + " " + strings.Join(arguments, " ")
-				switch {
-				case strings.Contains(command, "rev-parse"):
-					return strings.Repeat("c", 40), nil
-				case strings.Contains(command, "status --porcelain"):
-					if test.dirty {
-						return " M changed", nil
-					}
-					return "", nil
-				case name == "git":
-					return "git version test", nil
-				case name == "uv":
-					return "uv test", nil
-				case name == "docker":
-					return "docker test", nil
-				default:
-					return "", errors.New("unexpected command")
-				}
-			}}
+			verifier := &Verifier{command: sourceCommand{dirty: test.dirty}.run}
 			ctx := t.Context()
 			if test.cancel {
 				var cancel context.CancelFunc
