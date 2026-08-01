@@ -90,6 +90,14 @@ func TestReleaseManifestRejectsIncompleteEvidenceAndDecision(t *testing.T) {
 	}
 }
 
+func TestReleaseManifestPreservesDeploymentValidationFailure(t *testing.T) {
+	value := validReleaseManifest()
+	value.Deployment.Images.API = "api:latest"
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "deployment record images must be immutable IDs") {
+		t.Fatalf("deployment validation error = %v", err)
+	}
+}
+
 func TestDeploymentRecordStrictLoad(t *testing.T) {
 	value := validDeploymentRecord()
 	path := filepath.Join(t.TempDir(), "deployment-record.json")

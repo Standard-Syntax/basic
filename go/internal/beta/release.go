@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -86,7 +87,7 @@ func (m *ReleaseManifest) Validate() error {
 		return errors.New("invalid release manifest identity")
 	}
 	if err := m.Deployment.Validate(); err != nil {
-		return errors.New("invalid release deployment record")
+		return fmt.Errorf("invalid release deployment record: %w", err)
 	}
 	for _, value := range []string{m.Toolchains.Git, m.Toolchains.Go, m.Toolchains.UV, m.Toolchains.Docker} {
 		if strings.TrimSpace(value) == "" {
