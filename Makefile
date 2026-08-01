@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-canary-e2e beta-canary-cleanup provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -173,6 +173,10 @@ beta-canary-cleanup:
 	@test -n "$(CANARY_PUBLICATION_ID)" || { echo "CANARY_PUBLICATION_ID is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-canary-cleanup \
 		-config "$(BETA_CONFIG)" -publication "$(CANARY_PUBLICATION_ID)"
+
+beta-readiness:
+	@test -n "$(RELEASE_MANIFEST)" || { echo "RELEASE_MANIFEST is required" >&2; exit 2; }
+	cd go && go run ./cmd/beta-readiness -manifest "$(RELEASE_MANIFEST)"
 
 provider-smoke:
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }

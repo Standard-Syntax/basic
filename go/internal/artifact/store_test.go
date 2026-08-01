@@ -95,3 +95,13 @@ func TestStoreRequiresCleanAbsoluteRoot(t *testing.T) {
 		t.Fatalf("relative root = %v", err)
 	}
 }
+
+func TestOpenStoreDoesNotCreateMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	if _, err := OpenStore(root, DefaultMaxBytes); err == nil {
+		t.Fatal("missing artifact root was opened")
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only open created the artifact root: %v", err)
+	}
+}
