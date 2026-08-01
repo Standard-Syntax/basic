@@ -22,7 +22,7 @@ func mainExit() int {
 		fmt.Fprintln(os.Stderr, `{"schema_version":"beta_readiness_report.v1","status":"invalid_manifest"}`)
 		return 2
 	}
-	report, err := release.NewVerifier().Verify(context.Background(), manifest)
+	report, err := release.NewVerifier().Verify(context.Background(), &manifest)
 	if err != nil {
 		body, _ := json.Marshal(report)
 		fmt.Fprintln(os.Stdout, string(body))

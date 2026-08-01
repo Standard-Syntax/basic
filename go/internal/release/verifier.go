@@ -48,20 +48,27 @@ type Verifier struct {
 	command func(string, ...string) (string, error)
 }
 
+type invocationEvidence struct {
+	stage, provider, model, requestID, providerRequestID string
+	proposal, response                                   workflow.ArtifactRef
+	requests                                             int
+	input, output                                        int64
+}
+
 func NewVerifier() *Verifier { return &Verifier{command: commandOutput} }
 
-func (v *Verifier) Verify(ctx context.Context, manifest beta.ReleaseManifest) (Report, error) {
+func (v *Verifier) Verify(ctx context.Context, manifest *beta.ReleaseManifest) (Report, error) {
 	digest, err := manifest.Digest()
 	if err != nil {
 		return Report{}, err
 	}
 	report := Report{SchemaVersion: ReportVersion, Status: "not_ready", ReleaseManifestDigest: digest}
-	deployment, canary, err := v.verifySupplyChain(ctx, manifest)
+	_, canary, err := v.verifySupplyChain(ctx, manifest)
 	if err != nil {
 		return report, err
 	}
 	report.Checks = append(report.Checks, "supply_chain")
-	if err := v.verifyDurableEvidence(ctx, manifest, deployment, canary); err != nil {
+	if err := verifyDurableEvidence(ctx, manifest, &canary); err != nil {
 		return report, err
 	}
 	report.Checks = append(report.Checks, "durable_evidence", "github_draft")
@@ -74,30 +81,14 @@ func (v *Verifier) Verify(ctx context.Context, manifest beta.ReleaseManifest) (R
 }
 
 func (v *Verifier) verifySupplyChain(
-	ctx context.Context, manifest beta.ReleaseManifest,
+	ctx context.Context, manifest *beta.ReleaseManifest,
 ) (beta.Deployment, beta.Config, error) {
-	deployment, err := beta.LoadDeployment(manifest.DeploymentConfigPath)
+	deployment, record, canary, err := loadReleaseInputs(manifest)
 	if err != nil {
-		return beta.Deployment{}, beta.Config{}, fmt.Errorf("load deployment: %w", err)
+		return beta.Deployment{}, beta.Config{}, err
 	}
-	record, err := beta.LoadDeploymentRecord(manifest.DeploymentRecordPath)
-	if err != nil || !reflect.DeepEqual(record, manifest.Deployment) {
-		return beta.Deployment{}, beta.Config{}, errors.New("deployment record mismatch")
-	}
-	canary, err := beta.LoadConfig(manifest.CanaryConfigPath)
-	if err != nil || canary.ValidateCanary() != nil {
-		return beta.Deployment{}, beta.Config{}, errors.New("invalid canary configuration")
-	}
-	if deployment.SourceCommit != record.SourceCommit || !reflect.DeepEqual(deployment.Policy, canary.Policy) ||
-		deployment.Mounts.CAS != canary.ArtifactRoot || deployment.Mounts.Worktrees != canary.WorktreeRoot ||
-		deployment.Mounts.Verification != canary.VerificationWorkspaceRoot ||
-		deployment.Credentials.GitHub != canary.PublicationCredentialFile ||
-		deployment.Credentials.GitPush != canary.GitPushCredentialFile {
-		return beta.Deployment{}, beta.Config{}, errors.New("release configuration bindings mismatch")
-	}
-	configDigest, err := deployment.Digest()
-	if err != nil || configDigest != record.ConfigurationDigest {
-		return beta.Deployment{}, beta.Config{}, errors.New("deployment configuration digest mismatch")
+	if err := verifyConfigurationBindings(&deployment, &record, &canary); err != nil {
+		return beta.Deployment{}, beta.Config{}, err
 	}
 	if err := v.verifySourceAndToolchains(manifest); err != nil {
 		return beta.Deployment{}, beta.Config{}, err
@@ -105,24 +96,62 @@ func (v *Verifier) verifySupplyChain(
 	if err := verifyMigrations(ctx, canary.DatabaseURL, record.MigrationDigest); err != nil {
 		return beta.Deployment{}, beta.Config{}, err
 	}
-	if err := verifyFiles(deployment, record); err != nil {
+	if err := verifyFiles(&deployment, &record); err != nil {
 		return beta.Deployment{}, beta.Config{}, err
 	}
+	if err := verifyImages(ctx, &record); err != nil {
+		return beta.Deployment{}, beta.Config{}, err
+	}
+	return deployment, canary, nil
+}
+
+func loadReleaseInputs(manifest *beta.ReleaseManifest) (beta.Deployment, beta.DeploymentRecord, beta.Config, error) {
+	deployment, err := beta.LoadDeployment(manifest.DeploymentConfigPath)
+	if err != nil {
+		return beta.Deployment{}, beta.DeploymentRecord{}, beta.Config{}, fmt.Errorf("load deployment: %w", err)
+	}
+	record, err := beta.LoadDeploymentRecord(manifest.DeploymentRecordPath)
+	if err != nil || !reflect.DeepEqual(record, manifest.Deployment) {
+		return beta.Deployment{}, beta.DeploymentRecord{}, beta.Config{}, errors.New("deployment record mismatch")
+	}
+	canary, err := beta.LoadConfig(manifest.CanaryConfigPath)
+	if err != nil || canary.ValidateCanary() != nil {
+		return beta.Deployment{}, beta.DeploymentRecord{}, beta.Config{}, errors.New("invalid canary configuration")
+	}
+	return deployment, record, canary, nil
+}
+
+func verifyConfigurationBindings(deployment *beta.Deployment, record *beta.DeploymentRecord, canary *beta.Config) error {
+	if deployment.SourceCommit != record.SourceCommit || !reflect.DeepEqual(deployment.Policy, canary.Policy) ||
+		deployment.Mounts.CAS != canary.ArtifactRoot || deployment.Mounts.Worktrees != canary.WorktreeRoot ||
+		deployment.Mounts.Verification != canary.VerificationWorkspaceRoot ||
+		deployment.Credentials.GitHub != canary.PublicationCredentialFile ||
+		deployment.Credentials.GitPush != canary.GitPushCredentialFile {
+		return errors.New("release configuration bindings mismatch")
+	}
+	configDigest, err := deployment.Digest()
+	if err != nil || configDigest != record.ConfigurationDigest {
+		return errors.New("deployment configuration digest mismatch")
+	}
+	return nil
+}
+
+func verifyImages(ctx context.Context, record *beta.DeploymentRecord) error {
 	engine, err := dockerengine.NewFromEnvironment()
 	if err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return err
 	}
 	defer engine.Close()
 	for _, image := range []string{record.Images.API, record.Images.Workflow, record.Images.Execution, record.Images.Verification} {
 		actual, imageErr := engine.ImageID(ctx, image)
 		if imageErr != nil || actual != image {
-			return beta.Deployment{}, beta.Config{}, errors.New("release image identity mismatch")
+			return errors.New("release image identity mismatch")
 		}
 	}
-	return deployment, canary, nil
+	return nil
 }
 
-func (v *Verifier) verifySourceAndToolchains(manifest beta.ReleaseManifest) error {
+func (v *Verifier) verifySourceAndToolchains(manifest *beta.ReleaseManifest) error {
 	head, err := v.command("git", "-C", manifest.SourceRepositoryRoot, "rev-parse", "HEAD")
 	if err != nil || head != manifest.Deployment.SourceCommit {
 		return errors.New("release source commit mismatch")
@@ -159,7 +188,7 @@ func verifyMigrations(ctx context.Context, databaseURL, expectedDigest string) e
 	return nil
 }
 
-func verifyFiles(deployment beta.Deployment, record beta.DeploymentRecord) error {
+func verifyFiles(deployment *beta.Deployment, record *beta.DeploymentRecord) error {
 	manifests, err := directoryDigests(deployment.Mounts.Manifests)
 	if err != nil || !reflect.DeepEqual(manifests, record.ManifestDigests) {
 		return errors.New("release manifest file digests mismatch")
@@ -171,9 +200,7 @@ func verifyFiles(deployment beta.Deployment, record beta.DeploymentRecord) error
 	return nil
 }
 
-func (v *Verifier) verifyDurableEvidence(
-	ctx context.Context, manifest beta.ReleaseManifest, deployment beta.Deployment, canary beta.Config,
-) error {
+func verifyDurableEvidence(ctx context.Context, manifest *beta.ReleaseManifest, canary *beta.Config) error {
 	config, err := pgxpool.ParseConfig(canary.DatabaseURL)
 	if err != nil {
 		return errors.New("invalid evidence database configuration")
@@ -195,6 +222,13 @@ func (v *Verifier) verifyDurableEvidence(
 	if err := verifyWorkflowBindings(ctx, pool, store, manifest, canary); err != nil {
 		return err
 	}
+	return verifyPublicationEvidence(ctx, pool, store, manifest, canary)
+}
+
+func verifyPublicationEvidence(
+	ctx context.Context, pool *pgxpool.Pool, store *artifact.Store,
+	manifest *beta.ReleaseManifest, canary *beta.Config,
+) error {
 	repository, err := publication.NewPostgresPublicationRepository(pool)
 	if err != nil {
 		return err
@@ -219,6 +253,13 @@ func (v *Verifier) verifyDurableEvidence(
 		!publicationArtifact.Approval.Equal(manifest.Canary.Approval) {
 		return errors.New("publication artifact binding mismatch")
 	}
+	return verifyGitHubDraft(ctx, manifest, canary, &publicationArtifact)
+}
+
+func verifyGitHubDraft(
+	ctx context.Context, manifest *beta.ReleaseManifest, canary *beta.Config,
+	publicationArtifact *publication.DraftPullRequestArtifact,
+) error {
 	credential, err := publication.NewFileCredential(canary.PublicationCredentialFile)
 	if err != nil {
 		return errors.New("open publication credential")
@@ -235,79 +276,118 @@ func (v *Verifier) verifyDurableEvidence(
 		!strings.Contains(pull.Body, "<!-- harness-publication-id:"+manifest.Canary.PublicationID+" -->") {
 		return errors.New("live GitHub draft binding mismatch")
 	}
-	_ = deployment
 	return nil
 }
 
 func verifyWorkflowBindings(
 	ctx context.Context, pool *pgxpool.Pool, store *artifact.Store,
-	manifest beta.ReleaseManifest, canary beta.Config,
+	manifest *beta.ReleaseManifest, canary *beta.Config,
 ) error {
 	workflowStore := workflow.NewStore(pool)
 	run, err := workflowStore.GetRun(ctx, manifest.Canary.RunID)
-	if err != nil || run.State != workflow.RunStateMergeReady || run.CandidateCommit != manifest.Canary.CandidateCommit ||
-		run.Verification == nil || !run.Verification.Equal(manifest.Canary.Verification) ||
-		run.Review == nil || !run.Review.Equal(manifest.Canary.Review) ||
-		run.Approval == nil || !run.Approval.Equal(manifest.Canary.Approval) ||
-		run.Publication == nil || !run.Publication.Equal(manifest.Canary.Publication) {
+	if err != nil || !validRunEvidence(&run, manifest) {
 		return errors.New("run evidence binding mismatch")
 	}
 	tasks, err := workflowStore.ListTasks(ctx, manifest.Canary.RunID)
 	if err != nil || len(tasks) != 1 || tasks[0].ID != manifest.Canary.TaskID {
 		return errors.New("release canary must contain exactly one bound task")
 	}
-	task := tasks[0]
-	if task.State != workflow.TaskStateAccepted || task.CandidateCommit != manifest.Canary.CandidateCommit ||
-		task.Verification == nil || !task.Verification.Equal(manifest.Canary.Verification) ||
-		task.Review == nil || !task.Review.Equal(manifest.Canary.Review) ||
-		task.Approval == nil || !task.Approval.Equal(manifest.Canary.Approval) {
+	task := &tasks[0]
+	if !validTaskEvidence(task, manifest) {
 		return errors.New("task evidence binding mismatch")
 	}
 	binding, err := runtimeledger.NewBindingRepository(pool).GetRun(ctx, manifest.Canary.RunID)
-	if err != nil || binding.BaseCommit != canary.Policy.Repository.BaseCommit ||
-		binding.RepositoryMap == nil || binding.Policy == nil ||
-		binding.ExecutionImageDigest != canary.Policy.Images.Execution ||
-		binding.VerificationImageDigest != canary.Policy.Images.Verification {
+	if err != nil || !validRuntimeBinding(&binding, canary) {
 		return errors.New("immutable runtime binding mismatch")
 	}
+	if err := verifyRuntimeArtifacts(ctx, store, &binding); err != nil {
+		return err
+	}
+	return verifyStageEvidence(ctx, pool, store, manifest, task)
+}
+
+func validRunEvidence(run *workflow.Run, manifest *beta.ReleaseManifest) bool {
+	return run.State == workflow.RunStateMergeReady && run.CandidateCommit == manifest.Canary.CandidateCommit &&
+		run.Verification != nil && run.Verification.Equal(manifest.Canary.Verification) &&
+		run.Review != nil && run.Review.Equal(manifest.Canary.Review) &&
+		run.Approval != nil && run.Approval.Equal(manifest.Canary.Approval) &&
+		run.Publication != nil && run.Publication.Equal(manifest.Canary.Publication)
+}
+
+func validTaskEvidence(task *workflow.Task, manifest *beta.ReleaseManifest) bool {
+	return task.State == workflow.TaskStateAccepted && task.CandidateCommit == manifest.Canary.CandidateCommit &&
+		task.Verification != nil && task.Verification.Equal(manifest.Canary.Verification) &&
+		task.Review != nil && task.Review.Equal(manifest.Canary.Review) &&
+		task.Approval != nil && task.Approval.Equal(manifest.Canary.Approval)
+}
+
+func validRuntimeBinding(binding *runtimeledger.RunBinding, canary *beta.Config) bool {
+	return binding.BaseCommit == canary.Policy.Repository.BaseCommit && binding.RepositoryMap != nil && binding.Policy != nil &&
+		binding.ExecutionImageDigest == canary.Policy.Images.Execution &&
+		binding.VerificationImageDigest == canary.Policy.Images.Verification
+}
+
+func verifyRuntimeArtifacts(ctx context.Context, store *artifact.Store, binding *runtimeledger.RunBinding) error {
 	for _, ref := range []workflow.ArtifactRef{binding.Intake, *binding.RepositoryMap, *binding.Policy} {
 		if _, err := store.Get(ctx, ref); err != nil {
 			return errors.New("runtime binding artifact unavailable")
 		}
 	}
-	return verifyStageEvidence(ctx, pool, store, manifest, task)
+	return nil
 }
 
 func verifyStageEvidence(
 	ctx context.Context, pool *pgxpool.Pool, store *artifact.Store,
-	manifest beta.ReleaseManifest, task workflow.Task,
+	manifest *beta.ReleaseManifest, task *workflow.Task,
 ) error {
-	type invocation struct {
-		stage, provider, model, requestID, providerRequestID string
-		proposal, response                                   workflow.ArtifactRef
-		requests                                             int
-		input, output                                        int64
+	invocations, err := loadReasoningEvidence(ctx, pool, manifest)
+	if err != nil {
+		return err
 	}
+	if err := verifyReasoningEvidence(ctx, store, invocations, task); err != nil {
+		return err
+	}
+	if err := verifyVerificationEvidence(ctx, pool, store, manifest); err != nil {
+		return err
+	}
+	if err := verifyReviewEvidence(ctx, store, manifest, &invocations[1]); err != nil {
+		return err
+	}
+	return verifyApprovalEvidence(ctx, pool, store, manifest)
+}
+
+func loadReasoningEvidence(
+	ctx context.Context, pool *pgxpool.Pool, manifest *beta.ReleaseManifest,
+) ([]invocationEvidence, error) {
 	rows, err := pool.Query(ctx, `SELECT stage,provider,model,request_id,provider_request_id,
 		proposal_artifact_uri,proposal_digest,provider_response_artifact_uri,
 		provider_response_digest,provider_requests,input_tokens,output_tokens
 		FROM reasoning_invocations WHERE run_id=$1 AND task_id=$2 AND state='completed'
 		AND final_status='accepted' ORDER BY stage`, manifest.Canary.RunID, manifest.Canary.TaskID)
 	if err != nil {
-		return errors.New("read reasoning evidence")
+		return nil, errors.New("read reasoning evidence")
 	}
 	defer rows.Close()
-	var invocations []invocation
+	var invocations []invocationEvidence
 	for rows.Next() {
-		var value invocation
+		var value invocationEvidence
 		if err := rows.Scan(&value.stage, &value.provider, &value.model, &value.requestID,
 			&value.providerRequestID, &value.proposal.URI, &value.proposal.Digest,
 			&value.response.URI, &value.response.Digest, &value.requests, &value.input, &value.output); err != nil {
-			return errors.New("decode reasoning evidence")
+			return nil, errors.New("decode reasoning evidence")
 		}
 		invocations = append(invocations, value)
 	}
-	if rows.Err() != nil || len(invocations) != 2 || invocations[0].stage != "implementation" ||
+	if rows.Err() != nil {
+		return nil, errors.New("read reasoning evidence")
+	}
+	return invocations, nil
+}
+
+func verifyReasoningEvidence(
+	ctx context.Context, store *artifact.Store, invocations []invocationEvidence, task *workflow.Task,
+) error {
+	if len(invocations) != 2 || invocations[0].stage != "implementation" ||
 		invocations[1].stage != "review" || invocations[0].requestID == invocations[1].requestID ||
 		task.Proposal == nil || !task.Proposal.Equal(invocations[0].proposal) {
 		return errors.New("exactly two distinct reasoning stages are required")
@@ -323,6 +403,12 @@ func verifyStageEvidence(
 			}
 		}
 	}
+	return nil
+}
+
+func verifyVerificationEvidence(
+	ctx context.Context, pool *pgxpool.Pool, store *artifact.Store, manifest *beta.ReleaseManifest,
+) error {
 	verificationBody, err := store.Get(ctx, manifest.Canary.Verification)
 	if err != nil {
 		return errors.New("verification artifact unavailable")
@@ -338,6 +424,12 @@ func verifyStageEvidence(
 		AND result_json->>'CandidateCommit'=$1`, manifest.Canary.CandidateCommit).Scan(&verificationCount); err != nil || verificationCount != 1 {
 		return errors.New("verification ledger binding mismatch")
 	}
+	return nil
+}
+
+func verifyReviewEvidence(
+	ctx context.Context, store *artifact.Store, manifest *beta.ReleaseManifest, reviewInvocation *invocationEvidence,
+) error {
 	reviewBody, err := store.Get(ctx, manifest.Canary.Review)
 	if err != nil {
 		return errors.New("review artifact unavailable")
@@ -346,10 +438,16 @@ func verifyStageEvidence(
 	if strictJSON(reviewBody, &reviewReport) != nil || !reviewReport.Passed ||
 		reviewReport.RunID != manifest.Canary.RunID || reviewReport.TaskID != manifest.Canary.TaskID ||
 		reviewReport.CandidateCommit != manifest.Canary.CandidateCommit ||
-		!reviewReport.Proposal.Equal(invocations[1].proposal) ||
+		!reviewReport.Proposal.Equal(reviewInvocation.proposal) ||
 		!reviewReport.Verification.Equal(manifest.Canary.Verification) {
 		return errors.New("review artifact binding mismatch")
 	}
+	return nil
+}
+
+func verifyApprovalEvidence(
+	ctx context.Context, pool *pgxpool.Pool, store *artifact.Store, manifest *beta.ReleaseManifest,
+) error {
 	approvalBody, err := store.Get(ctx, manifest.Canary.Approval)
 	if err != nil {
 		return errors.New("approval artifact unavailable")
