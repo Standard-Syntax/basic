@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KYXKSPGHNSTEX6KEXX4GF2YQ",
+  "strategy": "manual-commit",
+  "branch": "beta/release-cut",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "README.md",
+    "docs/architecture.md",
+    "docs/beta-canary.md",
+    "docs/beta-deployment.md",
+    "docs/beta-release.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/security.md",
+    "go/internal/runtime/process_e2e_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 68575,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11070464,
+    "output_tokens": 18048,
+    "api_call_count": 52
+  }
+}
