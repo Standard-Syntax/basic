@@ -546,6 +546,6 @@ func digest(body []byte) string {
 }
 
 func commandOutput(name string, arguments ...string) (string, error) {
-	body, err := exec.Command(name, arguments...).CombinedOutput()
+	body, err := exec.Command(name, arguments...).Output()
 	return strings.TrimSpace(string(body)), err
 }

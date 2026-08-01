@@ -23,6 +23,13 @@ func TestStrictJSONRejectsUnknownFieldsAndTrailers(t *testing.T) {
 	}
 }
 
+func TestCommandOutputComparesStandardOutputOnly(t *testing.T) {
+	value, err := commandOutput("sh", "-c", "printf ready; printf advisory >&2")
+	if err != nil || value != "ready" {
+		t.Fatalf("command output = %q, %v", value, err)
+	}
+}
+
 func TestDirectoryDigestsAreRelativeAndSymlinkFree(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "nested"), 0o700); err != nil {
