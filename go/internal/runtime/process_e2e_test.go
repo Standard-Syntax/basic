@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,7 @@ func runBetaProcesses(t *testing.T) {
 	}
 	apiBinary := requireEnvironment(t, "RUNTIME_API_BINARY")
 	workflowBinary := requireEnvironment(t, "RUNTIME_WORKFLOW_BINARY")
+	packaged := os.Getenv("RUNTIME_PACKAGED") == "1"
 	canaryMode := os.Getenv("BETA_CANARY") == "1"
 	var canaryConfig beta.Config
 	var databaseURL string
@@ -73,7 +75,10 @@ func runBetaProcesses(t *testing.T) {
 		databaseURL = requireEnvironment(t, "TEST_DATABASE_URL")
 	}
 	root := t.TempDir()
-	repository, remote, baseCommit := "", "", ""
+	if packaged {
+		makeTreeAccessible(t, root)
+	}
+	repository, remote, remoteURL, baseCommit := "", "", "", ""
 	repositoryOwner, repositoryName, branchPrefix := "local", "fixture", "harness/"
 	tokenFile, pushCredential, apiEndpoint := "", "", ""
 	artifactRoot, worktrees, verificationRoot := "", "", ""
@@ -81,6 +86,7 @@ func runBetaProcesses(t *testing.T) {
 	var policy any
 	if canaryMode {
 		repository, remote = canaryConfig.Policy.Repository.Root, canaryConfig.Policy.Repository.Remote
+		remoteURL = canaryConfig.Policy.Repository.RemoteURL
 		baseCommit = canaryConfig.Policy.Repository.BaseCommit
 		repositoryOwner, repositoryName, branchPrefix = beta.CanaryOwner, beta.CanaryRepository, "harness/canary/"
 		tokenFile, pushCredential = canaryConfig.PublicationCredentialFile, canaryConfig.GitPushCredentialFile
@@ -91,12 +97,23 @@ func runBetaProcesses(t *testing.T) {
 		policy = canaryConfig.Policy
 	} else {
 		repository, remote, baseCommit = fixtureRepository(t, root)
-		executionImage = dockerImageID(t, "basic-execution-worker:runtime")
-		verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
+		remoteURL = filepath.Join(root, "remote.git")
+		if packaged {
+			server := smartGitRemote(t, remoteURL)
+			remoteURL = server.URL + "/remote.git"
+			runGitE2E(t, repository, "remote", "set-url", remote, remoteURL)
+		}
+		if packaged {
+			executionImage = requireEnvironment(t, "RUNTIME_EXECUTION_IMAGE")
+			verificationImage = requireEnvironment(t, "RUNTIME_VERIFICATION_IMAGE")
+		} else {
+			executionImage = dockerImageID(t, "basic-execution-worker:runtime")
+			verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
+		}
 		policy = map[string]any{
 			"version": "1.0",
 			"repository": map[string]any{"owner": "local", "name": "fixture", "root": repository,
-				"remote": remote, "remote_url": filepath.Join(root, "remote.git"), "base_branch": "main", "base_commit": baseCommit},
+				"remote": remote, "remote_url": remoteURL, "base_branch": "main", "base_commit": baseCommit},
 			"paths":          map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}},
 			"trusted_checks": []string{"make-check-v1"},
 			"limits":         map[string]any{"maximum_tasks": 1, "maximum_changed_files": 4, "maximum_file_bytes": 1 << 20, "maximum_total_bytes": 4 << 20, "execution_concurrency": 1, "verification_concurrency": 1},
@@ -107,6 +124,9 @@ func runBetaProcesses(t *testing.T) {
 		for _, path := range []string{artifactRoot, worktrees, verificationRoot} {
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				t.Fatal(err)
+			}
+			if packaged && os.Chmod(path, 0o777) != nil {
+				t.Fatal("make packaged path accessible")
 			}
 		}
 	}
@@ -123,6 +143,12 @@ func runBetaProcesses(t *testing.T) {
 			t.Fatal(err)
 		}
 		apiEndpoint = prServer.URL
+	}
+	minimaxCredential := ""
+	if packaged {
+		minimaxCredential = filepath.Join(root, "minimax-credential")
+		writeFile(t, minimaxCredential, apiKey)
+		chownPackagedCredentials(t, root, minimaxCredential, tokenFile)
 	}
 	apiAddress := freeAddress(t)
 	actorIDs := make([]string, 7)
@@ -172,7 +198,36 @@ func runBetaProcesses(t *testing.T) {
 			"model": "MiniMax-M2.7", "api_key_env": "ANTHROPIC_API_KEY",
 		},
 	}
+	if packaged {
+		workflowValues["worker_uid"], workflowValues["worker_gid"] = 65532, 65532
+		workflowValues["provider"] = map[string]any{"mode": "minimax_anthropic",
+			"base_url": "https://api.minimax.io/anthropic", "model": "MiniMax-M2.7",
+			"api_key_file": minimaxCredential}
+	}
 	writeJSONFile(t, workflowConfig, workflowValues)
+	planningSnapshot, err := SnapshotRepository(t.Context(), repository, baseCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packaged {
+		if err := os.Chmod(apiConfig, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(workflowConfig, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		makeTreeAccessibleExceptCredentials(t, root, minimaxCredential, tokenFile)
+		chownPackagedTree(t, root)
+		t.Cleanup(func() { restorePackagedTreeOwnership(t, root) })
+		if !canaryMode {
+			command := exec.Command("docker", "run", "--rm", "--network", "host",
+				"--entrypoint", "/usr/bin/git", apiBinary,
+				"ls-remote", "--heads", remoteURL, "refs/heads/main")
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("packaged Git smart-HTTP probe: %v: %s", err, output)
+			}
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var processes []*process
@@ -201,7 +256,7 @@ func runBetaProcesses(t *testing.T) {
 		map[string]any{"decision_timestamp": now.Add(2 * time.Second)}, http.StatusOK)
 	specBody, _ := proto.MarshalOptions{Deterministic: true}.Marshal(specProposal)
 	planningRequest, graph := planningPair(
-		t, runID, taskID, now, repository, baseCommit, Digest(specBody),
+		runID, taskID, now, repository, planningSnapshot, Digest(specBody),
 	)
 	client.mutate(t, "/v1/runs/"+runID+"/task-graph", client.revision(t, runID),
 		protoPair(t, planningRequest, graph, now.Add(3*time.Second)), http.StatusOK)
@@ -216,6 +271,9 @@ func runBetaProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	if packaged {
+		makePackagedPathAccessible(t, artifactRoot)
+	}
 	beforeRunReplay := snapshotRunIntakeSideEffects(t, pool, artifactRoot, runID)
 	var replayedRun mutationResponse
 	func() {
@@ -347,6 +405,9 @@ func runBetaProcesses(t *testing.T) {
 	} else {
 		assertPublishedFixture(t, repository, remote, baseCommit, candidate, branch, prState)
 	}
+	if packaged {
+		makePackagedPathAccessible(t, artifactRoot)
+	}
 	assertReasoningEvidence(t, pool, artifactRoot, runID)
 	assertDurableOutcome(t, pool, runID, taskID, actorIDs[1], candidate)
 	beforeReplay := snapshotSideEffects(
@@ -379,6 +440,9 @@ func runBetaProcesses(t *testing.T) {
 	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM workflow_events
 		WHERE aggregate_id IN ($1,$2)`, runID, taskID).Scan(&events); err != nil || events < 10 {
 		t.Fatalf("events = %d, %v", events, err)
+	}
+	if packaged {
+		makePackagedPathAccessible(t, artifactRoot)
 	}
 	assertSecretAbsent(t, apiKey, pool, artifactRoot, repository,
 		[]string{
@@ -422,7 +486,33 @@ type process struct {
 
 func startProcess(t *testing.T, ctx context.Context, binary, config string) *process {
 	t.Helper()
-	command := exec.CommandContext(ctx, binary, "-config", config)
+	var command *exec.Cmd
+	if os.Getenv("RUNTIME_PACKAGED") == "1" {
+		root := filepath.Dir(config)
+		arguments := []string{"run", "--rm", "--network", "host", "--read-only",
+			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+			"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
+			"--mount", "type=bind,src=" + root + ",dst=" + root, binary, "-config", config}
+		body, err := os.ReadFile(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var values map[string]any
+		if json.Unmarshal(body, &values) != nil {
+			t.Fatal("decode packaged process config")
+		}
+		if _, workflow := values["owner_id"]; workflow {
+			arguments = append([]string{"run", "--rm", "--network", "host", "--read-only",
+				"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+				"--group-add", requireEnvironment(t, "RUNTIME_DOCKER_GID"),
+				"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
+				"--mount", "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
+				"--mount", "type=bind,src=" + root + ",dst=" + root, binary, "-config", config})
+		}
+		command = exec.CommandContext(ctx, "docker", arguments...)
+	} else {
+		command = exec.CommandContext(ctx, binary, "-config", config)
+	}
 	logs := &bytes.Buffer{}
 	command.Stdout, command.Stderr = logs, logs
 	if err := command.Start(); err != nil {
@@ -439,6 +529,83 @@ func startProcess(t *testing.T, ctx context.Context, binary, config string) *pro
 		}
 	})
 	return result
+}
+
+func makeTreeAccessible(t *testing.T, root string) {
+	t.Helper()
+	if err := os.Chmod(root, 0o777); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func makeTreeAccessibleExceptCredentials(t *testing.T, root string, credentials ...string) {
+	t.Helper()
+	protected := map[string]bool{}
+	for _, path := range credentials {
+		if path != "" {
+			protected[path] = true
+		}
+	}
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if protected[path] {
+			return nil
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, 0o777)
+		}
+		return os.Chmod(path, 0o666)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func chownPackagedCredentials(t *testing.T, root string, paths ...string) {
+	t.Helper()
+	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
+		"alpine:3.23.3", "chown", "65532:65532"}
+	for _, path := range paths {
+		if path != "" {
+			arguments = append(arguments, "/target/"+filepath.Base(path))
+		}
+	}
+	body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("provision packaged credentials: %v: %s", err, body)
+	}
+}
+
+func chownPackagedTree(t *testing.T, root string) {
+	t.Helper()
+	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
+		"alpine:3.23.3", "chown", "-R", "65532:65532", "/target"}
+	body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("provision packaged tree: %v: %s", err, body)
+	}
+}
+
+func restorePackagedTreeOwnership(t *testing.T, root string) {
+	t.Helper()
+	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
+		"alpine:3.23.3", "chown", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/target"}
+	body, err := exec.CommandContext(context.Background(), "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Errorf("restore packaged tree ownership: %v: %s", err, body)
+	}
+}
+
+func makePackagedPathAccessible(t *testing.T, path string) {
+	t.Helper()
+	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
+		"alpine:3.23.3", "chmod", "-R", "a+rwX", "/target"}
+	body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("make packaged path accessible: %v: %s", err, body)
+	}
 }
 
 func (p *process) stop(t *testing.T) {
@@ -562,6 +729,62 @@ func fixtureRepository(t *testing.T, root string) (string, string, string) {
 	return repository, "origin", base
 }
 
+func smartGitRemote(t *testing.T, repository string) *httptest.Server {
+	t.Helper()
+	runGitE2E(t, repository, "config", "http.receivepack", "true")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		command := exec.CommandContext(request.Context(), "git", "http-backend")
+		command.Env = append(os.Environ(),
+			"GIT_PROJECT_ROOT="+filepath.Dir(repository), "GIT_HTTP_EXPORT_ALL=1",
+			"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory",
+			"GIT_CONFIG_VALUE_0="+repository,
+			"PATH_INFO="+request.URL.Path, "QUERY_STRING="+request.URL.RawQuery,
+			"REQUEST_METHOD="+request.Method, "CONTENT_TYPE="+request.Header.Get("Content-Type"),
+			fmt.Sprintf("CONTENT_LENGTH=%d", request.ContentLength), "REMOTE_USER=packaged-test")
+		command.Stdin = request.Body
+		var output, diagnostics bytes.Buffer
+		command.Stdout, command.Stderr = &output, &diagnostics
+		if err := command.Run(); err != nil {
+			t.Logf("git http-backend path=%q failed: %v: %s", request.URL.Path, err, diagnostics.String())
+			http.Error(w, diagnostics.String(), http.StatusInternalServerError)
+			return
+		}
+		body := output.Bytes()
+		separator, width := bytes.Index(body, []byte("\r\n\r\n")), 4
+		if separator < 0 {
+			separator, width = bytes.Index(body, []byte("\n\n")), 2
+		}
+		if separator < 0 {
+			http.Error(w, "invalid Git CGI response", 500)
+			return
+		}
+		status := http.StatusOK
+		for _, line := range strings.Split(strings.ReplaceAll(string(body[:separator]), "\r\n", "\n"), "\n") {
+			name, value, ok := strings.Cut(line, ":")
+			if !ok {
+				continue
+			}
+			value = strings.TrimSpace(value)
+			if strings.EqualFold(name, "Status") {
+				fields := strings.Fields(value)
+				if len(fields) > 0 {
+					status, _ = strconv.Atoi(fields[0])
+				}
+				continue
+			}
+			w.Header().Add(name, value)
+		}
+		if status >= http.StatusBadRequest {
+			t.Logf("git http-backend path=%q status=%d headers=%s diagnostics=%s body=%s",
+				request.URL.Path, status, body[:separator], diagnostics.String(), body[separator+width:])
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write(body[separator+width:])
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
 func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 	t.Helper()
 	var prompts [2]string
@@ -630,14 +853,9 @@ func specificationPair(
 }
 
 func planningPair(
-	t *testing.T, runID, taskID string, now time.Time,
-	repository, baseCommit, specificationDigest string,
+	runID, taskID string, now time.Time,
+	repository string, snapshot RepositorySnapshot, specificationDigest string,
 ) (*reasoningv1.TaskPlanningRequest, *reasoningv1.TaskGraphProposal) {
-	t.Helper()
-	snapshot, err := SnapshotRepository(t.Context(), repository, baseCommit)
-	if err != nil {
-		t.Fatal(err)
-	}
 	envelope := reasoningEnvelope(runID, nil,
 		reasoningv1.ReasoningStage_REASONING_STAGE_PLANNING, now.Add(time.Second))
 	request := &reasoningv1.TaskPlanningRequest{
@@ -825,7 +1043,7 @@ func runGitE2E(t *testing.T, root string, arguments ...string) {
 
 func runGitOutput(t *testing.T, root string, arguments ...string) string {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", root}, arguments...)...)
+	command := exec.Command("git", append([]string{"-c", "safe.directory=" + root, "-C", root}, arguments...)...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v: %s", arguments, err, output)
@@ -1213,7 +1431,8 @@ func assertSecretAbsentFromGit(t *testing.T, secret, repository string) {
 			continue
 		}
 		seen[objectID] = struct{}{}
-		command := exec.Command("git", "-C", repository, "cat-file", "-p", objectID)
+		command := exec.Command("git", "-c", "safe.directory="+repository,
+			"-C", repository, "cat-file", "-p", objectID)
 		body, err := command.Output()
 		if err != nil {
 			t.Fatalf("inspect reachable fixture Git object %s: %v", objectID, err)

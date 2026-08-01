@@ -3,9 +3,12 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -16,10 +19,11 @@ const (
 )
 
 type ProviderConfig struct {
-	Mode      string `json:"mode"`
-	BaseURL   string `json:"base_url"`
-	Model     string `json:"model"`
-	APIKeyEnv string `json:"api_key_env"`
+	Mode       string `json:"mode"`
+	BaseURL    string `json:"base_url"`
+	Model      string `json:"model"`
+	APIKeyEnv  string `json:"api_key_env"`
+	APIKeyFile string `json:"api_key_file,omitempty"`
 }
 
 func (c ProviderConfig) Normalize() (ProviderConfig, error) {
@@ -40,7 +44,7 @@ func normalizeMiniMaxConfig(normalized ProviderConfig) (ProviderConfig, error) {
 	if normalized.Model == "" {
 		normalized.Model = MiniMaxModel
 	}
-	if normalized.APIKeyEnv == "" {
+	if normalized.APIKeyEnv == "" && normalized.APIKeyFile == "" {
 		normalized.APIKeyEnv = MiniMaxAPIKeyEnv
 	}
 	parsed, err := url.Parse(normalized.BaseURL)
@@ -51,10 +55,53 @@ func normalizeMiniMaxConfig(normalized ProviderConfig) (ProviderConfig, error) {
 	if normalized.Model != MiniMaxModel {
 		return ProviderConfig{}, errors.New("MiniMax model must be MiniMax-M2.7")
 	}
-	if normalized.APIKeyEnv != MiniMaxAPIKeyEnv {
+	fileSource := normalized.APIKeyFile != ""
+	if fileSource == (normalized.APIKeyEnv != "") {
+		return ProviderConfig{}, errors.New("exactly one MiniMax credential source is required")
+	}
+	if fileSource {
+		if !filepath.IsAbs(normalized.APIKeyFile) || filepath.Clean(normalized.APIKeyFile) != normalized.APIKeyFile {
+			return ProviderConfig{}, errors.New("MiniMax credential file must be clean and absolute")
+		}
+	} else if normalized.APIKeyEnv != MiniMaxAPIKeyEnv {
 		return ProviderConfig{}, errors.New("MiniMax credential source must be ANTHROPIC_API_KEY")
 	}
 	return normalized, nil
+}
+
+// FileCredentialSource validates and rereads an owner-only credential for
+// every provider invocation so rotation requires no service restart.
+type FileCredentialSource struct{ Path string }
+
+func (s FileCredentialSource) Credential(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(s.Path) || filepath.Clean(s.Path) != s.Path {
+		return "", ErrCredentialUnavailable
+	}
+	info, err := os.Lstat(s.Path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return "", ErrCredentialUnavailable
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(stat.Uid) != os.Geteuid() {
+		return "", ErrCredentialUnavailable
+	}
+	file, err := os.Open(s.Path)
+	if err != nil {
+		return "", ErrCredentialUnavailable
+	}
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, 64<<10+1))
+	if err != nil || len(body) > 64<<10 {
+		return "", ErrCredentialUnavailable
+	}
+	value := strings.TrimSpace(string(body))
+	if value == "" {
+		return "", ErrCredentialUnavailable
+	}
+	return value, nil
 }
 
 type EnvironmentCredentialSource struct {

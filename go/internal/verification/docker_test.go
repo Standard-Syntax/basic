@@ -1,21 +1,30 @@
 package verification
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"io"
+	"strings"
 	"testing"
+
+	"github.com/Standard-Syntax/basic/go/internal/dockerengine"
 )
 
+type inspectEngine struct{ id string }
+
+func (e inspectEngine) ImageID(context.Context, string) (string, error) { return e.id, nil }
+func (inspectEngine) Run(context.Context, dockerengine.RunRequest, io.Reader, io.Writer) error {
+	return nil
+}
+func (inspectEngine) Remove(context.Context, string) error { return nil }
+
 func TestDockerExecutorRejectsMutableOrMalformedImageIdentity(t *testing.T) {
-	bin := t.TempDir()
-	docker := filepath.Join(bin, "docker")
-	if err := os.WriteFile(docker, []byte("#!/bin/sh\nprintf 'not-an-image-id\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	executor := DockerCheckExecutor{Image: "verification:test", UID: 1000, GID: 1000}
+	executor := DockerCheckExecutor{Image: "verification:test", UID: 1000, GID: 1000, Engine: inspectEngine{id: "not-an-image-id"}}
 	if _, err := executor.ImageID(t.Context()); err == nil {
 		t.Fatal("malformed image identity accepted")
+	}
+	executor.Engine = inspectEngine{id: "sha256:" + strings.Repeat("a", 64)}
+	if id, err := executor.ImageID(t.Context()); err != nil || id == "" {
+		t.Fatalf("immutable image identity = %q, %v", id, err)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 type fakeWorkflow struct {
 	runCommands  []workflow.RunCommand
 	taskCommands []workflow.TaskCommand
+	run          *workflow.Run
 }
 
 func (f *fakeWorkflow) ExecuteRun(_ context.Context, command workflow.RunCommand) (workflow.CommandResult, error) {
@@ -33,7 +34,10 @@ func (f *fakeWorkflow) ExecuteTask(_ context.Context, command workflow.TaskComma
 	f.taskCommands = append(f.taskCommands, command)
 	return workflow.CommandResult{AggregateID: command.TaskID()}, nil
 }
-func (*fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
+func (f *fakeWorkflow) GetRun(context.Context, string) (workflow.Run, error) {
+	if f.run != nil {
+		return *f.run, nil
+	}
 	return workflow.Run{}, workflow.ErrNotFound
 }
 func (*fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, error) {
@@ -54,6 +58,7 @@ type fakeRuntime struct {
 	completes         int
 	abandons          int
 	intakeHasDeadline bool
+	stages            []runtime.StageStatus
 }
 
 type fakeRunIntake struct {
@@ -97,6 +102,10 @@ func (f *fakeRuntime) AbandonIdempotency(context.Context, string, uint64) error 
 func (*fakeRuntime) Enqueue(context.Context, runtime.Job) error { return nil }
 func (*fakeRuntime) CancelRun(context.Context, string, time.Time) error {
 	return nil
+}
+
+func (f *fakeRuntime) RunStages(context.Context, string) ([]runtime.StageStatus, error) {
+	return f.stages, nil
 }
 
 type fakeArtifacts struct{ putErr error }
@@ -216,7 +225,7 @@ func TestHealthAndAuthentication(t *testing.T) {
 		path   string
 		token  string
 		status int
-	}{{"/healthz", "", 200}, {"/readyz", "", 401}, {"/readyz", token, 200}} {
+	}{{"/healthz", "", 200}, {"/readyz", "", 200}, {"/readyz", token, 200}} {
 		request := httptest.NewRequest(http.MethodGet, test.path, http.NoBody)
 		if test.token != "" {
 			request.Header.Set("Authorization", "Bearer "+test.token)
@@ -226,6 +235,22 @@ func TestHealthAndAuthentication(t *testing.T) {
 		if response.Code != test.status {
 			t.Fatalf("%s status = %d body=%s", test.path, response.Code, response.Body)
 		}
+	}
+}
+
+func TestGetRunExposesTerminalFailureArtifactWithoutBody(t *testing.T) {
+	server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
+	runID := uuid.NewString()
+	workflowStore.run = &workflow.Run{ID: runID, Revision: 3}
+	runtimeLedger.stages = []runtime.StageStatus{{Attempt: 1, Stage: "verification", State: "FAILED",
+		Failure: &workflow.ArtifactRef{URI: "artifact://sha256/failure", Digest: strings.Repeat("a", 64)}}}
+	request := httptest.NewRequest(http.MethodGet, "/v1/runs/"+runID, http.NoBody)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"FAILED"`) ||
+		!strings.Contains(response.Body.String(), strings.Repeat("a", 64)) || strings.Contains(response.Body.String(), "proposal") {
+		t.Fatalf("terminal run response = %d %s", response.Code, response.Body.String())
 	}
 }
 

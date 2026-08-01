@@ -630,3 +630,40 @@ publication. Merge, ready-for-review, deploy, and prefix deletion remain absent.
 
 ### Date
 2026-07-31
+
+## DEC-028: Package beta services around a narrow Docker Engine boundary
+
+### Decision
+Ship API and workflow as pinned, fixed-identity images and let only workflow
+use an API-version-negotiating Moby client through a narrow worker Engine
+interface. Describe one exact deployment with a strict, secret-free envelope
+and retain a generated bill of materials for every image set.
+
+### Options considered
+Install the Docker CLI in workflow; move workers into the service process; use
+the official Engine SDK while preserving isolated worker containers.
+
+### Pros
+The final service images contain no shell, package manager, or Docker CLI.
+Worker mounts, non-root identity, network isolation, resource bounds, image
+inspection, and cancellation cleanup remain explicit API requests. Readiness
+and rollback bind the same immutable image identities.
+
+### Cons
+The trusted Docker socket remains powerful beta infrastructure, operators must
+provision its supplemental group explicitly, and Engine API compatibility is a
+new service dependency.
+
+### Why this option
+Removing container isolation would weaken execution and verification. Shipping
+the Docker CLI adds an unnecessary command parser and administration surface;
+the consumer-owned SDK boundary expresses only the operations workers need.
+
+### Consequences
+Only workflow receives the socket. API is loopback-published and repository
+read-only. Both services run as `65532:65532` with read-only roots, and workflow
+drains one active fenced claim for at most 60 seconds while renewing it.
+Deployment records contain no credentials or claims of live provider evidence.
+
+### Date
+2026-07-31

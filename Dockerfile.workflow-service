@@ -1,0 +1,30 @@
+ARG GO_IMAGE=golang:1.26.0-alpine@sha256:7c6a62c80c3f15fb49aae282d7a296149889ebe39b2318f3a299f2759c1ce135
+ARG RUNTIME_IMAGE=alpine:3.23.3@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95
+
+FROM ${GO_IMAGE} AS build
+ARG SOURCE_REVISION
+WORKDIR /src
+COPY go/go.mod go/go.sum ./
+RUN go mod download
+COPY go/ ./
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.sourceRevision=${SOURCE_REVISION}" -o /out/workflow-service ./cmd/workflow-service
+
+FROM ${RUNTIME_IMAGE} AS git-runtime
+RUN apk add --no-cache ca-certificates git=2.52.0-r0
+
+FROM scratch
+ARG SOURCE_REVISION
+LABEL org.opencontainers.image.source="https://github.com/Standard-Syntax/basic" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
+      org.opencontainers.image.title="basic workflow-service" \
+      org.opencontainers.image.version="beta_deployment.v1" \
+      io.standard-syntax.basic.component="workflow-service"
+COPY --from=git-runtime /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=git-runtime /lib/ /lib/
+COPY --from=git-runtime /usr/lib/ /usr/lib/
+COPY --from=git-runtime /usr/bin/git /usr/bin/git
+COPY --from=git-runtime /usr/libexec/git-core/ /usr/libexec/git-core/
+COPY --from=git-runtime /usr/share/git-core/ /usr/share/git-core/
+COPY --from=build /out/workflow-service /workflow-service
+USER 65532:65532
+ENTRYPOINT ["/workflow-service"]

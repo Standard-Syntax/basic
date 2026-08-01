@@ -183,6 +183,75 @@ func TestFailedVerificationStopsBeforeReviewAndRenewsLongClaim(t *testing.T) {
 	}
 }
 
+func TestRunWithDrainRenewsAndCompletesActiveClaim(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: uuid.NewString(), Stage: StageStart, FencingToken: 1,
+	}}
+	handlers := handlersReturning(nil)
+	handlers[StageStart] = HandlerFunc(func(
+		ctx context.Context, _ runtime.Job, _ Identities,
+	) (HandlerResult, error) {
+		close(started)
+		select {
+		case <-release:
+			return HandlerResult{Artifact: workflow.ArtifactRef{URI: "artifact://done", Digest: "done"}}, nil
+		case <-ctx.Done():
+			return HandlerResult{}, ctx.Err()
+		}
+	})
+	reconciler, err := New(Config{OwnerID: uuid.NewString(), ClaimTTL: 9 * time.Millisecond,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Millisecond,
+	}, ledger, &memoryArtifacts{}, handlers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- reconciler.RunWithDrain(ctx, time.Second) }()
+	<-started
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("drain = %v", err)
+	}
+	if ledger.renewals == 0 || len(ledger.completed) != 1 {
+		t.Fatalf("renewals=%d completed=%d", ledger.renewals, len(ledger.completed))
+	}
+}
+
+func TestRunWithDrainCancelsAtDeadline(t *testing.T) {
+	started := make(chan struct{})
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: uuid.NewString(), Stage: StageStart, FencingToken: 1,
+	}}
+	handlers := handlersReturning(nil)
+	handlers[StageStart] = HandlerFunc(func(ctx context.Context, _ runtime.Job, _ Identities) (HandlerResult, error) {
+		close(started)
+		<-ctx.Done()
+		return HandlerResult{}, ctx.Err()
+	})
+	reconciler, err := New(Config{OwnerID: uuid.NewString(), ClaimTTL: time.Second,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: time.Millisecond,
+	}, ledger, &memoryArtifacts{}, handlers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- reconciler.RunWithDrain(ctx, 10*time.Millisecond) }()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("drain = %v", err)
+	}
+	if len(ledger.completed) != 0 {
+		t.Fatal("expired drain completed stale claim")
+	}
+}
+
 func TestOnceIgnoresRenewalCancellationAfterHandlerCompletes(t *testing.T) {
 	runID, taskID, owner := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	renewStarted := make(chan struct{})

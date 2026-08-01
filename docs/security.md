@@ -75,7 +75,7 @@
 - The verification worker runs the fixed `make check` argv as a non-root
   UID/GID with no network, capabilities, privilege escalation, inherited
   secrets, Git credentials, or writable root. It is limited to one CPU, 2 GiB,
-  256 PIDs, 1 GiB tmpfs, ten minutes, and 1 MiB combined output per check.
+  256 PIDs, 2 GiB tmpfs, ten minutes, and 1 MiB combined output per check.
 - Verification resolves and records the immutable Docker image ID before
   execution. Every log, report, coverage row, and workflow command binds the
   exact candidate commit and Phase 6 report.

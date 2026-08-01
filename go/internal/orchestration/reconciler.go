@@ -109,10 +109,54 @@ func New(
 }
 
 func (r *Reconciler) Run(ctx context.Context) error {
+	return r.RunWithDrain(ctx, 0)
+}
+
+// RunWithDrain stops claiming immediately when ctx is canceled while allowing
+// the active fenced claim to finish and renew its heartbeat until drainTimeout.
+func (r *Reconciler) RunWithDrain(ctx context.Context, drainTimeout time.Duration) error {
 	timer := time.NewTicker(r.config.PollInterval)
 	defer timer.Stop()
 	for {
-		worked, err := r.Once(ctx)
+		activeCtx, cancelActive := context.WithCancel(context.WithoutCancel(ctx))
+		result := make(chan struct {
+			worked bool
+			err    error
+		}, 1)
+		go func() {
+			worked, err := r.Once(activeCtx)
+			result <- struct {
+				worked bool
+				err    error
+			}{worked: worked, err: err}
+		}()
+		var worked bool
+		var err error
+		select {
+		case completed := <-result:
+			cancelActive()
+			worked, err = completed.worked, completed.err
+		case <-ctx.Done():
+			if drainTimeout <= 0 {
+				cancelActive()
+				<-result
+				return ctx.Err()
+			}
+			deadline := time.NewTimer(drainTimeout)
+			select {
+			case completed := <-result:
+				deadline.Stop()
+				cancelActive()
+				if completed.err != nil {
+					return completed.err
+				}
+				return ctx.Err()
+			case <-deadline.C:
+				cancelActive()
+				<-result
+				return context.DeadlineExceeded
+			}
+		}
 		if err != nil {
 			r.logger.Error("runtime reconciliation failed", "error", err)
 		}

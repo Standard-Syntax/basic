@@ -40,6 +40,16 @@ type Job struct {
 	Failure      *workflow.ArtifactRef
 }
 
+// StageStatus is the secret-safe operator view of one durable stage job.
+type StageStatus struct {
+	TaskID     *string               `json:"task_id,omitempty"`
+	Attempt    uint32                `json:"attempt"`
+	Stage      string                `json:"stage"`
+	State      string                `json:"state"`
+	RetryCount uint32                `json:"retry_count"`
+	Failure    *workflow.ArtifactRef `json:"failure,omitempty"`
+}
+
 type IdempotencyRequest struct {
 	Key, Method, Target, PrincipalID, RequestDigest string
 }
@@ -249,6 +259,30 @@ func (l *Ledger) Enqueue(ctx context.Context, job Job) error {
 		return ErrConflict
 	}
 	return nil
+}
+
+func (l *Ledger) RunStages(ctx context.Context, runID string) ([]StageStatus, error) {
+	rows, err := l.pool.Query(ctx, `SELECT task_id::text,attempt,stage,state,retry_count,
+		failure_uri,failure_digest FROM runtime_stage_jobs WHERE run_id=$1
+		ORDER BY created_at,job_id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]StageStatus, 0)
+	for rows.Next() {
+		var value StageStatus
+		var failureURI, failureDigest *string
+		if err := rows.Scan(&value.TaskID, &value.Attempt, &value.Stage, &value.State,
+			&value.RetryCount, &failureURI, &failureDigest); err != nil {
+			return nil, err
+		}
+		if failureURI != nil && failureDigest != nil {
+			value.Failure = &workflow.ArtifactRef{URI: *failureURI, Digest: *failureDigest}
+		}
+		result = append(result, value)
+	}
+	return result, rows.Err()
 }
 
 func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl time.Duration) (Job, bool, error) {

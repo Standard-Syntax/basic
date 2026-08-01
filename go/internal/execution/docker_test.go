@@ -3,77 +3,49 @@ package execution
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
+
+	"github.com/Standard-Syntax/basic/go/internal/dockerengine"
 )
 
+type recordingEngine struct {
+	started chan dockerengine.RunRequest
+	removed chan string
+}
+
+func (*recordingEngine) ImageID(context.Context, string) (string, error) { return "", nil }
+func (e *recordingEngine) Run(ctx context.Context, request dockerengine.RunRequest, _ io.Reader, _ io.Writer) error {
+	e.started <- request
+	<-ctx.Done()
+	return ctx.Err()
+}
+func (e *recordingEngine) Remove(_ context.Context, name string) error { e.removed <- name; return nil }
+
 func TestDockerApplicatorRemovesNamedContainerOnCancellation(t *testing.T) {
-	bin := t.TempDir()
-	runLog := filepath.Join(bin, "run")
-	removeLog := filepath.Join(bin, "remove")
-	script := filepath.Join(bin, "docker")
-	body := "#!/bin/sh\n" +
-		"if [ \"$1\" = rm ]; then printf '%s' \"$*\" > \"$REMOVE_LOG\"; exit 0; fi\n" +
-		"printf '%s' \"$*\" > \"$RUN_LOG\"\n" +
-		"exec sleep 30\n"
-	if err := os.WriteFile(script, []byte(body), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("RUN_LOG", runLog)
-	t.Setenv("REMOVE_LOG", removeLog)
+	engine := &recordingEngine{started: make(chan dockerengine.RunRequest, 1), removed: make(chan string, 1)}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	result := make(chan error, 1)
 	worktree := t.TempDir()
 	go func() {
-		result <- (DockerApplicator{Image: "worker", UID: os.Getuid(), GID: os.Getgid()}).
+		result <- (DockerApplicator{Image: "worker", UID: os.Getuid(), GID: os.Getgid(), Engine: engine}).
 			Apply(ctx, worktree, nil, DefaultLimits())
 	}()
-	waitForFile(t, runLog)
+	request := <-engine.started
 	cancel()
 	err := <-result
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected cancellation error: %v", err)
 	}
-	runBody, readErr := os.ReadFile(runLog)
-	if readErr != nil {
-		t.Fatal(readErr)
+	if removed := <-engine.removed; removed != request.Name {
+		t.Fatalf("removed %q; want %q", removed, request.Name)
 	}
-	runArguments := strings.Fields(string(runBody))
-	name := argumentAfter(t, runArguments, "--name")
-	if !containsArgument(runArguments, "-i") {
-		t.Fatal("docker stdin was not attached")
-	}
-	removeBody, readErr := os.ReadFile(removeLog)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	if string(removeBody) != "rm -f "+name {
-		t.Fatalf("unexpected cleanup arguments: %q", removeBody)
-	}
-}
-
-func waitForFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		} else if !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		select {
-		case <-deadline.C:
-			t.Fatalf("timed out waiting for %s", path)
-		case <-ticker.C:
-		}
+	if request.Image != "worker" || request.User == "" || len(request.Mounts) != 2 ||
+		request.Mounts[0].ReadOnly || !request.Mounts[1].ReadOnly || request.Memory != 512<<20 {
+		t.Fatalf("worker request = %#v", request)
 	}
 }
 
@@ -101,24 +73,4 @@ func TestGitHelpersDoNotMixDiagnosticsIntoStdout(t *testing.T) {
 	if string(output) != "payload" {
 		t.Fatalf("indexed git stdout was corrupted: %q", output)
 	}
-}
-
-func argumentAfter(t *testing.T, arguments []string, target string) string {
-	t.Helper()
-	for index, argument := range arguments {
-		if argument == target && index+1 < len(arguments) {
-			return arguments[index+1]
-		}
-	}
-	t.Fatalf("argument %q not found in %v", target, arguments)
-	return ""
-}
-
-func containsArgument(arguments []string, target string) bool {
-	for _, argument := range arguments {
-		if argument == target {
-			return true
-		}
-	}
-	return false
 }
