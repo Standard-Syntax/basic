@@ -1,0 +1,2 @@
+run gh stack init
+Read docs/beta-release-plan.md  and files in docs. Research the codebase and create an implementation plan for vertical slice 7. create stacked pull requests
