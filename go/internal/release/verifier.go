@@ -10,14 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"runtime"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
 	"github.com/Standard-Syntax/basic/go/internal/artifact"
@@ -37,15 +34,53 @@ import (
 
 const ReportVersion = "beta_readiness_report.v1"
 
+const commandTimeout = 60 * time.Second
+
+const (
+	checkConfiguration   = "configuration"
+	checkSourceCheckout  = "source_checkout"
+	checkToolchains      = "toolchains"
+	checkMigrations      = "migrations"
+	checkFiles           = "files"
+	checkImages          = "images"
+	checkWorkflowRuntime = "workflow_runtime"
+	checkReasoning       = "reasoning"
+	checkVerification    = "verification"
+	checkReview          = "review"
+	checkApproval        = "approval"
+	checkPublication     = "publication"
+	checkGitHubDraft     = "github_draft"
+	checkHumanDecision   = "human_decision"
+)
+
 type Report struct {
 	SchemaVersion         string   `json:"schema_version"`
 	Status                string   `json:"status"`
 	ReleaseManifestDigest string   `json:"release_manifest_digest"`
 	Checks                []string `json:"checks"`
+	FailedCheck           string   `json:"failed_check,omitempty"`
 }
 
 type Verifier struct {
-	command func(string, ...string) (string, error)
+	command func(context.Context, string, ...string) (string, error)
+}
+
+type checkFailure struct {
+	check string
+	err   error
+}
+
+func (e *checkFailure) Error() string { return e.err.Error() }
+func (e *checkFailure) Unwrap() error { return e.err }
+
+func failed(check string, err error) error { return &checkFailure{check: check, err: err} }
+
+func failedCheck(err error) string {
+	var target *checkFailure
+	if errors.As(err, &target) {
+		return target.check
+	}
+	return checkConfiguration
 }
 
 type invocationEvidence struct {
@@ -63,17 +98,20 @@ func (v *Verifier) Verify(ctx context.Context, manifest *beta.ReleaseManifest) (
 		return Report{}, err
 	}
 	report := Report{SchemaVersion: ReportVersion, Status: "not_ready", ReleaseManifestDigest: digest}
-	_, canary, err := v.verifySupplyChain(ctx, manifest)
+	canary, err := v.verifySupplyChain(ctx, manifest)
 	if err != nil {
+		report.FailedCheck = failedCheck(err)
 		return report, err
 	}
 	report.Checks = append(report.Checks, "supply_chain")
 	if err := verifyDurableEvidence(ctx, manifest, &canary); err != nil {
+		report.FailedCheck = failedCheck(err)
 		return report, err
 	}
 	report.Checks = append(report.Checks, "durable_evidence", "github_draft")
 	if manifest.Decision.Status != "go" {
-		return report, errors.New("human release decision is no-go")
+		report.FailedCheck = checkHumanDecision
+		return report, failed(checkHumanDecision, errors.New("human release decision is no-go"))
 	}
 	report.Checks = append(report.Checks, "human_go_decision")
 	report.Status = "ready"
@@ -82,27 +120,27 @@ func (v *Verifier) Verify(ctx context.Context, manifest *beta.ReleaseManifest) (
 
 func (v *Verifier) verifySupplyChain(
 	ctx context.Context, manifest *beta.ReleaseManifest,
-) (beta.Deployment, beta.Config, error) {
+) (beta.Config, error) {
 	deployment, record, canary, err := loadReleaseInputs(manifest)
 	if err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return beta.Config{}, failed(checkConfiguration, err)
 	}
 	if err := verifyConfigurationBindings(&deployment, &record, &canary); err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return beta.Config{}, failed(checkConfiguration, err)
 	}
-	if err := v.verifySourceAndToolchains(manifest); err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+	if err := v.verifySourceAndToolchains(ctx, manifest); err != nil {
+		return beta.Config{}, err
 	}
 	if err := verifyMigrations(ctx, canary.DatabaseURL, record.MigrationDigest); err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return beta.Config{}, failed(checkMigrations, err)
 	}
 	if err := verifyFiles(&deployment, &record); err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return beta.Config{}, failed(checkFiles, err)
 	}
 	if err := verifyImages(ctx, &record); err != nil {
-		return beta.Deployment{}, beta.Config{}, err
+		return beta.Config{}, failed(checkImages, err)
 	}
-	return deployment, canary, nil
+	return canary, nil
 }
 
 func loadReleaseInputs(manifest *beta.ReleaseManifest) (beta.Deployment, beta.DeploymentRecord, beta.Config, error) {
@@ -151,27 +189,33 @@ func verifyImages(ctx context.Context, record *beta.DeploymentRecord) error {
 	return nil
 }
 
-func (v *Verifier) verifySourceAndToolchains(manifest *beta.ReleaseManifest) error {
-	head, err := v.command("git", "-C", manifest.SourceRepositoryRoot, "rev-parse", "HEAD")
+func (v *Verifier) verifySourceAndToolchains(ctx context.Context, manifest *beta.ReleaseManifest) error {
+	head, err := v.runCommand(ctx, "git", "-C", manifest.SourceRepositoryRoot, "rev-parse", "HEAD")
 	if err != nil || head != manifest.Deployment.SourceCommit {
-		return errors.New("release source commit mismatch")
+		return failed(checkSourceCheckout, errors.New("release source commit mismatch"))
 	}
-	status, err := v.command("git", "-C", manifest.SourceRepositoryRoot, "status", "--porcelain")
+	status, err := v.runCommand(ctx, "git", "-C", manifest.SourceRepositoryRoot, "status", "--porcelain")
 	if err != nil || status != "" {
-		return errors.New("release source checkout is not clean")
+		return failed(checkSourceCheckout, errors.New("release source checkout is not clean"))
 	}
-	gitVersion, err := v.command("git", "--version")
+	gitVersion, err := v.runCommand(ctx, "git", "--version")
 	if err != nil || gitVersion != manifest.Toolchains.Git || gitVersion != manifest.Deployment.GitVersion ||
 		runtime.Version() != manifest.Toolchains.Go || runtime.Version() != manifest.Deployment.GoVersion ||
 		runtime.Version() != manifest.Deployment.ToolchainVersion {
-		return errors.New("release Git or Go toolchain mismatch")
+		return failed(checkToolchains, errors.New("release Git or Go toolchain mismatch"))
 	}
-	uvVersion, uvErr := v.command("uv", "--version")
-	dockerVersion, dockerErr := v.command("docker", "--version")
+	uvVersion, uvErr := v.runCommand(ctx, "uv", "--version")
+	dockerVersion, dockerErr := v.runCommand(ctx, "docker", "--version")
 	if uvErr != nil || dockerErr != nil || uvVersion != manifest.Toolchains.UV || dockerVersion != manifest.Toolchains.Docker {
-		return errors.New("release uv or Docker toolchain mismatch")
+		return failed(checkToolchains, errors.New("release uv or Docker toolchain mismatch"))
 	}
 	return nil
+}
+
+func (v *Verifier) runCommand(ctx context.Context, name string, arguments ...string) (string, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	return v.command(commandCtx, name, arguments...)
 }
 
 func verifyMigrations(ctx context.Context, databaseURL, expectedDigest string) error {
@@ -189,11 +233,11 @@ func verifyMigrations(ctx context.Context, databaseURL, expectedDigest string) e
 }
 
 func verifyFiles(deployment *beta.Deployment, record *beta.DeploymentRecord) error {
-	manifests, err := directoryDigests(deployment.Mounts.Manifests)
+	manifests, err := beta.DirectoryDigests(deployment.Mounts.Manifests)
 	if err != nil || !reflect.DeepEqual(manifests, record.ManifestDigests) {
 		return errors.New("release manifest file digests mismatch")
 	}
-	prompts, err := directoryDigests(deployment.Mounts.Prompts)
+	prompts, err := beta.DirectoryDigests(deployment.Mounts.Prompts)
 	if err != nil || !reflect.DeepEqual(prompts, record.PromptDigests) {
 		return errors.New("release prompt file digests mismatch")
 	}
@@ -203,7 +247,7 @@ func verifyFiles(deployment *beta.Deployment, record *beta.DeploymentRecord) err
 func verifyDurableEvidence(ctx context.Context, manifest *beta.ReleaseManifest, canary *beta.Config) error {
 	config, err := pgxpool.ParseConfig(canary.DatabaseURL)
 	if err != nil {
-		return errors.New("invalid evidence database configuration")
+		return failed(checkWorkflowRuntime, errors.New("invalid evidence database configuration"))
 	}
 	if config.ConnConfig.RuntimeParams == nil {
 		config.ConnConfig.RuntimeParams = map[string]string{}
@@ -211,12 +255,12 @@ func verifyDurableEvidence(ctx context.Context, manifest *beta.ReleaseManifest, 
 	config.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return errors.New("open evidence database")
+		return failed(checkWorkflowRuntime, errors.New("open evidence database"))
 	}
 	defer pool.Close()
 	store, err := artifact.OpenStore(canary.ArtifactRoot, 4<<20)
 	if err != nil {
-		return errors.New("open evidence artifact store")
+		return failed(checkWorkflowRuntime, errors.New("open evidence artifact store"))
 	}
 	defer store.Close()
 	if err := verifyWorkflowBindings(ctx, pool, store, manifest, canary); err != nil {
@@ -231,21 +275,24 @@ func verifyPublicationEvidence(
 ) error {
 	repository, err := publication.NewPostgresPublicationRepository(pool)
 	if err != nil {
-		return err
+		return failed(checkPublication, err)
 	}
 	completed, err := repository.LoadCompleted(ctx, manifest.Canary.PublicationID)
 	if err != nil || !validCompletedPublication(&completed, manifest) {
-		return errors.New("completed publication binding mismatch")
+		return failed(checkPublication, errors.New("completed publication binding mismatch"))
 	}
 	publicationBody, err := store.Get(ctx, manifest.Canary.Publication)
 	if err != nil {
-		return errors.New("read publication artifact")
+		return failed(checkPublication, errors.New("read publication artifact"))
 	}
 	var publicationArtifact publication.DraftPullRequestArtifact
 	if strictJSON(publicationBody, &publicationArtifact) != nil || !validPublicationArtifact(&publicationArtifact, manifest) {
-		return errors.New("publication artifact binding mismatch")
+		return failed(checkPublication, errors.New("publication artifact binding mismatch"))
 	}
-	return verifyGitHubDraft(ctx, manifest, canary, &publicationArtifact)
+	if err := verifyGitHubDraft(ctx, manifest, canary, &publicationArtifact); err != nil {
+		return failed(checkGitHubDraft, err)
+	}
+	return nil
 }
 
 func validCompletedPublication(completed *publication.CompletedPublication, manifest *beta.ReleaseManifest) bool {
@@ -292,22 +339,22 @@ func verifyWorkflowBindings(
 	workflowStore := workflow.NewStore(pool)
 	run, err := workflowStore.GetRun(ctx, manifest.Canary.RunID)
 	if err != nil || !validRunEvidence(&run, manifest) {
-		return errors.New("run evidence binding mismatch")
+		return failed(checkWorkflowRuntime, errors.New("run evidence binding mismatch"))
 	}
 	tasks, err := workflowStore.ListTasks(ctx, manifest.Canary.RunID)
 	if err != nil || len(tasks) != 1 || tasks[0].ID != manifest.Canary.TaskID {
-		return errors.New("release canary must contain exactly one bound task")
+		return failed(checkWorkflowRuntime, errors.New("release canary must contain exactly one bound task"))
 	}
 	task := &tasks[0]
 	if !validTaskEvidence(task, manifest) {
-		return errors.New("task evidence binding mismatch")
+		return failed(checkWorkflowRuntime, errors.New("task evidence binding mismatch"))
 	}
 	binding, err := runtimeledger.NewBindingRepository(pool).GetRun(ctx, manifest.Canary.RunID)
 	if err != nil || !validRuntimeBinding(&binding, canary) {
-		return errors.New("immutable runtime binding mismatch")
+		return failed(checkWorkflowRuntime, errors.New("immutable runtime binding mismatch"))
 	}
 	if err := verifyRuntimeArtifacts(ctx, store, &binding); err != nil {
-		return err
+		return failed(checkWorkflowRuntime, err)
 	}
 	return verifyStageEvidence(ctx, pool, store, manifest, task)
 }
@@ -348,18 +395,22 @@ func verifyStageEvidence(
 ) error {
 	invocations, err := loadReasoningEvidence(ctx, pool, manifest)
 	if err != nil {
-		return err
+		return failed(checkReasoning, err)
 	}
-	if err := verifyReasoningEvidence(ctx, store, invocations, task); err != nil {
-		return err
+	reviewInvocation, err := verifyReasoningEvidence(ctx, store, invocations, task)
+	if err != nil {
+		return failed(checkReasoning, err)
 	}
 	if err := verifyVerificationEvidence(ctx, pool, store, manifest); err != nil {
-		return err
+		return failed(checkVerification, err)
 	}
-	if err := verifyReviewEvidence(ctx, store, manifest, &invocations[1]); err != nil {
-		return err
+	if err := verifyReviewEvidence(ctx, store, manifest, reviewInvocation); err != nil {
+		return failed(checkReview, err)
 	}
-	return verifyApprovalEvidence(ctx, pool, store, manifest)
+	if err := verifyApprovalEvidence(ctx, pool, store, manifest); err != nil {
+		return failed(checkApproval, err)
+	}
+	return nil
 }
 
 func loadReasoningEvidence(
@@ -392,19 +443,19 @@ func loadReasoningEvidence(
 
 func verifyReasoningEvidence(
 	ctx context.Context, store *artifact.Store, invocations []invocationEvidence, task *workflow.Task,
-) error {
+) (*invocationEvidence, error) {
 	if !validInvocationSet(invocations, task) {
-		return errors.New("exactly two distinct reasoning stages are required")
+		return nil, errors.New("exactly two distinct reasoning stages are required")
 	}
-	for _, value := range invocations {
-		if !validLiveInvocation(&value) {
-			return errors.New("invalid live reasoning evidence")
+	for index := range invocations {
+		if !validLiveInvocation(&invocations[index]) {
+			return nil, errors.New("invalid live reasoning evidence")
 		}
-		if !reasoningArtifactsAvailable(ctx, store, &value) {
-			return errors.New("reasoning artifact unavailable")
+		if !reasoningArtifactsAvailable(ctx, store, &invocations[index]) {
+			return nil, errors.New("reasoning artifact unavailable")
 		}
 	}
-	return nil
+	return &invocations[1], nil
 }
 
 func validInvocationSet(invocations []invocationEvidence, task *workflow.Task) bool {
@@ -440,12 +491,27 @@ func verifyVerificationEvidence(
 		verificationReport.CandidateCommit != manifest.Canary.CandidateCommit {
 		return errors.New("verification artifact binding mismatch")
 	}
-	var verificationCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM verification_ledger WHERE state='completed'
-		AND result_json->>'CandidateCommit'=$1`, manifest.Canary.CandidateCommit).Scan(&verificationCount); err != nil || verificationCount != 1 {
+	var state string
+	var resultBody []byte
+	if err := pool.QueryRow(ctx, `SELECT state,result_json FROM verification_ledger
+		WHERE verification_id=$1 AND state='completed'`, verificationReport.VerificationID).Scan(&state, &resultBody); err != nil {
+		return errors.New("verification ledger binding mismatch")
+	}
+	var result verification.Result
+	if strictJSON(resultBody, &result) != nil ||
+		!validVerificationResult(state, &result, &verificationReport, manifest) {
 		return errors.New("verification ledger binding mismatch")
 	}
 	return nil
+}
+
+func validVerificationResult(
+	state string, result *verification.Result, report *verification.VerificationReport,
+	manifest *beta.ReleaseManifest,
+) bool {
+	return state == "completed" && result.VerificationID == report.VerificationID &&
+		result.CandidateCommit == manifest.Canary.CandidateCommit &&
+		result.ReportArtifact.Equal(manifest.Canary.Verification) && result.Passed
 }
 
 func verifyReviewEvidence(
@@ -456,14 +522,21 @@ func verifyReviewEvidence(
 		return errors.New("review artifact unavailable")
 	}
 	var reviewReport review.ReviewReport
-	if strictJSON(reviewBody, &reviewReport) != nil || !reviewReport.Passed ||
-		reviewReport.RunID != manifest.Canary.RunID || reviewReport.TaskID != manifest.Canary.TaskID ||
-		reviewReport.CandidateCommit != manifest.Canary.CandidateCommit ||
-		!reviewReport.Proposal.Equal(reviewInvocation.proposal) ||
-		!reviewReport.Verification.Equal(manifest.Canary.Verification) {
+	if strictJSON(reviewBody, &reviewReport) != nil ||
+		!validReviewReport(&reviewReport, manifest, reviewInvocation) {
 		return errors.New("review artifact binding mismatch")
 	}
 	return nil
+}
+
+func validReviewReport(
+	report *review.ReviewReport, manifest *beta.ReleaseManifest, invocation *invocationEvidence,
+) bool {
+	return report.Passed && report.RunID == manifest.Canary.RunID &&
+		report.TaskID == manifest.Canary.TaskID &&
+		report.CandidateCommit == manifest.Canary.CandidateCommit &&
+		report.Proposal.Equal(invocation.proposal) &&
+		report.Verification.Equal(manifest.Canary.Verification)
 }
 
 func verifyApprovalEvidence(
@@ -474,11 +547,8 @@ func verifyApprovalEvidence(
 		return errors.New("approval artifact unavailable")
 	}
 	var approvalArtifact approval.TaskApproval
-	if strictJSON(approvalBody, &approvalArtifact) != nil || approvalArtifact.Decision != "approve" ||
-		approvalArtifact.RunID != manifest.Canary.RunID || approvalArtifact.TaskID != manifest.Canary.TaskID ||
-		approvalArtifact.CandidateCommit != manifest.Canary.CandidateCommit ||
-		!approvalArtifact.Verification.Equal(manifest.Canary.Verification) ||
-		!approvalArtifact.Review.Equal(manifest.Canary.Review) {
+	if strictJSON(approvalBody, &approvalArtifact) != nil ||
+		!validApprovalArtifact(&approvalArtifact, manifest) {
 		return errors.New("approval artifact binding mismatch")
 	}
 	var approvalCount int
@@ -489,6 +559,14 @@ func verifyApprovalEvidence(
 		return errors.New("approval ledger binding mismatch")
 	}
 	return nil
+}
+
+func validApprovalArtifact(value *approval.TaskApproval, manifest *beta.ReleaseManifest) bool {
+	return value.Decision == "approve" && value.RunID == manifest.Canary.RunID &&
+		value.TaskID == manifest.Canary.TaskID &&
+		value.CandidateCommit == manifest.Canary.CandidateCommit &&
+		value.Verification.Equal(manifest.Canary.Verification) &&
+		value.Review.Equal(manifest.Canary.Review)
 }
 
 func strictJSON(body []byte, target any) error {
@@ -503,49 +581,12 @@ func strictJSON(body []byte, target any) error {
 	return nil
 }
 
-func directoryDigests(root string) (map[string]string, error) {
-	var paths []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("release evidence directory contains a symlink")
-		}
-		if !entry.IsDir() {
-			info, infoErr := entry.Info()
-			if infoErr != nil || !info.Mode().IsRegular() {
-				return errors.New("release evidence directory contains a non-regular file")
-			}
-			paths = append(paths, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(paths)
-	result := make(map[string]string, len(paths))
-	for _, path := range paths {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil, err
-		}
-		result[filepath.ToSlash(relative)] = digest(body)
-	}
-	return result, nil
-}
-
 func digest(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
 
-func commandOutput(name string, arguments ...string) (string, error) {
-	body, err := exec.Command(name, arguments...).Output()
+func commandOutput(ctx context.Context, name string, arguments ...string) (string, error) {
+	body, err := exec.CommandContext(ctx, name, arguments...).Output()
 	return strings.TrimSpace(string(body)), err
 }

@@ -8,12 +8,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/Standard-Syntax/basic/go/internal/approval"
@@ -88,11 +86,11 @@ func buildRecord(ctx context.Context, deployment *beta.Deployment) (beta.Deploym
 	if err != nil {
 		return beta.DeploymentRecord{}, err
 	}
-	manifests, err := directoryDigests(deployment.Mounts.Manifests)
+	manifests, err := beta.DirectoryDigests(deployment.Mounts.Manifests)
 	if err != nil {
 		return beta.DeploymentRecord{}, err
 	}
-	prompts, err := directoryDigests(deployment.Mounts.Prompts)
+	prompts, err := beta.DirectoryDigests(deployment.Mounts.Prompts)
 	if err != nil {
 		return beta.DeploymentRecord{}, err
 	}
@@ -103,35 +101,12 @@ func buildRecord(ctx context.Context, deployment *beta.Deployment) (beta.Deploym
 		ConfigurationDigest: configDigest}, nil
 }
 
-func directoryDigests(root string) (map[string]string, error) {
-	paths := make([]string, 0)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !entry.IsDir() {
-			paths = append(paths, path)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	sort.Strings(paths)
-	result := make(map[string]string, len(paths))
-	for _, path := range paths {
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		relative, _ := filepath.Rel(root, path)
-		result[filepath.ToSlash(relative)] = digest(body)
-	}
-	return result, nil
-}
-
-func digest(body []byte) string { sum := sha256.Sum256(body); return hex.EncodeToString(sum[:]) }
 func command(name string, args ...string) (string, error) {
 	body, err := exec.Command(name, args...).CombinedOutput()
 	return strings.TrimSpace(string(body)), err
+}
+
+func digest(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }

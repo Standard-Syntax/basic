@@ -84,6 +84,12 @@ accepted MiniMax-M2.7 invocations, CAS-backed verification/review/approval/
 publication artifacts, completed PostgreSQL ledgers, exact open GitHub draft,
 and a human `go` decision. Exit `1` is not ready. Exit `2` is an invalid
 release manifest. Output is intentionally redacted to stable check names.
+For exit `1`, the report adds `failed_check` with the stable failed boundary;
+the report schema version and exit-code contract remain unchanged.
+The possible values are `configuration`, `source_checkout`, `toolchains`,
+`migrations`, `files`, `images`, `workflow_runtime`, `reasoning`,
+`verification`, `review`, `approval`, `publication`, `github_draft`, and
+`human_decision`.
 
 Retain the release manifest, its SHA-256 digest from the readiness report, the
 deployment record, literal commands and exit statuses, final canary JSON, and

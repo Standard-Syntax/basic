@@ -104,12 +104,12 @@ type VerificationReport struct {
 }
 
 type Result struct {
-	VerificationID  string
-	CandidateCommit string
-	ReportArtifact  workflow.ArtifactRef
-	Coverage        []CriterionCoverage
-	Passed          bool
-	Replay          bool
+	VerificationID  string               `json:"VerificationID"`
+	CandidateCommit string               `json:"CandidateCommit"`
+	ReportArtifact  workflow.ArtifactRef `json:"ReportArtifact"`
+	Coverage        []CriterionCoverage  `json:"Coverage"`
+	Passed          bool                 `json:"Passed"`
+	Replay          bool                 `json:"Replay"`
 }
 
 type ArtifactStore interface {
