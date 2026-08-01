@@ -234,9 +234,7 @@ func verifyPublicationEvidence(
 		return err
 	}
 	completed, err := repository.LoadCompleted(ctx, manifest.Canary.PublicationID)
-	if err != nil || completed.CandidateCommit != manifest.Canary.CandidateCommit ||
-		completed.PullRequestURL != manifest.Canary.PullRequestURL ||
-		!completed.PublicationArtifact.Equal(manifest.Canary.Publication) {
+	if err != nil || !validCompletedPublication(&completed, manifest) {
 		return errors.New("completed publication binding mismatch")
 	}
 	publicationBody, err := store.Get(ctx, manifest.Canary.Publication)
@@ -244,16 +242,24 @@ func verifyPublicationEvidence(
 		return errors.New("read publication artifact")
 	}
 	var publicationArtifact publication.DraftPullRequestArtifact
-	if strictJSON(publicationBody, &publicationArtifact) != nil || publicationArtifact.SchemaVersion != "1" ||
-		publicationArtifact.PublicationID != manifest.Canary.PublicationID ||
-		publicationArtifact.CandidateCommit != manifest.Canary.CandidateCommit ||
-		publicationArtifact.PullRequestURL != manifest.Canary.PullRequestURL || !publicationArtifact.Draft ||
-		!publicationArtifact.Verification.Equal(manifest.Canary.Verification) ||
-		!publicationArtifact.Review.Equal(manifest.Canary.Review) ||
-		!publicationArtifact.Approval.Equal(manifest.Canary.Approval) {
+	if strictJSON(publicationBody, &publicationArtifact) != nil || !validPublicationArtifact(&publicationArtifact, manifest) {
 		return errors.New("publication artifact binding mismatch")
 	}
 	return verifyGitHubDraft(ctx, manifest, canary, &publicationArtifact)
+}
+
+func validCompletedPublication(completed *publication.CompletedPublication, manifest *beta.ReleaseManifest) bool {
+	return completed.CandidateCommit == manifest.Canary.CandidateCommit &&
+		completed.PullRequestURL == manifest.Canary.PullRequestURL &&
+		completed.PublicationArtifact.Equal(manifest.Canary.Publication)
+}
+
+func validPublicationArtifact(value *publication.DraftPullRequestArtifact, manifest *beta.ReleaseManifest) bool {
+	return value.SchemaVersion == "1" && value.PublicationID == manifest.Canary.PublicationID &&
+		value.CandidateCommit == manifest.Canary.CandidateCommit &&
+		value.PullRequestURL == manifest.Canary.PullRequestURL && value.Draft &&
+		value.Verification.Equal(manifest.Canary.Verification) && value.Review.Equal(manifest.Canary.Review) &&
+		value.Approval.Equal(manifest.Canary.Approval)
 }
 
 func verifyGitHubDraft(
@@ -387,23 +393,38 @@ func loadReasoningEvidence(
 func verifyReasoningEvidence(
 	ctx context.Context, store *artifact.Store, invocations []invocationEvidence, task *workflow.Task,
 ) error {
-	if len(invocations) != 2 || invocations[0].stage != "implementation" ||
-		invocations[1].stage != "review" || invocations[0].requestID == invocations[1].requestID ||
-		task.Proposal == nil || !task.Proposal.Equal(invocations[0].proposal) {
+	if !validInvocationSet(invocations, task) {
 		return errors.New("exactly two distinct reasoning stages are required")
 	}
 	for _, value := range invocations {
-		if value.provider != gateway.MiniMaxAnthropicProvider || value.model != gateway.MiniMaxModel ||
-			value.requests != 1 || value.providerRequestID == "" || value.input <= 0 || value.output <= 0 {
+		if !validLiveInvocation(&value) {
 			return errors.New("invalid live reasoning evidence")
 		}
-		for _, ref := range []workflow.ArtifactRef{value.proposal, value.response} {
-			if _, err := store.Get(ctx, ref); err != nil {
-				return errors.New("reasoning artifact unavailable")
-			}
+		if !reasoningArtifactsAvailable(ctx, store, &value) {
+			return errors.New("reasoning artifact unavailable")
 		}
 	}
 	return nil
+}
+
+func validInvocationSet(invocations []invocationEvidence, task *workflow.Task) bool {
+	return len(invocations) == 2 && invocations[0].stage == "implementation" && invocations[1].stage == "review" &&
+		invocations[0].requestID != invocations[1].requestID && task.Proposal != nil &&
+		task.Proposal.Equal(invocations[0].proposal)
+}
+
+func validLiveInvocation(value *invocationEvidence) bool {
+	return value.provider == gateway.MiniMaxAnthropicProvider && value.model == gateway.MiniMaxModel &&
+		value.requests == 1 && value.providerRequestID != "" && value.input > 0 && value.output > 0
+}
+
+func reasoningArtifactsAvailable(ctx context.Context, store *artifact.Store, value *invocationEvidence) bool {
+	for _, ref := range []workflow.ArtifactRef{value.proposal, value.response} {
+		if _, err := store.Get(ctx, ref); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func verifyVerificationEvidence(
