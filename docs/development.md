@@ -287,3 +287,6 @@ For the separately credentialed real GitHub gate and its exact cleanup command,
 follow [Real GitHub beta canary](beta-canary.md). `make beta-live-e2e` remains the
 loopback lifecycle gate; only a successful `make beta-canary-e2e
 BETA_CONFIG=/absolute/path/to/canary.json` proves real GitHub publication.
+The canary now runs the exact packaged service and worker images. After retaining
+its final JSON evidence, follow [Beta release evidence and cut](beta-release.md)
+and run `make beta-readiness RELEASE_MANIFEST=/absolute/path/to/release.json`.

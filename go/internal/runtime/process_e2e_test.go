@@ -36,6 +36,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const packagedHelperImage = "alpine:3.23.3@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95"
+
 func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	if os.Getenv("BETA_CANARY") == "1" {
 		t.Skip("real canary mode uses the dedicated test entrypoint")
@@ -48,6 +50,33 @@ func TestBetaCanaryProcessesPublishRealDraft(t *testing.T) {
 		t.Skip("BETA_CANARY=1 is required")
 	}
 	runBetaProcesses(t)
+}
+
+func TestPackagedProcessMountsAreExplicitAndCredentialFilesAreReadOnly(t *testing.T) {
+	root := t.TempDir()
+	paths := map[string]string{
+		"config": filepath.Join(root, "api.json"), "artifacts": filepath.Join(root, "artifacts"),
+		"repository": filepath.Join(root, "repository"), "token": filepath.Join(root, "github-token"),
+		"key": filepath.Join(root, "git-key"),
+	}
+	values := map[string]any{
+		"artifact_root": paths["artifacts"], "repository_root": paths["repository"],
+		"publication": map[string]any{"token_file": paths["token"], "git_push_credential_file": paths["key"]},
+	}
+	arguments := strings.Join(packagedProcessMounts(t, paths["config"], values), " ")
+	for _, path := range paths {
+		if !strings.Contains(arguments, "src="+path+",dst="+path) {
+			t.Fatalf("missing explicit mount for %s: %s", path, arguments)
+		}
+	}
+	for _, path := range []string{paths["config"], paths["token"], paths["key"]} {
+		if !strings.Contains(arguments, "src="+path+",dst="+path+",readonly") {
+			t.Fatalf("sensitive mount is writable: %s", path)
+		}
+	}
+	if strings.Contains(arguments, "src="+root+",dst="+root+" ") {
+		t.Fatalf("broad test root was mounted: %s", arguments)
+	}
 }
 
 func runBetaProcesses(t *testing.T) {
@@ -75,8 +104,13 @@ func runBetaProcesses(t *testing.T) {
 		databaseURL = requireEnvironment(t, "TEST_DATABASE_URL")
 	}
 	root := t.TempDir()
+	credentialRoot := ""
 	if packaged {
 		makeTreeAccessible(t, root)
+		credentialRoot = t.TempDir()
+		if err := os.Chmod(credentialRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	repository, remote, remoteURL, baseCommit := "", "", "", ""
 	repositoryOwner, repositoryName, branchPrefix := "local", "fixture", "harness/"
@@ -139,16 +173,27 @@ func runBetaProcesses(t *testing.T) {
 		prServer, prState = loopbackPullRequests(t)
 		defer prServer.Close()
 		tokenFile = filepath.Join(root, "github-token")
+		if packaged {
+			tokenFile = filepath.Join(credentialRoot, "github-credential")
+		}
 		if err := os.WriteFile(tokenFile, []byte("loopback-token"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		apiEndpoint = prServer.URL
 	}
 	minimaxCredential := ""
+	var canaryCredentialValues []string
 	if packaged {
-		minimaxCredential = filepath.Join(root, "minimax-credential")
+		minimaxCredential = filepath.Join(credentialRoot, "minimax-credential")
 		writeFile(t, minimaxCredential, apiKey)
-		chownPackagedCredentials(t, root, minimaxCredential, tokenFile)
+		if canaryMode {
+			var tokenValue, pushValue string
+			tokenFile, tokenValue = copyCredential(t, tokenFile, filepath.Join(credentialRoot, "github-credential"))
+			pushCredential, pushValue = copyCredential(t, pushCredential, filepath.Join(credentialRoot, "git-push-credential"))
+			canaryCredentialValues = []string{tokenValue, pushValue}
+		}
+		t.Cleanup(func() { restorePackagedCredentialRoot(t, credentialRoot) })
+		chownPackagedCredentials(t, credentialRoot, minimaxCredential, tokenFile, pushCredential)
 	}
 	apiAddress := freeAddress(t)
 	actorIDs := make([]string, 7)
@@ -216,9 +261,14 @@ func runBetaProcesses(t *testing.T) {
 		if err := os.Chmod(workflowConfig, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		makeTreeAccessibleExceptCredentials(t, root, minimaxCredential, tokenFile)
+		makePackagedTreeAccessible(t, root)
 		chownPackagedTree(t, root)
 		t.Cleanup(func() { restorePackagedTreeOwnership(t, root) })
+		if canaryMode {
+			paths := []string{repository, artifactRoot, worktrees, verificationRoot}
+			t.Cleanup(func() { restorePackagedCanaryRoots(t, paths) })
+			provisionPackagedCanaryRoots(t, paths)
+		}
 		if !canaryMode {
 			command := exec.Command("docker", "run", "--rm", "--network", "host",
 				"--entrypoint", "/usr/bin/git", apiBinary,
@@ -450,19 +500,31 @@ func runBetaProcesses(t *testing.T) {
 			manifestPaths[0], manifestPaths[1],
 		}, processes)
 	if canaryMode {
-		for _, secretFile := range []string{tokenFile, pushCredential} {
-			secret, err := os.ReadFile(secretFile)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertSecretAbsent(t, strings.TrimSpace(string(secret)), pool, artifactRoot,
+		for _, secret := range canaryCredentialValues {
+			assertSecretAbsent(t, secret, pool, artifactRoot,
 				repository, []string{apiConfig, workflowConfig}, processes)
 		}
 		artifactValue := publicationValue["publication_artifact"].(map[string]any)
+		var verificationURI, verificationDigest, reviewURI, reviewDigest, approvalURI, approvalDigest string
+		if err := pool.QueryRow(t.Context(), `SELECT verification_uri,verification_digest,
+			review_uri,review_digest,approval_uri,approval_digest FROM workflow_tasks
+			WHERE run_id=$1 AND task_id=$2`, runID, taskID).Scan(
+			&verificationURI, &verificationDigest, &reviewURI, &reviewDigest,
+			&approvalURI, &approvalDigest); err != nil {
+			t.Fatal(err)
+		}
 		report := map[string]any{
-			"run_id": runID, "publication_id": publicationValue["publication_id"],
+			"run_id": runID, "task_id": taskID, "publication_id": publicationValue["publication_id"],
 			"candidate_commit": candidate, "artifact_reference": artifactValue,
-			"pull_request_url": publicationValue["pull_request_url"],
+			"pull_request_url":      publicationValue["pull_request_url"],
+			"verification_artifact": map[string]string{"uri": verificationURI, "digest": verificationDigest},
+			"review_artifact":       map[string]string{"uri": reviewURI, "digest": reviewDigest},
+			"approval_artifact":     map[string]string{"uri": approvalURI, "digest": approvalDigest},
+			"images": map[string]string{
+				"api_service":      requireEnvironment(t, "RUNTIME_API_BINARY"),
+				"workflow_service": requireEnvironment(t, "RUNTIME_WORKFLOW_BINARY"),
+				"execution_worker": executionImage, "verification_worker": verificationImage,
+			},
 			"cleanup_command": "make beta-canary-cleanup BETA_CONFIG=" +
 				shellQuote(requireEnvironment(t, "BETA_CONFIG")) + " CANARY_PUBLICATION_ID=" +
 				shellQuote(publicationValue["publication_id"].(string)),
@@ -488,11 +550,10 @@ func startProcess(t *testing.T, ctx context.Context, binary, config string) *pro
 	t.Helper()
 	var command *exec.Cmd
 	if os.Getenv("RUNTIME_PACKAGED") == "1" {
-		root := filepath.Dir(config)
 		arguments := []string{"run", "--rm", "--network", "host", "--read-only",
 			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 			"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
-			"--mount", "type=bind,src=" + root + ",dst=" + root, binary, "-config", config}
+			"--group-add", strconv.Itoa(os.Getgid())}
 		body, err := os.ReadFile(config)
 		if err != nil {
 			t.Fatal(err)
@@ -501,14 +562,13 @@ func startProcess(t *testing.T, ctx context.Context, binary, config string) *pro
 		if json.Unmarshal(body, &values) != nil {
 			t.Fatal("decode packaged process config")
 		}
+		arguments = append(arguments, packagedProcessMounts(t, config, values)...)
 		if _, workflow := values["owner_id"]; workflow {
-			arguments = append([]string{"run", "--rm", "--network", "host", "--read-only",
-				"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+			arguments = append(arguments,
 				"--group-add", requireEnvironment(t, "RUNTIME_DOCKER_GID"),
-				"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777",
-				"--mount", "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
-				"--mount", "type=bind,src=" + root + ",dst=" + root, binary, "-config", config})
+				"--mount", "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock")
 		}
+		arguments = append(arguments, binary, "-config", config)
 		command = exec.CommandContext(ctx, "docker", arguments...)
 	} else {
 		command = exec.CommandContext(ctx, binary, "-config", config)
@@ -538,20 +598,111 @@ func makeTreeAccessible(t *testing.T, root string) {
 	}
 }
 
-func makeTreeAccessibleExceptCredentials(t *testing.T, root string, credentials ...string) {
+func copyCredential(t *testing.T, source, target string) (string, string) {
 	t.Helper()
-	protected := map[string]bool{}
-	for _, path := range credentials {
-		if path != "" {
-			protected[path] = true
+	body, err := os.ReadFile(source)
+	if err != nil || len(body) == 0 || len(body) > 1<<20 {
+		t.Fatal("copy packaged credential")
+	}
+	if err := os.WriteFile(target, body, 0o600); err != nil {
+		t.Fatal("stage packaged credential")
+	}
+	return target, strings.TrimSpace(string(body))
+}
+
+func packagedProcessMounts(t *testing.T, config string, values map[string]any) []string {
+	t.Helper()
+	type mount struct {
+		path     string
+		readOnly bool
+	}
+	mounts := []mount{{path: config, readOnly: true}}
+	add := func(path string, readOnly bool) {
+		if path == "" {
+			return
+		}
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.Contains(path, ",") {
+			t.Fatal("invalid packaged mount path")
+		}
+		for index := range mounts {
+			if mounts[index].path == path {
+				mounts[index].readOnly = mounts[index].readOnly && readOnly
+				return
+			}
+		}
+		mounts = append(mounts, mount{path: path, readOnly: readOnly})
+	}
+	stringValue := func(values map[string]any, key string) string {
+		value, _ := values[key].(string)
+		return value
+	}
+	add(stringValue(values, "artifact_root"), false)
+	add(stringValue(values, "repository_root"), values["owner_id"] == nil)
+	if _, workflowProcess := values["owner_id"]; workflowProcess {
+		add(stringValue(values, "worktree_root"), false)
+		add(stringValue(values, "verification_workspace_root"), false)
+		for _, key := range []string{"implementation_manifest_path", "implementation_prompt_path",
+			"review_manifest_path", "review_prompt_path"} {
+			add(stringValue(values, key), true)
+		}
+		provider, _ := values["provider"].(map[string]any)
+		add(stringValue(provider, "api_key_file"), true)
+	} else {
+		publicationConfig, _ := values["publication"].(map[string]any)
+		add(stringValue(publicationConfig, "token_file"), true)
+		add(stringValue(publicationConfig, "git_push_credential_file"), true)
+	}
+	arguments := make([]string, 0, len(mounts)*2)
+	for _, value := range mounts {
+		specification := "type=bind,src=" + value.path + ",dst=" + value.path
+		if value.readOnly {
+			specification += ",readonly"
+		}
+		arguments = append(arguments, "--mount", specification)
+	}
+	return arguments
+}
+
+func provisionPackagedCanaryRoots(t *testing.T, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
+			packagedHelperImage, "chown", "-R", "65532:" + strconv.Itoa(os.Getgid()), "/target"}
+		if body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput(); err != nil {
+			t.Fatalf("provision packaged canary root: %v: %s", err, body)
+		}
+		arguments = []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
+			packagedHelperImage, "chmod", "-R", "g+rwX", "/target"}
+		if body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput(); err != nil {
+			t.Fatalf("share packaged canary root with test operator: %v: %s", err, body)
 		}
 	}
+}
+
+func restorePackagedCanaryRoots(t *testing.T, paths []string) {
+	t.Helper()
+	for _, path := range paths {
+		arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
+			packagedHelperImage, "chown", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/target"}
+		if body, err := exec.CommandContext(context.Background(), "docker", arguments...).CombinedOutput(); err != nil {
+			t.Errorf("restore packaged canary root: %v: %s", err, body)
+		}
+		arguments = []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
+			packagedHelperImage, "chmod", "-R", "go-w", "/target"}
+		if body, err := exec.CommandContext(context.Background(), "docker", arguments...).CombinedOutput(); err != nil {
+			t.Errorf("restore packaged canary root permissions: %v: %s", err, body)
+		}
+		if err := os.Chmod(path, 0o700); err != nil {
+			t.Errorf("restore packaged canary root mode: %v", err)
+		}
+	}
+}
+
+func makePackagedTreeAccessible(t *testing.T, root string) {
+	t.Helper()
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
-		}
-		if protected[path] {
-			return nil
 		}
 		if entry.IsDir() {
 			return os.Chmod(path, 0o777)
@@ -566,7 +717,7 @@ func makeTreeAccessibleExceptCredentials(t *testing.T, root string, credentials 
 func chownPackagedCredentials(t *testing.T, root string, paths ...string) {
 	t.Helper()
 	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
-		"alpine:3.23.3", "chown", "65532:65532"}
+		packagedHelperImage, "chown", "65532:65532", "/target"}
 	for _, path := range paths {
 		if path != "" {
 			arguments = append(arguments, "/target/"+filepath.Base(path))
@@ -578,10 +729,23 @@ func chownPackagedCredentials(t *testing.T, root string, paths ...string) {
 	}
 }
 
+func restorePackagedCredentialRoot(t *testing.T, root string) {
+	t.Helper()
+	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
+		packagedHelperImage, "chown", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/target"}
+	body, err := exec.CommandContext(context.Background(), "docker", arguments...).CombinedOutput()
+	if err != nil {
+		t.Errorf("restore packaged credential ownership: %v: %s", err, body)
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Errorf("restore packaged credential root mode: %v", err)
+	}
+}
+
 func chownPackagedTree(t *testing.T, root string) {
 	t.Helper()
 	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
-		"alpine:3.23.3", "chown", "-R", "65532:65532", "/target"}
+		packagedHelperImage, "chown", "-R", "65532:65532", "/target"}
 	body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("provision packaged tree: %v: %s", err, body)
@@ -591,7 +755,7 @@ func chownPackagedTree(t *testing.T, root string) {
 func restorePackagedTreeOwnership(t *testing.T, root string) {
 	t.Helper()
 	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + root + ",dst=/target",
-		"alpine:3.23.3", "chown", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/target"}
+		packagedHelperImage, "chown", "-R", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "/target"}
 	body, err := exec.CommandContext(context.Background(), "docker", arguments...).CombinedOutput()
 	if err != nil {
 		t.Errorf("restore packaged tree ownership: %v: %s", err, body)
@@ -601,7 +765,7 @@ func restorePackagedTreeOwnership(t *testing.T, root string) {
 func makePackagedPathAccessible(t *testing.T, path string) {
 	t.Helper()
 	arguments := []string{"run", "--rm", "--mount", "type=bind,src=" + path + ",dst=/target",
-		"alpine:3.23.3", "chmod", "-R", "a+rwX", "/target"}
+		packagedHelperImage, "chmod", "-R", "a+rwX", "/target"}
 	body, err := exec.CommandContext(t.Context(), "docker", arguments...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("make packaged path accessible: %v: %s", err, body)

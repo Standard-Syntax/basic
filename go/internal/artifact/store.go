@@ -46,6 +46,19 @@ func NewStore(root string, maxBytes int64) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create artifact root: %w", err)
 	}
+	return OpenStore(root, maxBytes)
+}
+
+// OpenStore opens an existing artifact root without creating or modifying it.
+// Read-only evidence verifiers use this boundary so a readiness check cannot
+// turn a missing durable store into an empty one.
+func OpenStore(root string, maxBytes int64) (*Store, error) {
+	if !filepath.IsAbs(root) || filepath.Clean(root) != root {
+		return nil, ErrInvalidRoot
+	}
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxBytes
+	}
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrInvalidRoot

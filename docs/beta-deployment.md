@@ -88,3 +88,7 @@ Restore the matching PostgreSQL/CAS backup when schema or durable data changed.
 Never roll back by retagging an image or mixing service and worker IDs from two
 records. Keep the current and previous records for the full beta retention
 period, plus any records referenced by retained run evidence.
+
+The final beta cut procedure and read-only durable evidence verifier are in
+`docs/beta-release.md`. A deployment smoke record alone is never release
+readiness or a human go decision.
