@@ -255,11 +255,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	if err != nil {
 		return err
 	}
-	server := &http.Server{
-		Addr: value.Listen, Handler: handler.Handler(),
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
-		WriteTimeout: 30 * time.Second, IdleTimeout: time.Minute,
-	}
+	server := newHTTPServer(value.Listen, handler.Handler())
 	errs := make(chan error, 1)
 	go func() {
 		slog.Info("API service ready", "listen", value.Listen)
@@ -280,7 +276,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 
 func buildPublication(
 	value *publicationConfig, artifacts *artifact.Store, pool *pgxpool.Pool,
-) (*publication.Service, error) {
+) (controlapi.PublicationService, error) {
 	if value == nil {
 		return nil, nil
 	}
@@ -321,4 +317,12 @@ func buildPublication(
 		APIVersion: value.APIVersion,
 	}, artifact.Publication{Store: artifacts}, workflow.NewStore(pool),
 		gitPublisher, pulls, ledger)
+}
+
+func newHTTPServer(listen string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr: listen, Handler: handler,
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second,
+		WriteTimeout: 3 * time.Minute, IdleTimeout: time.Minute,
+	}
 }

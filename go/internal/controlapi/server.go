@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,9 +34,12 @@ import (
 )
 
 const (
-	DefaultMaxBodyBytes       int64 = 1 << 20
-	runIntakeTimeout                = 30 * time.Second
-	compositeApprovalTimeout        = 2 * time.Minute
+	DefaultMaxBodyBytes int64 = 1 << 20
+	runIntakeTimeout          = 30 * time.Second
+	// MaximumDetachedOperationTimeout is the longest request operation that may
+	// continue after its client disconnects. Composition roots must leave enough
+	// HTTP write-timeout headroom for this budget to complete.
+	MaximumDetachedOperationTimeout = 2 * time.Minute
 	idempotencyCleanupTimeout       = 10 * time.Second
 	defaultReservationTTL           = 30 * time.Second
 	intakeReservationTTL            = 45 * time.Second
@@ -132,6 +136,19 @@ type principalDigest struct {
 	digest    [sha256.Size]byte
 }
 
+func isNilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
 func New(
 	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
 	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
@@ -145,9 +162,26 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	if len(principals) == 0 || bindings == nil || artifacts == nil || runIntake == nil ||
-		approvalService == nil {
+	if len(principals) == 0 {
 		return nil, errors.New("at least one principal is required")
+	}
+	if isNilDependency(workflowStore) {
+		return nil, errors.New("workflow store is required")
+	}
+	if isNilDependency(runtimeLedger) {
+		return nil, errors.New("runtime ledger is required")
+	}
+	if isNilDependency(runIntake) {
+		return nil, errors.New("run intake is required")
+	}
+	if isNilDependency(artifacts) {
+		return nil, errors.New("artifact store is required")
+	}
+	if isNilDependency(bindings) {
+		return nil, errors.New("binding store is required")
+	}
+	if isNilDependency(approvalService) {
+		return nil, errors.New("approval service is required")
 	}
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
@@ -489,7 +523,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	var operationCancel context.CancelFunc
 	if _, suffix, ok := parseRunPath(request.URL.Path); ok && suffix == "/approval" {
 		operationParent, operationCancel = context.WithTimeout(
-			context.WithoutCancel(request.Context()), compositeApprovalTimeout,
+			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
 		)
 	} else {
 		operationParent, operationCancel = context.WithCancel(request.Context())
