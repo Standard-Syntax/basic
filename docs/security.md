@@ -124,13 +124,18 @@ facts and completed rows are protected by PostgreSQL triggers.
   connections, manifest bootstrap, job claiming, or reconciliation.
 - API keys are fetched per invocation and passed only as SDK request options.
   Credential-source errors are replaced with a redacted sentinel; keys are
-  never written to artifacts, PostgreSQL, model context, errors, or logs.
+  never cached or written to artifacts, PostgreSQL, model context, errors, or
+  logs. Go strings are immutable, so the process does not claim that a key can
+  be reliably erased from the Go heap after use.
 - Model IDs come only from trusted capability-class configuration. Manifests
   and model output cannot choose a provider destination, fallback, or model.
 - Prompt and input bodies are SHA-256 verified before use. Inline repository
   files must equal their bound artifacts and appear once in rendered context.
-- A conservative content guard rejects API-key, authorization, password,
-  private-key, secret, and token assignments before network access.
+- A conservative content guard rejects exact active-credential matches before
+  network access. Assignment-like values are rejected only when they are at
+  least 20 characters, have three character classes and eight unique
+  characters, and are not templates, placeholders, or explicit
+  example/redaction markers. Typed failures disclose only a safe source label.
 - Messages requests are non-streaming and tool-free. They grant no shell,
   filesystem write, arbitrary destination, workflow, approval, execution,
   publication, or model-selection authority.

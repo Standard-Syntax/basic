@@ -10,12 +10,16 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
 const githubAccept = "application/vnd.github+json"
+
+var ownerSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+var repositorySegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 
 type GitHubRESTClient struct {
 	endpoint     *url.URL
@@ -59,8 +63,12 @@ func (c *GitHubRESTClient) FindDraft(
 		"base":     {input.Base},
 		"per_page": {"10"},
 	}
+	path, err := c.pullPath(input)
+	if err != nil {
+		return DraftPullRequest{}, false, err
+	}
 	var response []githubPullRequest
-	if err := c.do(ctx, http.MethodGet, c.pullPath(input)+"?"+query.Encode(), nil, &response); err != nil {
+	if err := c.do(ctx, http.MethodGet, path+"?"+query.Encode(), nil, &response); err != nil {
 		return DraftPullRequest{}, false, err
 	}
 	if len(response) == 0 {
@@ -91,7 +99,11 @@ func (c *GitHubRESTClient) CreateDraft(
 		Body: input.Body, Draft: true,
 	}
 	var response githubPullRequest
-	if createErr := c.do(ctx, http.MethodPost, c.pullPath(input), payload, &response); createErr != nil {
+	path, err := c.pullPath(input)
+	if err != nil {
+		return DraftPullRequest{}, err
+	}
+	if createErr := c.do(ctx, http.MethodPost, path, payload, &response); createErr != nil {
 		recovered, exists, findErr := c.FindDraft(ctx, input)
 		if findErr != nil {
 			return DraftPullRequest{}, errors.Join(createErr, findErr)
@@ -119,7 +131,11 @@ func (c *GitHubRESTClient) InspectPullRequest(
 		return DraftPullRequest{}, ErrInvalidRequest
 	}
 	var response githubPullRequest
-	if err := c.do(ctx, http.MethodGet, exactPullPath(owner, repo, number), nil, &response); err != nil {
+	path, err := exactPullPath(owner, repo, number)
+	if err != nil {
+		return DraftPullRequest{}, err
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &response); err != nil {
 		return DraftPullRequest{}, err
 	}
 	return mapPullRequest(response, ""), nil
@@ -134,7 +150,10 @@ func (c *GitHubRESTClient) CloseDraft(
 		return false, err
 	}
 	var current githubPullRequest
-	path := exactPullPath(expected.Owner, expected.Repo, expected.Number)
+	path, err := exactPullPath(expected.Owner, expected.Repo, expected.Number)
+	if err != nil {
+		return false, err
+	}
 	if err := c.do(ctx, http.MethodGet, path, nil, &current); err != nil {
 		return false, err
 	}
@@ -193,9 +212,11 @@ func matchesExpectedPullRequest(value githubPullRequest, expected PullRequestExp
 		(value.State == "open" || value.State == "closed")
 }
 
-func exactPullPath(owner, repo string, number int64) string {
-	return "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) +
-		"/pulls/" + strconv.FormatInt(number, 10)
+func exactPullPath(owner, repo string, number int64) (string, error) {
+	if !validOwnerSegment(owner) || !validRepositorySegment(repo) || number <= 0 {
+		return "", ErrInvalidRequest
+	}
+	return url.JoinPath("/repos", owner, repo, "pulls", strconv.FormatInt(number, 10))
 }
 
 func (c *GitHubRESTClient) do(
@@ -261,8 +282,19 @@ func (c *GitHubRESTClient) do(
 	return nil
 }
 
-func (c *GitHubRESTClient) pullPath(input DraftPullRequestInput) string {
-	return "/repos/" + url.PathEscape(input.Owner) + "/" + url.PathEscape(input.Repo) + "/pulls"
+func (c *GitHubRESTClient) pullPath(input DraftPullRequestInput) (string, error) {
+	if !validOwnerSegment(input.Owner) || !validRepositorySegment(input.Repo) {
+		return "", ErrInvalidRequest
+	}
+	return url.JoinPath("/repos", input.Owner, input.Repo, "pulls")
+}
+
+func validOwnerSegment(value string) bool {
+	return ownerSegmentPattern.MatchString(value)
+}
+
+func validRepositorySegment(value string) bool {
+	return value != "." && value != ".." && repositorySegmentPattern.MatchString(value)
 }
 
 func mapPullRequest(value githubPullRequest, marker string) DraftPullRequest {

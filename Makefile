@@ -64,7 +64,7 @@ integration-test:
 		go test -tags=integration -count=1 \
 			./internal/migration ./internal/workflow ./internal/registry ./internal/reasoning/gateway \
 			./internal/execution ./internal/verification ./internal/release ./internal/approval \
-			./internal/publication ./internal/controlapi || status=$$?; \
+			./internal/publication ./internal/controlapi ./internal/runtime ./internal/postgres || status=$$?; \
 	docker compose down --volumes; \
 	exit $$status
 
@@ -97,12 +97,12 @@ beta-deploy-smoke: beta-images
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
 	@mkdir -p .tools/beta
 	@env_file=$$(mktemp); status=0; \
-		trap 'docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" down --volumes >/dev/null 2>&1 || true; rm -f "$$env_file"' EXIT; \
+		trap 'docker compose -f compose.yaml -f compose.beta.yaml -p basic-beta-smoke --profile beta --env-file "$$env_file" down --volumes >/dev/null 2>&1 || true; rm -f "$$env_file"' EXIT; \
 		cd go && go run ./cmd/beta-compose-env -config "$(BETA_CONFIG)" >"$$env_file"; cd ..; \
-		docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" \
+		docker compose -f compose.yaml -f compose.beta.yaml -p basic-beta-smoke --profile beta --env-file "$$env_file" \
 			up -d --wait beta-postgres api-service workflow-service || status=$$?; \
 		if ((status == 0)); then \
-			claimed=$$(docker compose -p basic-beta-smoke --profile beta --env-file "$$env_file" \
+			claimed=$$(docker compose -f compose.yaml -f compose.beta.yaml -p basic-beta-smoke --profile beta --env-file "$$env_file" \
 				exec -T beta-postgres psql -U workflow -d workflow -Atc \
 				"SELECT count(*) FROM runtime_stage_jobs WHERE state='CLAIMED'"); \
 			test "$$claimed" = 0 || status=1; \
@@ -128,6 +128,7 @@ ifneq ($(strip $(BETA_CONFIG)),)
 		test "$$(docker image inspect --format '{{.Id}}' basic-verification-worker:beta)" = "$$BETA_VERIFICATION_IMAGE"; \
 		docker compose down --volumes; docker compose up -d --wait postgres; status=0; \
 		cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+			BETA_LIVE_E2E=1 \
 			RUNTIME_PACKAGED=1 RUNTIME_API_BINARY="$$BETA_API_IMAGE" \
 			RUNTIME_WORKFLOW_BINARY="$$BETA_WORKFLOW_IMAGE" \
 			RUNTIME_EXECUTION_IMAGE="$$BETA_EXECUTION_IMAGE" \
@@ -146,6 +147,7 @@ else
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+		BETA_LIVE_E2E=1 \
 		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
 		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
 		go test -tags=integration -count=1 \

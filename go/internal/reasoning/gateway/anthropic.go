@@ -35,12 +35,20 @@ var (
 	ErrCredentialUnavailable = errors.New("Anthropic credential unavailable")
 	ErrModelUnavailable      = errors.New("Anthropic model unavailable")
 	ErrContentSecret         = errors.New("provider context contains a secret")
-	secretAssignment         = regexp.MustCompile(
-		`(?i)(api[_-]?key|authorization|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*\S+`,
+	authorizationAssignment  = regexp.MustCompile(
+		`(?i)authorization\s*[:=]\s*([^\r\n,;]+)`,
+	)
+	secretAssignment = regexp.MustCompile(
+		`(?i)(api[_-]?key|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*([^\s,;]+)`,
 	)
 )
 
 type ProviderErrorKind string
+
+type ContentSecretError struct{ Source string }
+
+func (e *ContentSecretError) Error() string { return "provider content rejected: " + e.Source }
+func (e *ContentSecretError) Unwrap() error { return ErrContentSecret }
 
 const (
 	ProviderErrorAuthentication ProviderErrorKind = "authentication"
@@ -167,15 +175,27 @@ func newAnthropicRuntime(
 		return nil, errors.New("positive Anthropic provider timeout is required")
 	}
 	if runtime.sender == nil {
-		runtime.sender = &sdkMessageSender{
-			httpClient: runtime.httpClient, baseURL: runtime.baseURL,
-			timeout: runtime.timeout,
+		httpClient := runtime.httpClient
+		if httpClient == nil {
+			transport := http.DefaultTransport.(*http.Transport).Clone()
+			transport.Proxy = nil
+			httpClient = &http.Client{Transport: transport}
 		}
+		clientOptions := []option.RequestOption{
+			option.WithoutEnvironmentDefaults(), option.WithHTTPClient(httpClient),
+			option.WithMaxRetries(0), option.WithRequestTimeout(runtime.timeout),
+		}
+		if runtime.baseURL != "" {
+			clientOptions = append(clientOptions, option.WithBaseURL(runtime.baseURL))
+		}
+		client := anthropic.NewClient(clientOptions...)
+		runtime.sender = &sdkMessageSender{client: &client}
 	}
 	return runtime, nil
 }
 
 type sdkMessageSender struct {
+	client     *anthropic.Client
 	httpClient *http.Client
 	baseURL    string
 	timeout    time.Duration
@@ -184,19 +204,23 @@ type sdkMessageSender struct {
 func (s *sdkMessageSender) Send(
 	ctx context.Context, key string, params *anthropic.MessageNewParams,
 ) (*anthropic.Message, error) {
-	options := []option.RequestOption{
-		option.WithAPIKey(key),
-		option.WithMaxRetries(0),
-		option.WithRequestTimeout(s.timeout),
+	client := s.client
+	if client == nil {
+		options := []option.RequestOption{
+			option.WithoutEnvironmentDefaults(), option.WithMaxRetries(0),
+			option.WithRequestTimeout(s.timeout),
+		}
+		if s.httpClient != nil {
+			options = append(options, option.WithHTTPClient(s.httpClient))
+		}
+		if s.baseURL != "" {
+			options = append(options, option.WithBaseURL(s.baseURL))
+		}
+		value := anthropic.NewClient(options...)
+		client = &value
+		s.client = client
 	}
-	if s.httpClient != nil {
-		options = append(options, option.WithHTTPClient(s.httpClient))
-	}
-	if s.baseURL != "" {
-		options = append(options, option.WithBaseURL(s.baseURL))
-	}
-	client := anthropic.NewClient(options...)
-	return client.Messages.New(ctx, *params)
+	return client.Messages.New(ctx, *params, option.WithAPIKey(key))
 }
 
 type AnthropicImplementationAdapter struct {
@@ -230,7 +254,8 @@ func (a *AnthropicImplementationAdapter) ProposeImplementation(
 	if err != nil {
 		return AdapterResult{}, err
 	}
-	defer clearString(&key)
+	// Credentials are request-local and never cached or logged. Go strings are
+	// immutable, so their backing storage cannot be reliably erased from memory.
 	system, user, err := a.runtime.renderImplementation(
 		ctx, key, agentManifest, request,
 	)
@@ -443,12 +468,10 @@ func (r *anthropicRuntime) invocationConfiguration(
 	}
 	key, err := r.credentials.Credential(ctx)
 	if err != nil || strings.TrimSpace(key) == "" {
-		clearString(&key)
 		return "", "", ErrCredentialUnavailable
 	}
 	model, err := r.models.ResolveModel(ctx, capability)
 	if err != nil || strings.TrimSpace(model) == "" {
-		clearString(&key)
 		return "", "", ErrModelUnavailable
 	}
 	return key, model, nil
@@ -484,7 +507,7 @@ func (r *anthropicRuntime) renderImplementation(
 	if err != nil {
 		return "", "", fmt.Errorf("load verified manifest prompt: %w", err)
 	}
-	if err := guardProviderContent(key, prompt); err != nil {
+	if err := guardProviderContent(key, "implementation_prompt", prompt); err != nil {
 		return "", "", err
 	}
 	requestJSON, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(
@@ -498,7 +521,7 @@ func (r *anthropicRuntime) renderImplementation(
 	for _, file := range request.GetRepositoryContext() {
 		content := []byte(file.GetContent())
 		inlineContent[file.GetSha256()] = content
-		if err := guardProviderContent(key, content); err != nil {
+		if err := guardProviderContent(key, "repository_context", content); err != nil {
 			return "", "", err
 		}
 		contextValue.RepositoryContext = append(
@@ -521,7 +544,7 @@ func (r *anthropicRuntime) renderImplementation(
 			}
 			continue
 		}
-		if err := guardProviderContent(key, body); err != nil {
+		if err := guardProviderContent(key, "input_artifact", body); err != nil {
 			return "", "", err
 		}
 		contextValue.InputArtifacts = append(contextValue.InputArtifacts, renderedArtifact{
@@ -588,21 +611,63 @@ func (r *anthropicRuntime) readVerifiedArtifact(
 	return body, nil
 }
 
-func guardProviderContent(key string, body []byte) error {
+func guardProviderContent(key, source string, body []byte) error {
 	text := string(body)
 	if key != "" && strings.Contains(text, key) {
-		return ErrContentSecret
+		return &ContentSecretError{Source: source}
 	}
-	if secretAssignment.Match(body) {
-		return ErrContentSecret
+	for _, match := range authorizationAssignment.FindAllSubmatch(body, -1) {
+		if len(match) == 2 && likelySecretAssignment(authorizationCredential(string(match[1]))) {
+			return &ContentSecretError{Source: source}
+		}
+	}
+	for _, match := range secretAssignment.FindAllSubmatch(body, -1) {
+		if len(match) == 3 && likelySecretAssignment(string(match[2])) {
+			return &ContentSecretError{Source: source}
+		}
 	}
 	return nil
 }
 
-func clearString(value *string) {
-	if value != nil {
-		*value = ""
+func authorizationCredential(value string) string {
+	value = strings.TrimSpace(value)
+	if _, credential, found := strings.Cut(value, " "); found {
+		return strings.TrimSpace(credential)
 	}
+	return value
+}
+
+func likelySecretAssignment(value string) bool {
+	value = strings.Trim(value, `"'`)
+	lower := strings.ToLower(value)
+	if len(value) < 20 || strings.Contains(value, "${") || strings.Contains(value, "{{") ||
+		strings.HasPrefix(value, "<") || strings.Contains(lower, "placeholder") ||
+		strings.Contains(lower, "redacted") || strings.Contains(lower, "example") ||
+		strings.Contains(lower, "changeme") || strings.Contains(lower, "dummy") {
+		return false
+	}
+	classes := 0
+	var lowerCase, upperCase, digit, symbol bool
+	unique := make(map[rune]struct{})
+	for _, character := range value {
+		unique[character] = struct{}{}
+		switch {
+		case character >= 'a' && character <= 'z':
+			lowerCase = true
+		case character >= 'A' && character <= 'Z':
+			upperCase = true
+		case character >= '0' && character <= '9':
+			digit = true
+		default:
+			symbol = true
+		}
+	}
+	for _, present := range []bool{lowerCase, upperCase, digit, symbol} {
+		if present {
+			classes++
+		}
+	}
+	return classes >= 3 && len(unique) >= 8
 }
 
 func maxInt64(left, right int64) int64 {

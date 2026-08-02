@@ -25,6 +25,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
 	"github.com/Standard-Syntax/basic/go/internal/registry"
+	"github.com/Standard-Syntax/basic/go/internal/subprocess"
 	"github.com/Standard-Syntax/basic/go/internal/verification"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 )
@@ -280,7 +281,11 @@ func digestMigrations(values []migration.Expected) string {
 
 func command(ctx context.Context, name string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if name == "docker" {
+		cmd.Env = subprocess.Docker(os.Getenv("DOCKER_HOST"), os.Getenv("DOCKER_API_VERSION"))
+	} else {
+		cmd.Env = subprocess.Git("GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=", "SSH_ASKPASS=")
+	}
 	body, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", err

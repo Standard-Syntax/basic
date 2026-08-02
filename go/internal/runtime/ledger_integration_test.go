@@ -173,6 +173,52 @@ func TestPostgresCompleteAndEnqueueIsAtomic(t *testing.T) {
 	}
 }
 
+func TestPostgresTransientRescheduleUsesSeparateCounter(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := t.Context()
+	if err := workflow.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	at := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
+		Meta: workflow.CommandEnvelope{
+			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
+			Timestamp: at, CorrelationID: commandID, CausationID: commandID,
+		},
+		ID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewLedger(pool)
+	job := Job{ID: uuid.NewString(), RunID: runID, Attempt: 1, Stage: "start", AvailableAt: at}
+	if err := ledger.Enqueue(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	owner := uuid.NewString()
+	claimed, found, err := ledger.Claim(ctx, owner, at, time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim=%+v found=%v err=%v", claimed, found, err)
+	}
+	next := at.Add(time.Second)
+	if err := ledger.RescheduleTransient(ctx, job.ID, owner, claimed.FencingToken, next); err != nil {
+		t.Fatal(err)
+	}
+	claimed, found, err = ledger.Claim(ctx, owner, next, time.Minute)
+	if err != nil || !found || claimed.RetryCount != 0 || claimed.TransientRescheduleCount != 1 {
+		t.Fatalf("reclaim=%+v found=%v err=%v", claimed, found, err)
+	}
+}
+
 func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -310,6 +356,14 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	if _, err := ledger.BeginIdempotency(ctx, request); !errors.Is(err, ErrInProgress) {
 		t.Fatalf("live reservation = %v", err)
 	}
+	if err := ledger.RenewIdempotency(ctx, request.Key, first.FencingToken, time.Minute); err != nil {
+		t.Fatalf("renew reservation: %v", err)
+	}
+	var renewed bool
+	if err := pool.QueryRow(ctx, `SELECT reservation_expires_at > now()+interval '50 seconds'
+		FROM runtime_api_idempotency WHERE idempotency_key=$1`, request.Key).Scan(&renewed); err != nil || !renewed {
+		t.Fatalf("reservation not renewed: renewed=%v err=%v", renewed, err)
+	}
 	if _, err := pool.Exec(ctx, `UPDATE runtime_api_idempotency
 		SET reservation_expires_at=now()-interval '1 second'
 		WHERE idempotency_key=$1`, request.Key); err != nil {
@@ -318,6 +372,11 @@ func TestPostgresIdempotencyReservationCanBeRecoveredAfterExpiry(t *testing.T) {
 	recovered, err := ledger.BeginIdempotency(ctx, request)
 	if err != nil || recovered.Replay || recovered.FencingToken != 2 {
 		t.Fatalf("recovered reservation = %#v, %v", recovered, err)
+	}
+	if err := ledger.RenewIdempotency(
+		ctx, request.Key, first.FencingToken, time.Minute,
+	); !errors.Is(err, ErrStaleFence) {
+		t.Fatalf("stale renewal = %v", err)
 	}
 	if err := ledger.AbandonIdempotency(
 		ctx, request.Key, first.FencingToken,

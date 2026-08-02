@@ -25,19 +25,20 @@ var (
 )
 
 type Job struct {
-	ID           string
-	RunID        string
-	TaskID       *string
-	Attempt      uint32
-	Stage        string
-	State        string
-	AvailableAt  time.Time
-	ClaimOwner   *string
-	ClaimExpires *time.Time
-	FencingToken uint64
-	RetryCount   uint32
-	Result       *workflow.ArtifactRef
-	Failure      *workflow.ArtifactRef
+	ID                       string
+	RunID                    string
+	TaskID                   *string
+	Attempt                  uint32
+	Stage                    string
+	State                    string
+	AvailableAt              time.Time
+	ClaimOwner               *string
+	ClaimExpires             *time.Time
+	FencingToken             uint64
+	RetryCount               uint32
+	TransientRescheduleCount uint32
+	Result                   *workflow.ArtifactRef
+	Failure                  *workflow.ArtifactRef
 }
 
 // StageStatus is the secret-safe operator view of one durable stage job.
@@ -52,6 +53,7 @@ type StageStatus struct {
 
 type IdempotencyRequest struct {
 	Key, Method, Target, PrincipalID, RequestDigest string
+	ReservationTTL                                  time.Duration
 }
 
 type IdempotencyResult struct {
@@ -83,6 +85,9 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 		return nil, fmt.Errorf("%w: idempotency key", ErrConflict)
 	}
 	now := time.Now().UTC()
+	if request.ReservationTTL <= 0 {
+		request.ReservationTTL = 30 * time.Second
+	}
 	tx, err := l.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -112,7 +117,9 @@ func (l *Ledger) BeginIdempotency(ctx context.Context, request IdempotencyReques
 		return nil, ErrInProgress
 	}
 	reservation.fencingToken++
-	if err := reclaimIdempotencyReservation(ctx, tx, request.Key, reservation.fencingToken, now); err != nil {
+	if err := reclaimIdempotencyReservation(
+		ctx, tx, request.Key, reservation.fencingToken, now, request.ReservationTTL,
+	); err != nil {
 		return nil, err
 	}
 	return commitIdempotencyResult(ctx, tx, &IdempotencyResult{
@@ -128,7 +135,7 @@ func insertIdempotencyReservation(
 		 reservation_expires_at,reservation_generation)
 		VALUES ($1,$2,$3,$4,$5,$6,1) ON CONFLICT DO NOTHING`,
 		request.Key, request.Method, request.Target, request.PrincipalID,
-		request.RequestDigest, now.Add(30*time.Second))
+		request.RequestDigest, now.Add(request.ReservationTTL))
 	if err != nil {
 		return false, err
 	}
@@ -155,13 +162,32 @@ func (r idempotencyReservation) matches(request IdempotencyRequest) bool {
 }
 
 func reclaimIdempotencyReservation(
-	ctx context.Context, tx pgx.Tx, key string, fencingToken uint64, now time.Time,
+	ctx context.Context, tx pgx.Tx, key string, fencingToken uint64, now time.Time, ttl time.Duration,
 ) error {
 	_, err := tx.Exec(ctx, `UPDATE runtime_api_idempotency
 		SET reservation_expires_at=$2,reservation_generation=$3
 		WHERE idempotency_key=$1`,
-		key, now.Add(30*time.Second), fencingToken)
+		key, now.Add(ttl), fencingToken)
 	return err
+}
+
+func (l *Ledger) RenewIdempotency(
+	ctx context.Context, key string, fencingToken uint64, ttl time.Duration,
+) error {
+	if ttl <= 0 {
+		return ErrConflict
+	}
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_api_idempotency
+		SET reservation_expires_at=clock_timestamp()+make_interval(secs => $3)
+		WHERE idempotency_key=$1 AND reservation_generation=$2
+		  AND completed_at IS NULL`, key, fencingToken, ttl.Seconds())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrStaleFence
+	}
+	return nil
 }
 
 func commitIdempotencyResult(
@@ -296,6 +322,7 @@ func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl tim
 	var claimExpires *time.Time
 	err = tx.QueryRow(ctx, `SELECT job_id::text,run_id::text,task_id::text,attempt,stage,
 		state,available_at,claim_owner::text,claim_expires_at,fencing_token,retry_count,
+		transient_reschedule_count,
 		result_uri,result_digest,failure_uri,failure_digest
 		FROM runtime_stage_jobs
 		WHERE state IN ('READY','RETRY','CLAIMED') AND available_at <= $1
@@ -303,7 +330,8 @@ func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl tim
 		ORDER BY available_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1`, now.UTC()).Scan(
 		&job.ID, &job.RunID, &taskID, &job.Attempt, &job.Stage, &job.State,
 		&job.AvailableAt, &claimOwner, &claimExpires, &job.FencingToken,
-		&job.RetryCount, &resultURI, &resultDigest, &failureURI, &failureDigest)
+		&job.RetryCount, &job.TransientRescheduleCount,
+		&resultURI, &resultDigest, &failureURI, &failureDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -431,6 +459,26 @@ func (l *Ledger) Retry(
 	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs SET state='RETRY',
 		retry_count=retry_count+1,available_at=$4,claim_owner=NULL,
 		claim_expires_at=NULL,updated_at=now()
+		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
+		jobID, owner, fence, available.UTC())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return l.classifyJobUpdate(ctx, jobID)
+	}
+	return nil
+}
+
+// RescheduleTransient releases a claim after a database concurrency conflict
+// without charging the stage's ordinary retry budget. Its separate counter
+// bounds persistent conflicts and provides escalating backoff.
+func (l *Ledger) RescheduleTransient(
+	ctx context.Context, jobID, owner string, fence uint64, available time.Time,
+) error {
+	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs SET state='RETRY',
+		transient_reschedule_count=transient_reschedule_count+1,
+		available_at=$4,claim_owner=NULL,claim_expires_at=NULL,updated_at=now()
 		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
 		jobID, owner, fence, available.UTC())
 	if err != nil {

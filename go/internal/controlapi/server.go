@@ -23,6 +23,7 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/execution"
 	"github.com/Standard-Syntax/basic/go/internal/orchestration"
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/publication"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -32,8 +33,13 @@ import (
 )
 
 const (
-	DefaultMaxBodyBytes int64 = 1 << 20
-	runIntakeTimeout          = 30 * time.Second
+	DefaultMaxBodyBytes       int64 = 1 << 20
+	runIntakeTimeout                = 30 * time.Second
+	compositeApprovalTimeout        = 2 * time.Minute
+	idempotencyCleanupTimeout       = 10 * time.Second
+	defaultReservationTTL           = 30 * time.Second
+	intakeReservationTTL            = 45 * time.Second
+	DefaultTaskMaxAttempts          = uint32(2)
 )
 
 type Role string
@@ -64,6 +70,7 @@ type IdempotencyLedger interface {
 	BeginIdempotency(context.Context, runtime.IdempotencyRequest) (*runtime.IdempotencyResult, error)
 	CompleteIdempotency(context.Context, string, uint64, int, json.RawMessage) error
 	AbandonIdempotency(context.Context, string, uint64) error
+	RenewIdempotency(context.Context, string, uint64, time.Duration) error
 	Enqueue(context.Context, runtime.Job) error
 	CancelRun(context.Context, string, time.Time) error
 	RunStages(context.Context, string) ([]runtime.StageStatus, error)
@@ -94,12 +101,13 @@ type PublicationService interface {
 }
 
 type Config struct {
-	Principals     []Principal
-	ServiceActorID string
-	MaxBodyBytes   int64
-	TrustedChecks  []string
-	Policy         beta.Policy
-	Ready          func(context.Context) error
+	Principals      []Principal
+	ServiceActorID  string
+	MaxBodyBytes    int64
+	TrustedChecks   []string
+	Policy          beta.Policy
+	Ready           func(context.Context) error
+	TaskMaxAttempts uint32
 }
 
 type Server struct {
@@ -169,6 +177,12 @@ func normalizeServerConfig(config Config) (Config, error) {
 	if config.MaxBodyBytes <= 0 {
 		config.MaxBodyBytes = DefaultMaxBodyBytes
 	}
+	if config.TaskMaxAttempts == 0 {
+		config.TaskMaxAttempts = DefaultTaskMaxAttempts
+	}
+	if config.TaskMaxAttempts < 2 || config.TaskMaxAttempts > 10 {
+		return Config{}, errors.New("task max attempts must be between 2 and 10")
+	}
 	config.TrustedChecks = slices.Clone(config.TrustedChecks)
 	slices.Sort(config.TrustedChecks)
 	return config, nil
@@ -189,11 +203,33 @@ func compilePrincipals(values []Principal) ([]principalDigest, error) {
 		if err != nil || len(decoded) != sha256.Size || len(principal.Roles) == 0 {
 			return nil, errors.New("invalid principal token digest or roles")
 		}
+		roles := make(map[Role]struct{}, len(principal.Roles))
+		for _, role := range principal.Roles {
+			switch role {
+			case RoleOperator, RoleApprover, RoleElevatedApprover:
+			default:
+				return nil, errors.New("unknown principal role")
+			}
+			if _, duplicate := roles[role]; duplicate {
+				return nil, errors.New("duplicate principal role")
+			}
+			roles[role] = struct{}{}
+		}
 		var digest [sha256.Size]byte
 		copy(digest[:], decoded)
 		principals = append(principals, principalDigest{principal: principal, digest: digest})
 	}
 	return principals, nil
+}
+
+// ValidatePrincipals validates trusted API authentication and role configuration
+// without constructing a server or touching durable state.
+func ValidatePrincipals(values []Principal) error {
+	if len(values) == 0 {
+		return errors.New("at least one principal is required")
+	}
+	_, err := compilePrincipals(values)
+	return err
 }
 
 func compileTrustedChecks(values []string) (map[string]struct{}, error) {
@@ -213,21 +249,7 @@ func compileTrustedChecks(values []string) (map[string]struct{}, error) {
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/healthz" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-	if request.URL.Path == "/readyz" {
-		if s.config.Ready != nil {
-			ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
-			err := s.config.Ready(ctx)
-			cancel()
-			if err != nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
-				return
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	if s.servePublicEndpoint(w, request) {
 		return
 	}
 	principal, ok := s.authenticate(request)
@@ -237,29 +259,69 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 	}
 	counted := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	started := time.Now()
-	defer func() {
-		elapsed := time.Since(started)
-		s.requests.Add(1)
-		s.elapsedNS.Add(uint64(elapsed))
-		if counted.status >= http.StatusBadRequest {
-			s.failures.Add(1)
+	defer s.observeRequest(request, principal, counted, started)
+	s.routeAuthenticated(counted, request, principal)
+}
+
+func (s *Server) servePublicEndpoint(w http.ResponseWriter, request *http.Request) bool {
+	switch request.URL.Path {
+	case "/healthz":
+		if !requireMethod(w, request, http.MethodGet) {
+			return true
 		}
-		attributes := []any{
-			"method", request.Method, "path", request.URL.Path,
-			"status", counted.status, "elapsed_nanoseconds", elapsed.Nanoseconds(),
-			"principal_id", principal.ID,
-			"idempotency_key", request.Header.Get("Idempotency-Key"),
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return true
+	case "/readyz":
+		if !requireMethod(w, request, http.MethodGet) {
+			return true
 		}
-		if runID, _, ok := parseRunPath(request.URL.Path); ok {
-			attributes = append(attributes, "run_id", runID)
+		if s.config.Ready != nil {
+			ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
+			err := s.config.Ready(ctx)
+			cancel()
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+				return true
+			}
 		}
-		if taskID, _, ok := parseTaskPath(request.URL.Path); ok {
-			attributes = append(attributes, "task_id", taskID)
-		}
-		s.logger.Info("control API request", attributes...)
-	}()
-	w = counted
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) observeRequest(
+	request *http.Request, principal Principal, counted *statusWriter, started time.Time,
+) {
+	elapsed := time.Since(started)
+	s.requests.Add(1)
+	s.elapsedNS.Add(uint64(elapsed))
+	if counted.status >= http.StatusBadRequest {
+		s.failures.Add(1)
+	}
+	attributes := []any{
+		"method", request.Method, "path", request.URL.Path,
+		"status", counted.status, "elapsed_nanoseconds", elapsed.Nanoseconds(),
+		"principal_id", principal.ID,
+		"idempotency_key", request.Header.Get("Idempotency-Key"),
+	}
+	if runID, _, ok := parseRunPath(request.URL.Path); ok {
+		attributes = append(attributes, "run_id", runID)
+	}
+	if taskID, _, ok := parseTaskPath(request.URL.Path); ok {
+		attributes = append(attributes, "task_id", taskID)
+	}
+	s.logger.Info("control API request", attributes...)
+}
+
+func (s *Server) routeAuthenticated(
+	w http.ResponseWriter, request *http.Request, principal Principal,
+) {
 	if request.URL.Path == "/metrics" {
+		if !requireMethod(w, request, http.MethodGet) {
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]uint64{
 			"requests_total":                    s.requests.Load(),
 			"failures_total":                    s.failures.Load(),
@@ -267,11 +329,38 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
-	if request.Method == http.MethodGet {
+	allowed := http.MethodGet
+	if isMutationRoute(request.URL.Path) {
+		allowed = http.MethodPost
+	}
+	if !requireMethod(w, request, allowed) {
+		return
+	}
+	if allowed == http.MethodGet {
 		s.handleGet(w, request, principal)
 		return
 	}
 	s.handleMutation(w, request, principal)
+}
+
+func requireMethod(w http.ResponseWriter, request *http.Request, allowed string) bool {
+	if request.Method == allowed {
+		return true
+	}
+	w.Header().Set("Allow", allowed)
+	writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+	return false
+}
+
+func isMutationRoute(path string) bool {
+	if path == "/v1/runs" {
+		return true
+	}
+	if _, suffix, ok := parseTaskPath(path); ok {
+		return suffix == "/retry"
+	}
+	_, suffix, ok := parseRunPath(path)
+	return ok && suffix != "" && suffix != "/events"
 }
 
 type statusWriter struct {
@@ -379,8 +468,10 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	idem := runtime.IdempotencyRequest{
 		Key: key, Method: request.Method, Target: request.URL.RequestURI(),
 		PrincipalID: principal.ID, RequestDigest: runtime.Digest(raw),
+		ReservationTTL: defaultReservationTTL,
 	}
 	if request.URL.Path == "/v1/runs" {
+		idem.ReservationTTL = intakeReservationTTL
 		s.handleRunIntake(w, request, principal, body, idem)
 		return
 	}
@@ -394,12 +485,31 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeRawJSON(w, reservation.StatusCode, reservation.Response)
 		return
 	}
+	var operationParent context.Context
+	var operationCancel context.CancelFunc
+	if _, suffix, ok := parseRunPath(request.URL.Path); ok && suffix == "/approval" {
+		operationParent, operationCancel = context.WithTimeout(
+			context.WithoutCancel(request.Context()), compositeApprovalTimeout,
+		)
+	} else {
+		operationParent, operationCancel = context.WithCancel(request.Context())
+	}
+	operationCtx, stopRenewal := s.startReservationRenewal(
+		operationParent, key, reservation.FencingToken, idem.ReservationTTL,
+	)
+	defer func() {
+		operationCancel()
+		_ = stopRenewal()
+	}()
+	request = request.WithContext(operationCtx)
 	status, response, err := s.applyMutation(request, principal, key, body)
 	if err != nil {
 		status, response = s.domainError(err)
 		if status >= http.StatusInternalServerError {
+			cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
+			defer cleanupCancel()
 			if abandonErr := s.runtime.AbandonIdempotency(
-				request.Context(), key, reservation.FencingToken,
+				cleanupCtx, key, reservation.FencingToken,
 			); abandonErr != nil {
 				s.writeDomainError(w, abandonErr)
 				return
@@ -412,8 +522,10 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 			writeError(w, http.StatusInternalServerError, "internal", "encode response")
 			return
 		}
+		cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
+		defer cleanupCancel()
 		if completeErr := s.runtime.CompleteIdempotency(
-			request.Context(), key, reservation.FencingToken, status, encoded,
+			cleanupCtx, key, reservation.FencingToken, status, encoded,
 		); completeErr != nil {
 			s.writeDomainError(w, completeErr)
 			return
@@ -426,13 +538,47 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeError(w, http.StatusInternalServerError, "internal", "encode response")
 		return
 	}
+	cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
+	defer cleanupCancel()
 	if err := s.runtime.CompleteIdempotency(
-		request.Context(), key, reservation.FencingToken, status, encoded,
+		cleanupCtx, key, reservation.FencingToken, status, encoded,
 	); err != nil {
 		s.writeDomainError(w, err)
 		return
 	}
 	writeRawJSON(w, status, encoded)
+}
+
+func detachedIdempotencyContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), idempotencyCleanupTimeout)
+}
+
+func (s *Server) startReservationRenewal(
+	parent context.Context, key string, fence uint64, ttl time.Duration,
+) (context.Context, func() error) {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(idempotencyRenewEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-ticker.C:
+				renewCtx, renewCancel := detachedIdempotencyContext(ctx)
+				err := s.runtime.RenewIdempotency(renewCtx, key, fence, ttl)
+				renewCancel()
+				if err != nil {
+					cancel()
+					done <- err
+					return
+				}
+			}
+		}
+	}()
+	return ctx, func() error { cancel(); return <-done }
 }
 
 func (s *Server) handleRunIntake(
@@ -458,7 +604,9 @@ func (s *Server) handleRunIntake(
 			return
 		}
 	}
-	intakeContext, cancel := context.WithTimeout(request.Context(), runIntakeTimeout)
+	intakeContext, cancel := context.WithTimeout(
+		context.WithoutCancel(request.Context()), runIntakeTimeout,
+	)
 	defer cancel()
 	result, err := s.intake.Accept(intakeContext, RunIntakeRequest{
 		Idempotency: idempotency, Content: body.Content, BaseCommit: body.BaseCommit,
@@ -513,21 +661,40 @@ func (s *Server) retryTask(
 	if _, err := uuid.Parse(body.RunID); err != nil {
 		return 0, nil, workflow.ErrInvalid
 	}
-	task, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
-	if err != nil {
-		return 0, nil, err
-	}
 	expected, err := requiredRevision(request.Header.Get("If-Match"))
-	if err != nil || expected != task.Revision {
+	if err != nil {
 		return 0, nil, workflow.ErrRevisionConflict
 	}
 	result, err := s.workflow.ExecuteTask(request.Context(), workflow.RetryTask{
 		Meta: s.envelope(
 			key, s.config.ServiceActorID, workflow.ActorWorkflowService, expected, body.DecisionTime,
 		),
-		Run: task.RunID, ID: task.ID,
+		Run: body.RunID, ID: taskID,
 	})
-	return http.StatusOK, result, err
+	if err != nil {
+		return 0, nil, err
+	}
+	if result.State == string(workflow.TaskStateFailed) {
+		return http.StatusUnprocessableEntity, result, nil
+	}
+	if result.State != string(workflow.TaskStateReady) {
+		return 0, nil, workflow.ErrInvalidTransition
+	}
+	task, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
+	if err != nil {
+		return 0, nil, err
+	}
+	attempt := task.CurrentAttempt + 1
+	if err := s.runtime.Enqueue(request.Context(), runtime.Job{
+		ID: orchestration.StableID(
+			task.RunID, task.ID, fmt.Sprint(attempt), orchestration.StageStart, "job",
+		),
+		RunID: task.RunID, TaskID: &task.ID, Attempt: attempt,
+		Stage: orchestration.StageStart, AvailableAt: body.DecisionTime.UTC(),
+	}); err != nil {
+		return 0, nil, err
+	}
+	return http.StatusOK, result, nil
 }
 
 func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-command audit table
@@ -627,7 +794,9 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 		if err != nil {
 			return 0, nil, err
 		}
-		definition := workflow.TaskDefinition{ID: task.GetTaskId(), MaxAttempts: 1}
+		definition := workflow.TaskDefinition{
+			ID: task.GetTaskId(), MaxAttempts: s.config.TaskMaxAttempts,
+		}
 		result, err := s.workflow.ExecuteRun(ctx, workflow.ApproveTaskGraph{
 			Meta: humanMeta("approve-task-graph", run.Revision), ID: run.ID,
 			TaskGraph: *run.TaskGraph, Tasks: []workflow.TaskDefinition{definition},
@@ -766,9 +935,6 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		ctx, run.ID, approvalResult.ApprovalArtifact,
 	); err != nil {
 		return approval.Result{}, nil, err
-	}
-	if task.State == workflow.TaskStateAwaitingApproval {
-		task.State = workflow.TaskStateAccepted
 	}
 	run, err = s.workflow.GetRun(ctx, run.ID)
 	if err != nil {
@@ -968,6 +1134,8 @@ func (s *Server) domainError(err error) (int, any) {
 		code, message, status = "revision_conflict", "ETag revision conflict", http.StatusPreconditionFailed
 	case errors.Is(err, runtime.ErrInProgress):
 		code, message, status = "idempotency_in_progress", "request is still processing", http.StatusConflict
+	case errors.Is(err, postgresutil.ErrTransient):
+		code, message, status = "transient_conflict", "retry the request", http.StatusServiceUnavailable
 	case errors.Is(err, workflow.ErrCommandConflict), errors.Is(err, runtime.ErrConflict),
 		errors.Is(err, runtime.ErrStaleFence), errors.Is(err, runtime.ErrTerminal):
 		code, message, status = "idempotency_conflict", "idempotency identity conflict", http.StatusConflict

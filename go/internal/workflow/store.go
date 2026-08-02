@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,24 +58,25 @@ func (s *Store) ExecuteRun(ctx context.Context, command RunCommand) (CommandResu
 	if err != nil {
 		return CommandResult{}, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return CommandResult{}, fmt.Errorf("begin workflow transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	result, err := s.executeRunTransaction(ctx, tx, command, digest)
-	if err != nil {
+	return postgresutil.RetryTransaction(ctx, func() (CommandResult, error) {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return CommandResult{}, fmt.Errorf("begin workflow transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		result, err := s.executeRunTransaction(ctx, tx, command, digest)
 		if errors.Is(err, errReplayAfterConflict) {
 			_ = tx.Rollback(ctx)
 			return s.replayAfterConflict(ctx, command.Envelope().CommandID, digest)
 		}
-		return CommandResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return CommandResult{}, fmt.Errorf("commit workflow transaction: %w", err)
-	}
-	return result, nil
+		if err != nil {
+			return CommandResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CommandResult{}, fmt.Errorf("commit workflow transaction: %w", err)
+		}
+		return result, nil
+	})
 }
 
 // ExecuteRunTx persists a run command inside a caller-owned transaction. The
@@ -271,24 +273,25 @@ func (s *Store) ExecuteTask(ctx context.Context, command TaskCommand) (CommandRe
 	if err != nil {
 		return CommandResult{}, err
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	if err != nil {
-		return CommandResult{}, fmt.Errorf("begin workflow transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	result, err := s.executeTaskTransaction(ctx, tx, command, digest)
-	if err != nil {
+	return postgresutil.RetryTransaction(ctx, func() (CommandResult, error) {
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+		if err != nil {
+			return CommandResult{}, fmt.Errorf("begin workflow transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		result, err := s.executeTaskTransaction(ctx, tx, command, digest)
 		if errors.Is(err, errReplayAfterConflict) {
 			_ = tx.Rollback(ctx)
 			return s.replayAfterConflict(ctx, command.Envelope().CommandID, digest)
 		}
-		return CommandResult{}, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return CommandResult{}, fmt.Errorf("commit task transaction: %w", err)
-	}
-	return result, nil
+		if err != nil {
+			return CommandResult{}, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CommandResult{}, fmt.Errorf("commit task transaction: %w", err)
+		}
+		return result, nil
+	})
 }
 
 func taskCommandDigest(command TaskCommand) (string, error) {

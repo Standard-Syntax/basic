@@ -72,7 +72,9 @@ func parseTreeRecord(record []byte) (string, string, string, error) {
 
 func safePath(name string) bool {
 	if name == "" || path.IsAbs(name) || path.Clean(name) != name ||
-		strings.Contains(name, `\`) {
+		strings.Contains(name, `\`) || strings.ContainsFunc(name, func(character rune) bool {
+		return character < 0x20 || character == 0x7f
+	}) {
 		return false
 	}
 	for _, component := range strings.Split(name, "/") {
@@ -119,7 +121,7 @@ func gitOutput(ctx context.Context, repository string, arguments ...string) ([]b
 	}
 	command := exec.CommandContext(ctx, "git", append(base, arguments...)...)
 	command.Env = []string{
-		"PATH=" + os.Getenv("PATH"),
+		"PATH=/usr/bin:/bin",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_OPTIONAL_LOCKS=0",

@@ -126,7 +126,7 @@ func approvalFixture(t *testing.T) (*Service, Request, *memoryArtifacts, *workfl
 		t.Fatal(err)
 	}
 	workflowPort := &workflowRecorder{}
-	service, err := NewService(store, workflowPort)
+	service, err := NewService(store, workflowPort, NewMemoryApprovalLedger())
 	if err != nil {
 		t.Fatal(err)
 	}

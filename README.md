@@ -53,7 +53,7 @@ checkpoints branch and PR identity so replay performs no Git or network write.
 
 ## Quick start
 
-Prerequisites: Go 1.26, Python 3.14, `uv` 0.11 or newer, GNU Make, Git, and
+Prerequisites: Go 1.26, Python 3.14, `uv` 0.11 or newer, GNU Make, Git 2.38 or newer, and
 Docker for PostgreSQL and isolated-worker integration tests.
 
 ```bash

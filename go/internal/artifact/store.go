@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/gateway"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -28,6 +30,7 @@ var (
 )
 
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+var temporaryPattern = regexp.MustCompile(`^\.tmp-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 const DefaultMaxBytes int64 = 1 << 20
 
@@ -46,7 +49,86 @@ func NewStore(root string, maxBytes int64) (*Store, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create artifact root: %w", err)
 	}
-	return OpenStore(root, maxBytes)
+	store, err := OpenStore(root, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.sweepTemporaryFiles(time.Now().UTC().Add(-24 * time.Hour)); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) sweepTemporaryFiles(olderThan time.Time) error {
+	rootFD, err := unix.Openat(
+		int(s.root.Fd()), ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0,
+	)
+	if err != nil {
+		return err
+	}
+	root := os.NewFile(uintptr(rootFD), "artifact-root")
+	defer root.Close()
+	shards, err := root.Readdirnames(-1)
+	if err != nil {
+		return err
+	}
+	for _, name := range shards {
+		if !validShardName(name) {
+			continue
+		}
+		if err := s.sweepShard(name, olderThan); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validShardName(name string) bool {
+	return len(name) == 2 && strings.Trim(name, "0123456789abcdef") == ""
+}
+
+func (s *Store) sweepShard(name string, olderThan time.Time) error {
+	shard, err := s.openShard(name, false)
+	if errors.Is(err, ErrUnsafe) || errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	names, err := shard.Readdirnames(-1)
+	if err != nil {
+		_ = shard.Close()
+		return err
+	}
+	for _, candidate := range names {
+		if err := sweepTemporaryAt(shard, candidate, olderThan); err != nil {
+			_ = shard.Close()
+			return err
+		}
+	}
+	return shard.Close()
+}
+
+func sweepTemporaryAt(shard *os.File, candidate string, olderThan time.Time) error {
+	if !temporaryPattern.MatchString(candidate) {
+		return nil
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(shard.Fd()), candidate, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	modified := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || !modified.Before(olderThan) {
+		return nil
+	}
+	if err := unix.Unlinkat(int(shard.Fd()), candidate, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	return nil
 }
 
 // OpenStore opens an existing artifact root without creating or modifying it.

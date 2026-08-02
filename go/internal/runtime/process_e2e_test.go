@@ -39,6 +39,9 @@ import (
 const packagedHelperImage = "alpine:3.23.3@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95"
 
 func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
+	if os.Getenv("BETA_LIVE_E2E") != "1" {
+		t.Skip("BETA_LIVE_E2E=1 is required")
+	}
 	if os.Getenv("BETA_CANARY") == "1" {
 		t.Skip("real canary mode uses the dedicated test entrypoint")
 	}

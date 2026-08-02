@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
@@ -36,6 +37,7 @@ type JobLedger interface {
 		context.Context, string, string, uint64, workflow.ArtifactRef, *runtime.Job, time.Time,
 	) error
 	Retry(context.Context, string, string, uint64, time.Time) error
+	RescheduleTransient(context.Context, string, string, uint64, time.Time) error
 	Fail(context.Context, string, string, uint64, workflow.ArtifactRef, time.Time) error
 }
 
@@ -240,11 +242,22 @@ func (r *Reconciler) handleFailure(
 	if errors.Is(handleErr, context.Canceled) || errors.Is(handleErr, context.DeadlineExceeded) {
 		return handleErr
 	}
-	if job.RetryCount+1 < r.config.MaxRetries {
-		backoff := r.config.InitialBackoff << job.RetryCount
-		if backoff > time.Minute {
-			backoff = time.Minute
+	if errors.Is(handleErr, postgresutil.ErrTransient) {
+		if job.TransientRescheduleCount+1 >= r.config.MaxRetries {
+			return r.fail(ctx, job, handleErr, logger)
 		}
+		backoff := saturatingBackoff(
+			r.config.InitialBackoff, job.TransientRescheduleCount, time.Minute,
+		)
+		err := r.ledger.RescheduleTransient(
+			ctx, job.ID, r.config.OwnerID, job.FencingToken, r.now().Add(backoff),
+		)
+		logger.Warn("runtime stage rescheduled after transient database conflict",
+			"error", handleErr, "backoff", backoff)
+		return err
+	}
+	if job.RetryCount+1 < r.config.MaxRetries {
+		backoff := saturatingBackoff(r.config.InitialBackoff, job.RetryCount, time.Minute)
 		err := r.ledger.Retry(
 			ctx, job.ID, r.config.OwnerID, job.FencingToken, r.now().Add(backoff),
 		)
@@ -252,6 +265,20 @@ func (r *Reconciler) handleFailure(
 		return err
 	}
 	return r.fail(ctx, job, handleErr, logger)
+}
+
+func saturatingBackoff(initial time.Duration, exponent uint32, maximum time.Duration) time.Duration {
+	value := initial
+	for range exponent {
+		if value >= maximum || value > maximum/2 {
+			return maximum
+		}
+		value *= 2
+	}
+	if value > maximum {
+		return maximum
+	}
+	return value
 }
 
 func (r *Reconciler) fail(
