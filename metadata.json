@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ0D7212ZGHF0A1R8WB7V4YJ",
+  "strategy": "manual-commit",
+  "branch": "beta/lifecycle-failure-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "go/internal/artifact/store.go",
+    "go/internal/artifact/store_test.go",
+    "go/internal/controlapi/intake.go",
+    "go/internal/controlapi/intake_integration_test.go",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/dockerengine/client.go",
+    "go/internal/dockerengine/client_test.go",
+    "go/internal/execution/candidate.go",
+    "go/internal/execution/service_test.go",
+    "go/internal/orchestration/reconciler.go",
+    "go/internal/orchestration/reconciler_test.go",
+    "go/internal/publication/github.go",
+    "go/internal/publication/github_test.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/runtime/builder.go",
+    "go/internal/runtime/builder_test.go",
+    "go/internal/runtime/ledger.go",
+    "go/internal/runtime/ledger_integration_test.go",
+    "go/internal/workflow/migrations/0021_transient_reschedules.sql"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 224732,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11409920,
+    "output_tokens": 29717,
+    "api_call_count": 82
+  }
+}
