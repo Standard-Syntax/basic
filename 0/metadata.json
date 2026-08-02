@@ -3,73 +3,39 @@
   "checkpoint_id": "01KZ0D7212ZGHF0A1R8WB7V4YJ",
   "session_id": "019fbeca-52ef-7492-8929-a4645a4b0538",
   "strategy": "manual-commit",
-  "created_at": "2026-08-02T04:55:18.233193619Z",
+  "created_at": "2026-08-02T04:59:15.176018409Z",
   "branch": "beta/lifecycle-failure-hardening",
   "checkpoints_count": 1,
   "files_touched": [
-    "README.md",
-    "go/internal/artifact/store.go",
-    "go/internal/artifact/store_test.go",
     "go/internal/controlapi/intake.go",
-    "go/internal/controlapi/intake_integration_test.go",
-    "go/internal/controlapi/server.go",
-    "go/internal/controlapi/server_test.go",
-    "go/internal/dockerengine/client.go",
-    "go/internal/dockerengine/client_test.go",
-    "go/internal/execution/candidate.go",
-    "go/internal/execution/service_test.go",
-    "go/internal/orchestration/reconciler.go",
-    "go/internal/orchestration/reconciler_test.go",
-    "go/internal/publication/github.go",
-    "go/internal/publication/github_test.go",
-    "go/internal/reasoning/gateway/anthropic.go",
-    "go/internal/reasoning/gateway/anthropic_test.go",
-    "go/internal/runtime/builder.go",
-    "go/internal/runtime/builder_test.go",
-    "go/internal/runtime/ledger.go",
-    "go/internal/runtime/ledger_integration_test.go",
-    "go/internal/workflow/migrations/0021_transient_reschedules.sql"
+    "go/internal/controlapi/intake_integration_test.go"
   ],
   "agent": "Codex",
   "model": "gpt-5.6-sol",
   "turn_id": "03e782f3f721",
-  "checkpoint_transcript_start": 827,
-  "transcript_lines_at_start": 827,
-  "compact_transcript_start": 180,
+  "checkpoint_transcript_start": 1192,
+  "transcript_lines_at_start": 1192,
+  "compact_transcript_start": 264,
   "token_usage": {
-    "input_tokens": 224732,
+    "input_tokens": 20917,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 11409920,
-    "output_tokens": 29717,
-    "api_call_count": 82
+    "cache_read_tokens": 2972672,
+    "output_tokens": 2342,
+    "api_call_count": 16
   },
   "session_metrics": {
     "turn_count": 2
   },
   "initial_attribution": {
-    "calculated_at": "2026-08-02T04:55:18.056767803Z",
-    "agent_lines": 450,
-    "agent_removed": 154,
-    "human_added": 0,
+    "calculated_at": "2026-08-02T04:59:15.025823641Z",
+    "agent_lines": 14,
+    "agent_removed": 2,
+    "human_added": 428,
     "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 450,
-    "total_lines_changed": 604,
-    "agent_percentage": 100,
+    "total_committed": 442,
+    "total_lines_changed": 596,
+    "agent_percentage": 2.684563758389262,
     "metric_version": 2
-  },
-  "prompt_attributions": [
-    {
-      "checkpoint_number": 1,
-      "user_lines_added": 327,
-      "user_lines_removed": 0,
-      "agent_lines_added": 0,
-      "agent_lines_removed": 0,
-      "user_added_per_file": {
-        ".codex/config.toml": 3,
-        ".codex/hooks.json": 52,
-        ".opencode/plugins/entire.ts": 272
-      }
-    }
-  ]
+  }
 }

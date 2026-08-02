@@ -1,5 +1,0 @@
-commit, push and create pull request set to ready for review
-
----
-
-please read the review comments on pull requests and address them while staying inline with acceptance criteria
