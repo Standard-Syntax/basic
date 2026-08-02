@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 func TestFileCredentialReadsPerRequestAndChecksPermissions(t *testing.T) {
@@ -46,5 +48,21 @@ func TestFileCredentialRejectsSymlink(t *testing.T) {
 	}
 	if _, err := NewFileCredential(link); !errors.Is(err, ErrCredentialPermissions) {
 		t.Fatalf("symlink = %v", err)
+	}
+}
+
+func TestCredentialReaderHandlesShortReadsAndRejectsOversizeValues(t *testing.T) {
+	value := strings.Repeat("a", 4096)
+	token, err := readCredential(iotest.OneByteReader(strings.NewReader(value)))
+	if err != nil || token != value {
+		t.Fatalf("chunked token length=%d err=%v", len(token), err)
+	}
+	if _, err := readCredential(strings.NewReader(value + "b")); !errors.Is(err, ErrCredentialPermissions) {
+		t.Fatalf("4097-byte credential error=%v", err)
+	}
+	for _, invalid := range []string{"", "first\nsecond", "first\rsecond"} {
+		if _, err := readCredential(strings.NewReader(invalid)); !errors.Is(err, ErrCredentialPermissions) {
+			t.Fatalf("invalid credential %q error=%v", invalid, err)
+		}
 	}
 }

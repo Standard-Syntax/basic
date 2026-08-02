@@ -3,6 +3,7 @@ package publication
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,15 +44,18 @@ func (s *FileCredential) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	body := make([]byte, 4097)
-	count, err := file.Read(body)
+	return readCredential(file)
+}
+
+func readCredential(reader io.Reader) (string, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, 4097))
 	if err != nil {
 		return "", err
 	}
-	if count == len(body) {
+	if len(body) == 4097 {
 		return "", ErrCredentialPermissions
 	}
-	token := strings.TrimSpace(string(body[:count]))
+	token := strings.TrimSpace(string(body))
 	if token == "" || strings.ContainsAny(token, "\r\n") {
 		return "", ErrCredentialPermissions
 	}
