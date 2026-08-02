@@ -74,9 +74,10 @@ func (d DockerCheckExecutor) Run(
 			"UV_CACHE_DIR=/tmp/uv-cache", "UV_OFFLINE=1", "UV_NO_SYNC=1",
 			"UV_PROJECT_ENVIRONMENT=/opt/venv", "PYTHONPATH=/workspace/python/src",
 			"PATH=/opt/bin:/opt/venv/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"},
-		Mounts: []dockerengine.Mount{{Source: workspace, Target: "/workspace"}},
-		Tmpfs:  map[string]string{"/tmp": "rw,exec,nosuid,nodev,size=2g,mode=1777"},
-		Memory: 3 << 30, Pids: 256,
+		Mounts:   []dockerengine.Mount{{Source: workspace, Target: "/workspace"}},
+		Tmpfs:    map[string]string{"/tmp": "rw,exec,nosuid,nodev,size=2g,mode=1777"},
+		NanoCPUs: int64(definition.Limits.CPUs) * 1_000_000_000,
+		Memory:   definition.Limits.MemoryBytes, Pids: int64(definition.Limits.PIDs),
 	}, bytes.NewReader(payload), output)
 	if err != nil {
 		if runCtx.Err() != nil {

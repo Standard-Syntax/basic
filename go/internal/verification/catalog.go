@@ -23,7 +23,7 @@ func DefaultCatalog() Catalog {
 		Argv:             []string{"make", "check"},
 		Timeout:          DefaultCheckTimeout,
 		Limits: ResourceLimits{
-			CPUs: 1, MemoryBytes: 1 << 30, PIDs: 256, OutputBytes: DefaultMaxOutputBytes,
+			CPUs: 1, MemoryBytes: DefaultMemoryBytes, PIDs: 256, OutputBytes: DefaultMaxOutputBytes,
 		},
 	}})
 	if err != nil {
@@ -68,7 +68,7 @@ func durationIsBounded(value time.Duration) bool {
 
 func resourceLimitsAreBounded(limits ResourceLimits) bool {
 	return limits.CPUs == 1 &&
-		limits.MemoryBytes > 0 && limits.MemoryBytes <= 1<<30 &&
+		limits.MemoryBytes > 0 && limits.MemoryBytes <= MaximumMemoryBytes &&
 		limits.PIDs > 0 && limits.PIDs <= 256 &&
 		limits.OutputBytes > 0 && limits.OutputBytes <= DefaultMaxOutputBytes
 }

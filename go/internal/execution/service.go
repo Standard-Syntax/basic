@@ -460,31 +460,50 @@ func normalizePath(value string) (string, error) {
 
 func validateTargets(worktree string, changes []contracts.FileChange) error {
 	for _, change := range changes {
-		parts := strings.Split(change.Path, "/")
-		current := worktree
-		for index, part := range parts {
-			current = filepath.Join(current, part)
-			info, err := os.Lstat(current)
-			if errors.Is(err, os.ErrNotExist) {
-				if change.Operation == contracts.FileCreate && index == len(parts)-1 {
-					break
-				}
-				return fmt.Errorf("%w: missing target %q", ErrUnsafePath, change.Path)
-			}
-			if err != nil {
-				return fmt.Errorf("inspect target %q: %w", change.Path, err)
-			}
-			if info.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("%w: symlink target %q", ErrUnsafePath, change.Path)
-			}
-			if index < len(parts)-1 && !info.IsDir() {
-				return fmt.Errorf("%w: non-directory ancestor %q", ErrUnsafePath, change.Path)
-			}
-			if index == len(parts)-1 && (!info.Mode().IsRegular() ||
-				(info.Mode().Perm() != 0o644 && info.Mode().Perm() != 0o755)) {
-				return fmt.Errorf("%w: unsupported target %q", ErrUnsafePath, change.Path)
-			}
+		if err := validateTarget(worktree, change); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateTarget(worktree string, change contracts.FileChange) error {
+	parts := strings.Split(change.Path, "/")
+	current := worktree
+	for index, part := range parts {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if change.Operation == contracts.FileCreate && index == len(parts)-1 {
+				return nil
+			}
+			return fmt.Errorf("%w: missing target %q", ErrUnsafePath, change.Path)
+		}
+		if err != nil {
+			return fmt.Errorf("inspect target %q: %w", change.Path, err)
+		}
+		if err := validateExistingTarget(info, index == len(parts)-1, change); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateExistingTarget(info os.FileInfo, leaf bool, change contracts.FileChange) error {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: symlink target %q", ErrUnsafePath, change.Path)
+	}
+	if !leaf {
+		if !info.IsDir() {
+			return fmt.Errorf("%w: non-directory ancestor %q", ErrUnsafePath, change.Path)
+		}
+		return nil
+	}
+	if !info.Mode().IsRegular() || (info.Mode().Perm() != 0o644 && info.Mode().Perm() != 0o755) {
+		return fmt.Errorf("%w: unsupported target %q", ErrUnsafePath, change.Path)
+	}
+	if change.Operation == contracts.FileCreate {
+		return fmt.Errorf("%w: create target already exists %q", ErrUnsafePath, change.Path)
 	}
 	return nil
 }

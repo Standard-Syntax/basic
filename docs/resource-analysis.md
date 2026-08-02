@@ -22,7 +22,7 @@ verification ledger row per verification ID.
 | Model tokens | request/manifest bounded for live-only MiniMax-M2.7 |
 | Concurrency | four executions, eight worktrees, and one logical owner per execution ID by default |
 | Verification CPU | one CPU per check container; at most two concurrent verifications |
-| Verification memory | 2 GiB, 256 PIDs, bounded 1 GiB tmpfs, and 1 MiB combined output per check |
+| Verification memory | 2 GiB, 256 PIDs, bounded 2 GiB tmpfs, and 1 MiB combined output per check |
 | Verification disk | at most four clean workspaces; content-addressed logs and reports remain external |
 | Verification network | `--network none`; `go.sum`, `uv.lock`, writable runtime copy of seeded Go build/vet caches, and generation tools seed the image |
 | Review | bounded MiniMax Anthropic-compatible request plus content-addressed request, raw response, proposal, and report artifacts |
@@ -67,7 +67,8 @@ model, token counters, and attempt count. Prompt caching policy, streaming,
 tools, fallback models, and multi-turn continuation remain out of scope.
 The pinned SDK increases offline Go compile/vet working data; the verification
 image seeds those caches and the isolated worker limit is therefore 2 GiB
-memory with 1 GiB tmpfs.
+memory with 2 GiB tmpfs. Trusted catalog entries may select lower memory and
+PID limits, which are propagated directly to the container profile.
 
 ## Phase 11 runtime
 

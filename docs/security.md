@@ -76,6 +76,9 @@
   UID/GID with no network, capabilities, privilege escalation, inherited
   secrets, Git credentials, or writable root. It is limited to one CPU, 2 GiB,
   256 PIDs, 2 GiB tmpfs, ten minutes, and 1 MiB combined output per check.
+- Lower memory and PID limits in a trusted check definition are passed through
+  to Docker exactly; the executor never replaces them with broader hard-coded
+  container resources.
 - Verification resolves and records the immutable Docker image ID before
   execution. Every log, report, coverage row, and workflow command binds the
   exact candidate commit and Phase 6 report.

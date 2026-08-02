@@ -204,6 +204,11 @@ configuration before starting a run or acquiring a lease. Task-planning
 authority must match the bound policy; proposals may narrow it but cannot widen
 paths, checks, limits, concurrency, or the one dependency-free task boundary.
 
+The Docker Engine boundary receives CPU, memory, and PID limits explicitly for
+every worker. Execution uses its fixed one-CPU, 512 MiB, 64-PID profile;
+verification derives the exact container limits from each trusted catalog
+definition, bounded by the two-GiB memory and 256-PID ceilings.
+
 ## Beta Slice 7 release evidence
 
 `beta_release_manifest.v1` embeds the exact Slice 6 deployment record, the

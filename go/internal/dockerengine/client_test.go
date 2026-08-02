@@ -56,7 +56,8 @@ func TestRunBuildsExactIsolatedContainerProfile(t *testing.T) {
 	request := RunRequest{Name: "worker", Image: "sha256:image", User: "1000:1000",
 		WorkingDir: "/workspace", Env: []string{"PATH=/bin"},
 		Mounts: []Mount{{Source: "/host", Target: "/workspace", ReadOnly: true}},
-		Tmpfs:  map[string]string{"/tmp": "rw,noexec"}, Memory: 512 << 20, Pids: 64}
+		Tmpfs:  map[string]string{"/tmp": "rw,noexec"}, NanoCPUs: 750_000_000,
+		Memory: 512 << 20, Pids: 64}
 	if err := engine.Run(t.Context(), request, bytes.NewReader(nil), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestRunBuildsExactIsolatedContainerProfile(t *testing.T) {
 				Type: mount.TypeBind, Source: "/host", Target: "/workspace", ReadOnly: true,
 			}},
 			Resources: container.Resources{
-				NanoCPUs: 1_000_000_000, Memory: 512 << 20, PidsLimit: &pids,
+				NanoCPUs: 750_000_000, Memory: 512 << 20, PidsLimit: &pids,
 			},
 		},
 	}

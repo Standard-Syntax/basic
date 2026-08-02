@@ -387,6 +387,47 @@ func TestServiceRejectsArtifactAndPathBeforeApplicator(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsCreateOverExistingFileBeforeWorkflowOrApplicator(t *testing.T) {
+	request, proposal, _ := executionFixture(t)
+	proposal.Changes[2].Operation = reasoningv1.FileOperation_FILE_OPERATION_CREATE
+	proposal.Changes[2].ExpectedOriginalSha256 = sha256Hex(nil)
+	replacement := "package reasoning\n"
+	proposal.Changes[2].ReplacementContent = &replacement
+	proposalBody, err := proto.MarshalOptions{Deterministic: true}.Marshal(proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, worktrees, commit := fixtureRepository(t, request)
+	request.BaseCommit = commit
+	digest := sha256Hex(proposalBody)
+	artifact := workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
+	applicator := &localApplicator{}
+	workflowStore := &fakeWorkflow{}
+	service, err := NewService(Config{
+		RepositoryRoot: repository, WorktreeRoot: worktrees, WorkerImage: "test",
+		Limits: DefaultLimits(), ActorID: uuid.NewString(),
+		AuthorName: "Harness Execution", AuthorEmail: "execution@harness.invalid",
+	}, memoryArtifacts{digest: proposalBody}, applicator, workflowStore, NewMemoryExecutionLedger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := request.GetEnvelope().GetCreatedAt().AsTime().Add(time.Minute)
+	service.now = func() time.Time { return now }
+	lease := workflow.LeaseRef{
+		ID: uuid.NewString(), OwnerID: uuid.NewString(), ExpiresAt: now.Add(time.Hour),
+		FencingToken: request.GetEnvelope().GetAttempt(),
+	}
+	_, err = service.Execute(t.Context(), Request{
+		ExecutionID: uuid.NewString(), ExecutionTimestamp: now,
+		Implementation: request, Proposal: proposal, ProposalArtifact: artifact,
+		Lease: lease, ExpectedTaskRevision: 3,
+	})
+	if !errors.Is(err, ErrUnsafePath) || len(workflowStore.commands) != 0 || applicator.calls.Load() != 0 {
+		t.Fatalf("error=%v workflow=%d applicator=%d",
+			err, len(workflowStore.commands), applicator.calls.Load())
+	}
+}
+
 func TestFinalWorkflowFailureRemovesCandidateRef(t *testing.T) {
 	request, proposal, proposalBody := executionFixture(t)
 	repository, worktrees, commit := fixtureRepository(t, request)
