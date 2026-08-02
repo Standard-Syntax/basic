@@ -5,18 +5,7 @@
   "branch": "beta/task-graph-atomicity",
   "checkpoints_count": 1,
   "files_touched": [
-    "docs/architecture.md",
-    "docs/decision-log.md",
-    "docs/resource-analysis.md",
-    "docs/security.md",
-    "go/cmd/api-service/main.go",
-    "go/internal/controlapi/intake_integration_test.go",
-    "go/internal/controlapi/server.go",
-    "go/internal/controlapi/server_test.go",
-    "go/internal/controlapi/task_graph.go",
-    "go/internal/controlapi/task_graph_integration_test.go",
-    "go/internal/runtime/bindings.go",
-    "go/internal/runtime/ledger.go"
+    "go/internal/controlapi/task_graph_integration_test.go"
   ],
   "sessions": [
     {
@@ -28,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 61851,
+    "input_tokens": 30189,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1947392,
-    "output_tokens": 12310,
-    "api_call_count": 21
+    "cache_read_tokens": 4716032,
+    "output_tokens": 3308,
+    "api_call_count": 26
   }
 }
