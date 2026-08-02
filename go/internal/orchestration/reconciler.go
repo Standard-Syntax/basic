@@ -243,7 +243,12 @@ func (r *Reconciler) handleFailure(
 		return handleErr
 	}
 	if errors.Is(handleErr, postgresutil.ErrTransient) {
-		backoff := saturatingBackoff(r.config.InitialBackoff, job.RetryCount, time.Minute)
+		if job.TransientRescheduleCount+1 >= r.config.MaxRetries {
+			return r.fail(ctx, job, handleErr, logger)
+		}
+		backoff := saturatingBackoff(
+			r.config.InitialBackoff, job.TransientRescheduleCount, time.Minute,
+		)
 		err := r.ledger.RescheduleTransient(
 			ctx, job.ID, r.config.OwnerID, job.FencingToken, r.now().Add(backoff),
 		)

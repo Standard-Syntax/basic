@@ -249,27 +249,7 @@ func compileTrustedChecks(values []string) (map[string]struct{}, error) {
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/healthz" {
-		if !requireMethod(w, request, http.MethodGet) {
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-	if request.URL.Path == "/readyz" {
-		if !requireMethod(w, request, http.MethodGet) {
-			return
-		}
-		if s.config.Ready != nil {
-			ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
-			err := s.config.Ready(ctx)
-			cancel()
-			if err != nil {
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
-				return
-			}
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	if s.servePublicEndpoint(w, request) {
 		return
 	}
 	principal, ok := s.authenticate(request)
@@ -279,28 +259,65 @@ func (s *Server) serveHTTP(w http.ResponseWriter, request *http.Request) {
 	}
 	counted := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 	started := time.Now()
-	defer func() {
-		elapsed := time.Since(started)
-		s.requests.Add(1)
-		s.elapsedNS.Add(uint64(elapsed))
-		if counted.status >= http.StatusBadRequest {
-			s.failures.Add(1)
+	defer s.observeRequest(request, principal, counted, started)
+	s.routeAuthenticated(counted, request, principal)
+}
+
+func (s *Server) servePublicEndpoint(w http.ResponseWriter, request *http.Request) bool {
+	switch request.URL.Path {
+	case "/healthz":
+		if !requireMethod(w, request, http.MethodGet) {
+			return true
 		}
-		attributes := []any{
-			"method", request.Method, "path", request.URL.Path,
-			"status", counted.status, "elapsed_nanoseconds", elapsed.Nanoseconds(),
-			"principal_id", principal.ID,
-			"idempotency_key", request.Header.Get("Idempotency-Key"),
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return true
+	case "/readyz":
+		if !requireMethod(w, request, http.MethodGet) {
+			return true
 		}
-		if runID, _, ok := parseRunPath(request.URL.Path); ok {
-			attributes = append(attributes, "run_id", runID)
+		if s.config.Ready != nil {
+			ctx, cancel := context.WithTimeout(request.Context(), 3*time.Second)
+			err := s.config.Ready(ctx)
+			cancel()
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+				return true
+			}
 		}
-		if taskID, _, ok := parseTaskPath(request.URL.Path); ok {
-			attributes = append(attributes, "task_id", taskID)
-		}
-		s.logger.Info("control API request", attributes...)
-	}()
-	w = counted
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) observeRequest(
+	request *http.Request, principal Principal, counted *statusWriter, started time.Time,
+) {
+	elapsed := time.Since(started)
+	s.requests.Add(1)
+	s.elapsedNS.Add(uint64(elapsed))
+	if counted.status >= http.StatusBadRequest {
+		s.failures.Add(1)
+	}
+	attributes := []any{
+		"method", request.Method, "path", request.URL.Path,
+		"status", counted.status, "elapsed_nanoseconds", elapsed.Nanoseconds(),
+		"principal_id", principal.ID,
+		"idempotency_key", request.Header.Get("Idempotency-Key"),
+	}
+	if runID, _, ok := parseRunPath(request.URL.Path); ok {
+		attributes = append(attributes, "run_id", runID)
+	}
+	if taskID, _, ok := parseTaskPath(request.URL.Path); ok {
+		attributes = append(attributes, "task_id", taskID)
+	}
+	s.logger.Info("control API request", attributes...)
+}
+
+func (s *Server) routeAuthenticated(
+	w http.ResponseWriter, request *http.Request, principal Principal,
+) {
 	if request.URL.Path == "/metrics" {
 		if !requireMethod(w, request, http.MethodGet) {
 			return
@@ -468,7 +485,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeRawJSON(w, reservation.StatusCode, reservation.Response)
 		return
 	}
-	operationParent := request.Context()
+	var operationParent context.Context
 	var operationCancel context.CancelFunc
 	if _, suffix, ok := parseRunPath(request.URL.Path); ok && suffix == "/approval" {
 		operationParent, operationCancel = context.WithTimeout(
@@ -644,19 +661,15 @@ func (s *Server) retryTask(
 	if _, err := uuid.Parse(body.RunID); err != nil {
 		return 0, nil, workflow.ErrInvalid
 	}
-	task, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
-	if err != nil {
-		return 0, nil, err
-	}
 	expected, err := requiredRevision(request.Header.Get("If-Match"))
-	if err != nil || expected != task.Revision {
+	if err != nil {
 		return 0, nil, workflow.ErrRevisionConflict
 	}
 	result, err := s.workflow.ExecuteTask(request.Context(), workflow.RetryTask{
 		Meta: s.envelope(
 			key, s.config.ServiceActorID, workflow.ActorWorkflowService, expected, body.DecisionTime,
 		),
-		Run: task.RunID, ID: task.ID,
+		Run: body.RunID, ID: taskID,
 	})
 	if err != nil {
 		return 0, nil, err
@@ -666,6 +679,10 @@ func (s *Server) retryTask(
 	}
 	if result.State != string(workflow.TaskStateReady) {
 		return 0, nil, workflow.ErrInvalidTransition
+	}
+	task, err := s.workflow.GetTask(request.Context(), body.RunID, taskID)
+	if err != nil {
+		return 0, nil, err
 	}
 	attempt := task.CurrentAttempt + 1
 	if err := s.runtime.Enqueue(request.Context(), runtime.Job{

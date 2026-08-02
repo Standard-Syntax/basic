@@ -82,6 +82,35 @@ func (c *Client) ImageID(ctx context.Context, image string) (string, error) {
 func (c *Client) Run(
 	ctx context.Context, request RunRequest, input io.Reader, output io.Writer,
 ) (runErr error) {
+	created, err := c.api.ContainerCreate(ctx, containerCreateOptions(request))
+	if err != nil {
+		return fmt.Errorf("create worker container: %w", err)
+	}
+	cleanupArmed := true
+	defer c.cleanupCreated(ctx, created.ID, &cleanupArmed, &runErr)
+	attached, err := c.api.ContainerAttach(ctx, created.ID, client.ContainerAttachOptions{
+		Stream: true, Stdin: true, Stdout: true, Stderr: true,
+	})
+	if err != nil {
+		return fmt.Errorf("attach worker container: %w", err)
+	}
+	defer attached.Close()
+	wait := c.api.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{
+		Condition: container.WaitConditionRemoved,
+	})
+	if _, err := c.api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
+		return fmt.Errorf("start worker container: %w", err)
+	}
+	copyDone := copyContainerStreams(attached, input, output)
+	if err := waitForContainer(ctx, attached, wait, copyDone); err != nil {
+		return err
+	}
+	// The removed wait condition confirms terminal AutoRemove completed.
+	cleanupArmed = false
+	return nil
+}
+
+func containerCreateOptions(request RunRequest) client.ContainerCreateOptions {
 	mounts := make([]mount.Mount, 0, len(request.Mounts))
 	for _, item := range request.Mounts {
 		mounts = append(mounts, mount.Mount{
@@ -90,7 +119,7 @@ func (c *Client) Run(
 		})
 	}
 	pids := request.Pids
-	created, err := c.api.ContainerCreate(ctx, client.ContainerCreateOptions{
+	return client.ContainerCreateOptions{
 		Name: request.Name,
 		Config: &container.Config{
 			Image: request.Image, User: request.User, WorkingDir: request.WorkingDir,
@@ -105,36 +134,27 @@ func (c *Client) Run(
 				NanoCPUs: 1_000_000_000, Memory: request.Memory, PidsLimit: &pids,
 			},
 		},
-	})
-	if err != nil {
-		return fmt.Errorf("create worker container: %w", err)
 	}
-	cleanupArmed := true
-	defer func() {
-		if !cleanupArmed {
-			return
-		}
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if _, err := c.api.ContainerRemove(
-			cleanupCtx, created.ID, client.ContainerRemoveOptions{Force: true},
-		); err != nil && runErr == nil {
-			runErr = fmt.Errorf("remove worker container: %w", err)
-		}
-	}()
-	attached, err := c.api.ContainerAttach(ctx, created.ID, client.ContainerAttachOptions{
-		Stream: true, Stdin: true, Stdout: true, Stderr: true,
-	})
-	if err != nil {
-		return fmt.Errorf("attach worker container: %w", err)
+}
+
+func (c *Client) cleanupCreated(
+	ctx context.Context, id string, armed *bool, runErr *error,
+) {
+	if !*armed {
+		return
 	}
-	defer attached.Close()
-	wait := c.api.ContainerWait(ctx, created.ID, client.ContainerWaitOptions{
-		Condition: container.WaitConditionRemoved,
-	})
-	if _, err := c.api.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return fmt.Errorf("start worker container: %w", err)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if _, err := c.api.ContainerRemove(
+		cleanupCtx, id, client.ContainerRemoveOptions{Force: true},
+	); err != nil && *runErr == nil {
+		*runErr = fmt.Errorf("remove worker container: %w", err)
 	}
+}
+
+func copyContainerStreams(
+	attached client.ContainerAttachResult, input io.Reader, output io.Writer,
+) <-chan error {
 	go func() {
 		_, _ = io.Copy(attached.Conn, input)
 		_ = attached.CloseWrite()
@@ -144,6 +164,13 @@ func (c *Client) Run(
 		_, err := stdcopy.StdCopy(output, output, attached.Reader)
 		copyDone <- err
 	}()
+	return copyDone
+}
+
+func waitForContainer(
+	ctx context.Context, attached client.ContainerAttachResult,
+	wait client.ContainerWaitResult, copyDone <-chan error,
+) error {
 	select {
 	case <-ctx.Done():
 		attached.Close()
@@ -163,8 +190,6 @@ func (c *Client) Run(
 		if status.StatusCode != 0 {
 			return fmt.Errorf("worker container exited with status %d", status.StatusCode)
 		}
-		// The removed wait condition confirms terminal AutoRemove completed.
-		cleanupArmed = false
 		return nil
 	}
 }

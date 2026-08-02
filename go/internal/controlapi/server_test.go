@@ -72,6 +72,7 @@ type fakeRuntime struct {
 	intakeContextErr  error
 	stages            []runtime.StageStatus
 	enqueued          []runtime.Job
+	enqueueErr        error
 }
 
 type fakeRunIntake struct {
@@ -117,6 +118,9 @@ func (*fakeRuntime) RenewIdempotency(context.Context, string, uint64, time.Durat
 	return nil
 }
 func (f *fakeRuntime) Enqueue(_ context.Context, job runtime.Job) error {
+	if f.enqueueErr != nil {
+		return f.enqueueErr
+	}
 	f.enqueued = append(f.enqueued, job)
 	return nil
 }
@@ -312,6 +316,39 @@ func TestRetryTaskQueuesNextAttemptAndExhaustionReturns422(t *testing.T) {
 	server.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusUnprocessableEntity || len(runtimeLedger.enqueued) != 0 {
 		t.Fatalf("exhausted response=%d %s jobs=%+v", response.Code, response.Body, runtimeLedger.enqueued)
+	}
+}
+
+func TestRetryTaskSameKeyReplayRepairsMissedEnqueue(t *testing.T) {
+	server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
+	runID, taskID, key := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	workflowStore.task = &workflow.Task{
+		ID: taskID, RunID: runID, Revision: 6, State: workflow.TaskStateReady,
+		CurrentAttempt: 1, MaxAttempts: 2,
+	}
+	workflowStore.taskResult = workflow.CommandResult{
+		AggregateID: taskID, State: string(workflow.TaskStateReady), Revision: 6, Replay: true,
+	}
+	call := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/tasks/"+taskID+"/retry", strings.NewReader(
+			`{"run_id":"`+runID+`","decision_timestamp":"2026-08-01T12:00:00Z"}`))
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Idempotency-Key", key)
+		request.Header.Set("If-Match", `"5"`)
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+		return response
+	}
+	runtimeLedger.enqueueErr = errors.New("injected enqueue failure")
+	if response := call(); response.Code != http.StatusInternalServerError {
+		t.Fatalf("first response=%d %s", response.Code, response.Body)
+	}
+	runtimeLedger.enqueueErr = nil
+	if response := call(); response.Code != http.StatusOK || len(runtimeLedger.enqueued) != 1 {
+		t.Fatalf("repair response=%d %s jobs=%+v", response.Code, response.Body, runtimeLedger.enqueued)
+	}
+	if len(workflowStore.taskCommands) != 2 || !workflowStore.taskResult.Replay {
+		t.Fatalf("workflow commands=%d result=%+v", len(workflowStore.taskCommands), workflowStore.taskResult)
 	}
 }
 

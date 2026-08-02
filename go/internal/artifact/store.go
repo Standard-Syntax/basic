@@ -74,41 +74,59 @@ func (s *Store) sweepTemporaryFiles(olderThan time.Time) error {
 		return err
 	}
 	for _, name := range shards {
-		if len(name) != 2 || strings.Trim(name, "0123456789abcdef") != "" {
+		if !validShardName(name) {
 			continue
 		}
-		shard, err := s.openShard(name, false)
-		if err != nil {
+		if err := s.sweepShard(name, olderThan); err != nil {
 			return err
 		}
-		names, readErr := shard.Readdirnames(-1)
-		if readErr != nil {
+	}
+	return nil
+}
+
+func validShardName(name string) bool {
+	return len(name) == 2 && strings.Trim(name, "0123456789abcdef") == ""
+}
+
+func (s *Store) sweepShard(name string, olderThan time.Time) error {
+	shard, err := s.openShard(name, false)
+	if errors.Is(err, ErrUnsafe) || errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	names, err := shard.Readdirnames(-1)
+	if err != nil {
+		_ = shard.Close()
+		return err
+	}
+	for _, candidate := range names {
+		if err := sweepTemporaryAt(shard, candidate, olderThan); err != nil {
 			_ = shard.Close()
-			return readErr
-		}
-		for _, candidate := range names {
-			if !temporaryPattern.MatchString(candidate) {
-				continue
-			}
-			var stat unix.Stat_t
-			if err := unix.Fstatat(int(shard.Fd()), candidate, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-				if errors.Is(err, unix.ENOENT) {
-					continue
-				}
-				_ = shard.Close()
-				return err
-			}
-			modified := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
-			if stat.Mode&unix.S_IFMT == unix.S_IFREG && modified.Before(olderThan) {
-				if err := unix.Unlinkat(int(shard.Fd()), candidate, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-					_ = shard.Close()
-					return err
-				}
-			}
-		}
-		if err := shard.Close(); err != nil {
 			return err
 		}
+	}
+	return shard.Close()
+}
+
+func sweepTemporaryAt(shard *os.File, candidate string, olderThan time.Time) error {
+	if !temporaryPattern.MatchString(candidate) {
+		return nil
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstatat(int(shard.Fd()), candidate, &stat, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	modified := time.Unix(stat.Mtim.Sec, stat.Mtim.Nsec)
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || !modified.Before(olderThan) {
+		return nil
+	}
+	if err := unix.Unlinkat(int(shard.Fd()), candidate, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
 	}
 	return nil
 }

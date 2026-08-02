@@ -265,6 +265,10 @@ func TestGitHubRepositoryPathsRejectEscapingSegments(t *testing.T) {
 	if err != nil || path != "/repos/owner-name/repo.name/pulls/17" {
 		t.Fatalf("path=%q err=%v", path, err)
 	}
+	path, err = exactPullPath("owner-name", ".github", 17)
+	if err != nil || path != "/repos/owner-name/.github/pulls/17" {
+		t.Fatalf("dot repository path=%q err=%v", path, err)
+	}
 }
 
 func prInput() DraftPullRequestInput {

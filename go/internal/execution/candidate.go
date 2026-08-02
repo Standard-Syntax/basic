@@ -85,6 +85,7 @@ func prepareCandidateIndex(
 	if _, err := gitIndexOutput(
 		ctx, repository, indexPath, nil, "read-tree", baseCommit,
 	); err != nil {
+		_ = os.RemoveAll(indexRoot)
 		return "", fmt.Errorf("read candidate base tree: %w", err)
 	}
 	return indexPath, nil

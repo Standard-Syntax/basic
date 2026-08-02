@@ -79,9 +79,12 @@ func (d DockerCheckExecutor) Run(
 		Memory: 3 << 30, Pids: 256,
 	}, bytes.NewReader(payload), output)
 	if err != nil {
-		if ctx.Err() != nil {
+		if runCtx.Err() != nil {
 			removeVerificationContainer(engine, name)
-			return ExecutionMeasurement{}, ctx.Err()
+			if ctx.Err() != nil {
+				return ExecutionMeasurement{}, ctx.Err()
+			}
+			return ExecutionMeasurement{}, fmt.Errorf("verification worker: %w", runCtx.Err())
 		}
 		return ExecutionMeasurement{}, fmt.Errorf(
 			"verification worker: %w: %s", err, strings.TrimSpace(string(output.Bytes())),

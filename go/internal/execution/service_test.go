@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,21 @@ import (
 )
 
 type memoryArtifacts map[string][]byte
+
+func TestPrepareCandidateIndexCleansDirectoryAfterInitializationFailure(t *testing.T) {
+	worktreeRoot := t.TempDir()
+	_, err := prepareCandidateIndex(t.Context(), t.TempDir(), worktreeRoot, strings.Repeat("f", 40))
+	if err == nil {
+		t.Fatal("invalid repository initialized a candidate index")
+	}
+	entries, readErr := os.ReadDir(worktreeRoot)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed initialization left entries: %v", entries)
+	}
+}
 
 func (m memoryArtifacts) Get(_ context.Context, reference workflow.ArtifactRef) ([]byte, error) {
 	value, ok := m[reference.Digest]

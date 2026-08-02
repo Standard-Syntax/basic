@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
+	"golang.org/x/sys/unix"
 )
 
 func TestStoreConcurrentIdempotentPutAndBoundedGet(t *testing.T) {
@@ -109,6 +110,30 @@ func TestOpenStoreDoesNotCreateMissingRoot(t *testing.T) {
 
 func TestWritableOpenSweepsOnlyOldRegularTemporaryFiles(t *testing.T) {
 	root := t.TempDir()
+	old, recent, nonconforming, symlink, unexpectedFile, unexpectedLink :=
+		prepareSweepFixtures(t, root)
+	readOnly, err := OpenStore(root, DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := readOnly.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertPathExists(t, old, "read-only open swept file")
+	writable, err := NewStore(root, DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writable.Close()
+	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old temporary file remains: %v", err)
+	}
+	assertPathsExist(t, []string{recent, nonconforming, symlink}, "preserved temporary entry")
+	assertPathsExist(t, []string{unexpectedFile, unexpectedLink}, "unexpected root entry")
+}
+
+func prepareSweepFixtures(t *testing.T, root string) (string, string, string, string, string, string) {
+	t.Helper()
 	shard := filepath.Join(root, "ab")
 	if err := os.Mkdir(shard, 0o700); err != nil {
 		t.Fatal(err)
@@ -125,33 +150,39 @@ func TestWritableOpenSweepsOnlyOldRegularTemporaryFiles(t *testing.T) {
 	if err := os.Symlink(old, symlink); err != nil {
 		t.Fatal(err)
 	}
+	unexpectedFile := filepath.Join(root, "cd")
+	unexpectedLink := filepath.Join(root, "ef")
+	if err := os.WriteFile(unexpectedFile, []byte("not a shard"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shard, unexpectedLink); err != nil {
+		t.Fatal(err)
+	}
 	stale := time.Now().Add(-25 * time.Hour)
-	for _, path := range []string{old, nonconforming, symlink} {
+	for _, path := range []string{old, nonconforming} {
 		if err := os.Chtimes(path, stale, stale); err != nil {
 			t.Fatal(err)
 		}
 	}
-	readOnly, err := OpenStore(root, DefaultMaxBytes)
-	if err != nil {
+	times := []unix.Timespec{
+		unix.NsecToTimespec(stale.UnixNano()), unix.NsecToTimespec(stale.UnixNano()),
+	}
+	if err := unix.UtimesNanoAt(unix.AT_FDCWD, symlink, times, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		t.Fatal(err)
 	}
-	if err := readOnly.Close(); err != nil {
-		t.Fatal(err)
+	return old, recent, nonconforming, symlink, unexpectedFile, unexpectedLink
+}
+
+func assertPathsExist(t *testing.T, paths []string, message string) {
+	t.Helper()
+	for _, path := range paths {
+		assertPathExists(t, path, message)
 	}
-	if _, err := os.Lstat(old); err != nil {
-		t.Fatalf("read-only open swept file: %v", err)
-	}
-	writable, err := NewStore(root, DefaultMaxBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer writable.Close()
-	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("old temporary file remains: %v", err)
-	}
-	for _, path := range []string{recent, nonconforming, symlink} {
-		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("preserved %s: %v", path, err)
-		}
+}
+
+func assertPathExists(t *testing.T, path, message string) {
+	t.Helper()
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("%s: %s: %v", message, path, err)
 	}
 }

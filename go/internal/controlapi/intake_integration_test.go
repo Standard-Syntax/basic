@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -227,6 +228,30 @@ func TestAtomicRunIntakeReplaysPostcommitCrashWithoutExternalWork(t *testing.T) 
 	if _, err := fixture.coordinator.Accept(t.Context(), changed); !errors.Is(err, runtime.ErrConflict) {
 		t.Fatalf("changed request error=%v", err)
 	}
+}
+
+func TestAtomicRunIntakeIgnoresRenewalFenceLossAfterCommit(t *testing.T) {
+	fixture := newIntakeFixture(t)
+	fixture.coordinator.renewEvery = time.Millisecond
+	var committed atomic.Bool
+	fixture.coordinator.renew = func(context.Context, string, uint64, time.Duration) error {
+		if committed.Load() {
+			return runtime.ErrTerminal
+		}
+		return nil
+	}
+	fixture.coordinator.inject = func(point IntakeFaultPoint) error {
+		if point == FaultIntakeAfterCommit {
+			committed.Store(true)
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil
+	}
+	result, err := fixture.coordinator.Accept(t.Context(), fixture.request)
+	if err != nil || result == nil || result.StatusCode != http.StatusCreated {
+		t.Fatalf("committed result=%#v err=%v", result, err)
+	}
+	assertCompleteRun(t, fixture)
 }
 
 func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {

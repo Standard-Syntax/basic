@@ -173,6 +173,52 @@ func TestPostgresCompleteAndEnqueueIsAtomic(t *testing.T) {
 	}
 }
 
+func TestPostgresTransientRescheduleUsesSeparateCounter(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL is required")
+	}
+	ctx := t.Context()
+	if err := workflow.Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	at := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
+		Meta: workflow.CommandEnvelope{
+			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
+			Timestamp: at, CorrelationID: commandID, CausationID: commandID,
+		},
+		ID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger := NewLedger(pool)
+	job := Job{ID: uuid.NewString(), RunID: runID, Attempt: 1, Stage: "start", AvailableAt: at}
+	if err := ledger.Enqueue(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	owner := uuid.NewString()
+	claimed, found, err := ledger.Claim(ctx, owner, at, time.Minute)
+	if err != nil || !found {
+		t.Fatalf("claim=%+v found=%v err=%v", claimed, found, err)
+	}
+	next := at.Add(time.Second)
+	if err := ledger.RescheduleTransient(ctx, job.ID, owner, claimed.FencingToken, next); err != nil {
+		t.Fatal(err)
+	}
+	claimed, found, err = ledger.Claim(ctx, owner, next, time.Minute)
+	if err != nil || !found || claimed.RetryCount != 0 || claimed.TransientRescheduleCount != 1 {
+		t.Fatalf("reclaim=%+v found=%v err=%v", claimed, found, err)
+	}
+}
+
 func TestPostgresRuntimeBindingsCheckpointOnceAndRejectMutation(t *testing.T) {
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {

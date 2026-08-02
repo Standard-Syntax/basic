@@ -532,7 +532,14 @@ func BuildImplementationContext(
 func readContextBatch(
 	ctx context.Context, root, commit string, entries []*reasoningv1.RepositoryEntry, maximum int64,
 ) ([]*reasoningv1.RepositoryContextFile, error) {
-	command := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "--batch", "-Z")
+	for _, entry := range entries {
+		if !safeRepoPath(entry.Path) {
+			return nil, ErrScope
+		}
+	}
+	// Git 2.38's -z mode gives NUL-framed requests. Repository paths reject
+	// control characters, so its newline-framed responses remain unambiguous.
+	command := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "--batch", "-z")
 	command.Env = subprocess.Git()
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -547,36 +554,37 @@ func readContextBatch(
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
+	writeDone := make(chan error, 1)
+	go func() {
+		var writeErr error
+		for _, entry := range entries {
+			if _, writeErr = io.WriteString(stdin, commit+":"+entry.Path+"\x00"); writeErr != nil {
+				break
+			}
+		}
+		if closeErr := stdin.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		writeDone <- writeErr
+	}()
 	abort := func() {
+		_ = stdin.Close()
 		_ = command.Process.Kill()
 		_ = command.Wait()
-	}
-	for _, entry := range entries {
-		if !safeRepoPath(entry.Path) {
-			_ = stdin.Close()
-			abort()
-			return nil, ErrScope
-		}
-		if _, err := io.WriteString(stdin, commit+":"+entry.Path+"\x00"); err != nil {
-			_ = stdin.Close()
-			abort()
-			return nil, err
-		}
-	}
-	if err := stdin.Close(); err != nil {
-		abort()
-		return nil, err
+		<-writeDone
 	}
 	reader := bufio.NewReader(stdout)
 	result := make([]*reasoningv1.RepositoryContextFile, 0, len(entries))
 	remaining := maximum
 	for _, entry := range entries {
-		header, err := reader.ReadString(0)
+		header, err := reader.ReadString('\n')
 		if err != nil {
 			abort()
-			return nil, fmt.Errorf("read Git batch header: %w", err)
+			return nil, fmt.Errorf(
+				"read Git batch header: %w: %s", err, strings.TrimSpace(stderr.String()),
+			)
 		}
-		fields := strings.Fields(strings.TrimSuffix(header, "\x00"))
+		fields := strings.Fields(strings.TrimSuffix(header, "\n"))
 		if len(fields) != 3 || fields[1] != "blob" {
 			abort()
 			return nil, ErrScope
@@ -592,7 +600,7 @@ func readContextBatch(
 			return nil, err
 		}
 		terminator, err := reader.ReadByte()
-		if err != nil || terminator != 0 {
+		if err != nil || terminator != '\n' {
 			abort()
 			return nil, ErrScope
 		}
@@ -604,6 +612,11 @@ func readContextBatch(
 		result = append(result, &reasoningv1.RepositoryContextFile{
 			Path: entry.Path, Sha256: entry.Sha256, Content: string(body),
 		})
+	}
+	if err := <-writeDone; err != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, err
 	}
 	if err := command.Wait(); err != nil {
 		return nil, fmt.Errorf("read Git batch: %w: %s", err, strings.TrimSpace(stderr.String()))

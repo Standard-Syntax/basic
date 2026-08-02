@@ -35,8 +35,11 @@ var (
 	ErrCredentialUnavailable = errors.New("Anthropic credential unavailable")
 	ErrModelUnavailable      = errors.New("Anthropic model unavailable")
 	ErrContentSecret         = errors.New("provider context contains a secret")
-	secretAssignment         = regexp.MustCompile(
-		`(?i)(api[_-]?key|authorization|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*([^\s,;]+)`,
+	authorizationAssignment  = regexp.MustCompile(
+		`(?i)authorization\s*[:=]\s*([^\r\n,;]+)`,
+	)
+	secretAssignment = regexp.MustCompile(
+		`(?i)(api[_-]?key|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*([^\s,;]+)`,
 	)
 )
 
@@ -613,12 +616,25 @@ func guardProviderContent(key, source string, body []byte) error {
 	if key != "" && strings.Contains(text, key) {
 		return &ContentSecretError{Source: source}
 	}
+	for _, match := range authorizationAssignment.FindAllSubmatch(body, -1) {
+		if len(match) == 2 && likelySecretAssignment(authorizationCredential(string(match[1]))) {
+			return &ContentSecretError{Source: source}
+		}
+	}
 	for _, match := range secretAssignment.FindAllSubmatch(body, -1) {
 		if len(match) == 3 && likelySecretAssignment(string(match[2])) {
 			return &ContentSecretError{Source: source}
 		}
 	}
 	return nil
+}
+
+func authorizationCredential(value string) string {
+	value = strings.TrimSpace(value)
+	if _, credential, found := strings.Cut(value, " "); found {
+		return strings.TrimSpace(credential)
+	}
+	return value
 }
 
 func likelySecretAssignment(value string) bool {

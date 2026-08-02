@@ -25,19 +25,20 @@ var (
 )
 
 type Job struct {
-	ID           string
-	RunID        string
-	TaskID       *string
-	Attempt      uint32
-	Stage        string
-	State        string
-	AvailableAt  time.Time
-	ClaimOwner   *string
-	ClaimExpires *time.Time
-	FencingToken uint64
-	RetryCount   uint32
-	Result       *workflow.ArtifactRef
-	Failure      *workflow.ArtifactRef
+	ID                       string
+	RunID                    string
+	TaskID                   *string
+	Attempt                  uint32
+	Stage                    string
+	State                    string
+	AvailableAt              time.Time
+	ClaimOwner               *string
+	ClaimExpires             *time.Time
+	FencingToken             uint64
+	RetryCount               uint32
+	TransientRescheduleCount uint32
+	Result                   *workflow.ArtifactRef
+	Failure                  *workflow.ArtifactRef
 }
 
 // StageStatus is the secret-safe operator view of one durable stage job.
@@ -321,6 +322,7 @@ func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl tim
 	var claimExpires *time.Time
 	err = tx.QueryRow(ctx, `SELECT job_id::text,run_id::text,task_id::text,attempt,stage,
 		state,available_at,claim_owner::text,claim_expires_at,fencing_token,retry_count,
+		transient_reschedule_count,
 		result_uri,result_digest,failure_uri,failure_digest
 		FROM runtime_stage_jobs
 		WHERE state IN ('READY','RETRY','CLAIMED') AND available_at <= $1
@@ -328,7 +330,8 @@ func (l *Ledger) Claim(ctx context.Context, owner string, now time.Time, ttl tim
 		ORDER BY available_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1`, now.UTC()).Scan(
 		&job.ID, &job.RunID, &taskID, &job.Attempt, &job.Stage, &job.State,
 		&job.AvailableAt, &claimOwner, &claimExpires, &job.FencingToken,
-		&job.RetryCount, &resultURI, &resultDigest, &failureURI, &failureDigest)
+		&job.RetryCount, &job.TransientRescheduleCount,
+		&resultURI, &resultDigest, &failureURI, &failureDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -468,11 +471,13 @@ func (l *Ledger) Retry(
 }
 
 // RescheduleTransient releases a claim after a database concurrency conflict
-// without charging the stage's durable retry budget.
+// without charging the stage's ordinary retry budget. Its separate counter
+// bounds persistent conflicts and provides escalating backoff.
 func (l *Ledger) RescheduleTransient(
 	ctx context.Context, jobID, owner string, fence uint64, available time.Time,
 ) error {
 	tag, err := l.pool.Exec(ctx, `UPDATE runtime_stage_jobs SET state='RETRY',
+		transient_reschedule_count=transient_reschedule_count+1,
 		available_at=$4,claim_owner=NULL,claim_expires_at=NULL,updated_at=now()
 		WHERE job_id=$1 AND state='CLAIMED' AND claim_owner=$2 AND fencing_token=$3`,
 		jobID, owner, fence, available.UTC())

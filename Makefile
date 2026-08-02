@@ -128,6 +128,7 @@ ifneq ($(strip $(BETA_CONFIG)),)
 		test "$$(docker image inspect --format '{{.Id}}' basic-verification-worker:beta)" = "$$BETA_VERIFICATION_IMAGE"; \
 		docker compose down --volumes; docker compose up -d --wait postgres; status=0; \
 		cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+			BETA_LIVE_E2E=1 \
 			RUNTIME_PACKAGED=1 RUNTIME_API_BINARY="$$BETA_API_IMAGE" \
 			RUNTIME_WORKFLOW_BINARY="$$BETA_WORKFLOW_IMAGE" \
 			RUNTIME_EXECUTION_IMAGE="$$BETA_EXECUTION_IMAGE" \
@@ -146,6 +147,7 @@ else
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+		BETA_LIVE_E2E=1 \
 		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
 		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
 		go test -tags=integration -count=1 \

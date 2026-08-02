@@ -6,9 +6,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"reflect"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 )
 
@@ -58,15 +60,28 @@ func TestRunBuildsExactIsolatedContainerProfile(t *testing.T) {
 	if err := engine.Run(t.Context(), request, bytes.NewReader(nil), io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	config, host := api.create.Config, api.create.HostConfig
-	if config.Image != request.Image || config.User != request.User || config.WorkingDir != request.WorkingDir ||
-		!config.NetworkDisabled || host.NetworkMode != "none" || !host.ReadonlyRootfs || !host.AutoRemove ||
-		len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" || len(host.SecurityOpt) != 1 ||
-		host.SecurityOpt[0] != "no-new-privileges" || host.Resources.Memory != request.Memory ||
-		host.Resources.PidsLimit == nil || *host.Resources.PidsLimit != request.Pids ||
-		len(host.Mounts) != 1 || !host.Mounts[0].ReadOnly || host.Mounts[0].Source != "/host" ||
-		host.Mounts[0].Target != "/workspace" {
-		t.Fatalf("container profile config=%+v host=%+v", config, host)
+	pids := int64(64)
+	want := client.ContainerCreateOptions{
+		Name: "worker",
+		Config: &container.Config{
+			Image: "sha256:image", User: "1000:1000", WorkingDir: "/workspace",
+			Env: []string{"PATH=/bin"}, AttachStdin: true, AttachStdout: true,
+			AttachStderr: true, OpenStdin: true, StdinOnce: true, NetworkDisabled: true,
+		},
+		HostConfig: &container.HostConfig{
+			AutoRemove: true, NetworkMode: "none", ReadonlyRootfs: true,
+			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"},
+			Tmpfs: map[string]string{"/tmp": "rw,noexec"},
+			Mounts: []mount.Mount{{
+				Type: mount.TypeBind, Source: "/host", Target: "/workspace", ReadOnly: true,
+			}},
+			Resources: container.Resources{
+				NanoCPUs: 1_000_000_000, Memory: 512 << 20, PidsLimit: &pids,
+			},
+		},
+	}
+	if !reflect.DeepEqual(api.create, want) {
+		t.Fatalf("container profile=%+v want=%+v", api.create, want)
 	}
 }
 

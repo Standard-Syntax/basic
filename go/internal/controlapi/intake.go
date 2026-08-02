@@ -54,6 +54,8 @@ type RunIntakeCoordinator struct {
 	repositoryRoot string
 	policy         beta.Policy
 	inject         func(IntakeFaultPoint) error
+	renewEvery     time.Duration
+	renew          func(context.Context, string, uint64, time.Duration) error
 }
 
 const (
@@ -83,9 +85,12 @@ func NewRunIntakeCoordinator(
 	if err := configuredPolicy[0].Validate(); err != nil {
 		return nil, err
 	}
+	ledger := runtime.NewLedger(pool)
 	return &RunIntakeCoordinator{
-		pool: pool, ledger: runtime.NewLedger(pool), workflow: store,
+		pool: pool, ledger: ledger, workflow: store,
 		artifacts: artifacts, repositoryRoot: repositoryRoot, policy: configuredPolicy[0],
+		renewEvery: idempotencyRenewEvery,
+		renew:      ledger.RenewIdempotency,
 	}, nil
 }
 
@@ -110,13 +115,14 @@ func (c *RunIntakeCoordinator) Accept(
 		return reservation, err
 	}
 	fence := reservation.FencingToken
+	committed := false
 	workCtx, cancelWork := context.WithCancel(ctx)
 	renewed := make(chan error, 1)
 	go c.renewReservation(workCtx, cancelWork, request.Idempotency, fence, renewed)
 	defer func() {
 		cancelWork()
 		renewErr := <-renewed
-		if renewErr != nil && (err == nil || errors.Is(err, context.Canceled)) {
+		if !committed && renewErr != nil && (err == nil || errors.Is(err, context.Canceled)) {
 			result, err = nil, renewErr
 		}
 	}()
@@ -134,6 +140,7 @@ func (c *RunIntakeCoordinator) Accept(
 		}
 		return nil, c.abandonReservation(ctx, request.Idempotency.Key, fence, err)
 	}
+	committed = true
 	if err := c.fault(FaultIntakeAfterCommit); err != nil {
 		return nil, err
 	}
@@ -146,7 +153,7 @@ func (c *RunIntakeCoordinator) renewReservation(
 	ctx context.Context, cancel context.CancelFunc, request runtime.IdempotencyRequest,
 	fence uint64, done chan<- error,
 ) {
-	ticker := time.NewTicker(idempotencyRenewEvery)
+	ticker := time.NewTicker(c.renewEvery)
 	defer ticker.Stop()
 	for {
 		select {
@@ -155,7 +162,7 @@ func (c *RunIntakeCoordinator) renewReservation(
 			return
 		case <-ticker.C:
 			renewCtx, renewCancel := detachedCleanupContext(ctx)
-			err := c.ledger.RenewIdempotency(
+			err := c.renew(
 				renewCtx, request.Key, fence, request.ReservationTTL,
 			)
 			renewCancel()

@@ -110,6 +110,26 @@ func TestOnceReschedulesTransientDatabaseConflictWithoutRetryCharge(t *testing.T
 			worked, err, ledger.rescheduled, ledger.retried, ledger.failed)
 	}
 }
+
+func TestOnceFailsAfterBoundedTransientDatabaseConflicts(t *testing.T) {
+	owner := uuid.NewString()
+	ledger := &memoryLedger{found: true, job: runtime.Job{
+		ID: uuid.NewString(), RunID: uuid.NewString(), Stage: StageReasoning,
+		FencingToken: 7, RetryCount: 0, TransientRescheduleCount: 2,
+	}}
+	reconciler, err := New(Config{OwnerID: owner, ClaimTTL: time.Minute,
+		PollInterval: time.Millisecond, MaxRetries: 3, InitialBackoff: 10 * time.Millisecond},
+		ledger, &memoryArtifacts{}, handlersReturning(postgresutil.ErrTransient), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worked, err := reconciler.Once(t.Context())
+	if err != nil || !worked || len(ledger.rescheduled) != 0 || len(ledger.failed) != 1 ||
+		ledger.job.RetryCount != 0 {
+		t.Fatalf("worked=%v err=%v rescheduled=%v failed=%v job=%+v",
+			worked, err, ledger.rescheduled, ledger.failed, ledger.job)
+	}
+}
 func (m *memoryLedger) Fail(
 	_ context.Context, jobID, owner string, fence uint64,
 	failure workflow.ArtifactRef, at time.Time,

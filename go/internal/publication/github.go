@@ -18,7 +18,8 @@ import (
 
 const githubAccept = "application/vnd.github+json"
 
-var repositorySegmentPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?$`)
+var ownerSegmentPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+var repositorySegmentPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`)
 
 type GitHubRESTClient struct {
 	endpoint     *url.URL
@@ -212,7 +213,7 @@ func matchesExpectedPullRequest(value githubPullRequest, expected PullRequestExp
 }
 
 func exactPullPath(owner, repo string, number int64) (string, error) {
-	if !validRepositorySegment(owner) || !validRepositorySegment(repo) || number <= 0 {
+	if !validOwnerSegment(owner) || !validRepositorySegment(repo) || number <= 0 {
 		return "", ErrInvalidRequest
 	}
 	return url.JoinPath("/repos", owner, repo, "pulls", strconv.FormatInt(number, 10))
@@ -282,10 +283,14 @@ func (c *GitHubRESTClient) do(
 }
 
 func (c *GitHubRESTClient) pullPath(input DraftPullRequestInput) (string, error) {
-	if !validRepositorySegment(input.Owner) || !validRepositorySegment(input.Repo) {
+	if !validOwnerSegment(input.Owner) || !validRepositorySegment(input.Repo) {
 		return "", ErrInvalidRequest
 	}
 	return url.JoinPath("/repos", input.Owner, input.Repo, "pulls")
+}
+
+func validOwnerSegment(value string) bool {
+	return ownerSegmentPattern.MatchString(value)
 }
 
 func validRepositorySegment(value string) bool {

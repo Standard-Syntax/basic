@@ -408,6 +408,26 @@ func TestSecretAssignmentHeuristicAllowsTemplatesAndRejectsPlausibleSecrets(t *t
 	if !likelySecretAssignment("Abcd1234-SecretToken-XYZ") {
 		t.Fatal("plausible high-entropy assignment was not classified")
 	}
+	if err := guardProviderContent("active-key", "repository_context", []byte(
+		"Authorization: Bearer Unrelated-Token-1234567890!",
+	)); !errors.Is(err, ErrContentSecret) {
+		t.Fatalf("scheme-prefixed authorization was not rejected: %v", err)
+	}
+	for _, authorization := range []string{
+		"Basic dXNlcjpwYXNzd29yZA==",
+		"Token Abcd1234-SecretToken-XYZ",
+	} {
+		if err := guardProviderContent("active-key", "repository_context", []byte(
+			"Authorization: "+authorization,
+		)); !errors.Is(err, ErrContentSecret) {
+			t.Fatalf("authorization %q was not rejected: %v", authorization, err)
+		}
+	}
+	if err := guardProviderContent("active-key", "repository_context", []byte(
+		"Authorization: Bearer ${UNRELATED_TOKEN}",
+	)); err != nil {
+		t.Fatalf("authorization placeholder was rejected: %v", err)
+	}
 	err := guardProviderContent("active-key", "repository_context", []byte("active-key"))
 	var typed *ContentSecretError
 	if !errors.As(err, &typed) || typed.Source != "repository_context" ||
