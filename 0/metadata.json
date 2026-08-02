@@ -3,38 +3,59 @@
   "checkpoint_id": "01KZ0D7212ZGHF0A1R8WB7V4YJ",
   "session_id": "019fbeca-52ef-7492-8929-a4645a4b0538",
   "strategy": "manual-commit",
-  "created_at": "2026-08-02T05:07:24.587553244Z",
+  "created_at": "2026-08-02T12:45:44.668960531Z",
   "branch": "beta/lifecycle-failure-hardening",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/artifact/store_test.go"
+    "Makefile",
+    "go/internal/artifact/store_test.go",
+    "go/internal/dockerengine/client_test.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/verification/docker.go",
+    "go/internal/verification/docker_test.go"
   ],
   "agent": "Codex",
   "model": "gpt-5.6-sol",
-  "turn_id": "03e782f3f721",
-  "checkpoint_transcript_start": 1254,
-  "transcript_lines_at_start": 1254,
-  "compact_transcript_start": 280,
+  "turn_id": "3fe662472292",
+  "checkpoint_transcript_start": 1488,
+  "transcript_lines_at_start": 1488,
+  "compact_transcript_start": 335,
   "token_usage": {
-    "input_tokens": 34691,
+    "input_tokens": 105448,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 5943808,
-    "output_tokens": 7492,
-    "api_call_count": 30
+    "cache_read_tokens": 1425152,
+    "output_tokens": 7961,
+    "api_call_count": 21
   },
   "session_metrics": {
-    "turn_count": 2
+    "turn_count": 3
   },
   "initial_attribution": {
-    "calculated_at": "2026-08-02T05:07:24.429396452Z",
-    "agent_lines": 37,
-    "agent_removed": 26,
-    "human_added": 451,
+    "calculated_at": "2026-08-02T12:45:44.480224323Z",
+    "agent_lines": 99,
+    "agent_removed": 17,
+    "human_added": 424,
     "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 488,
-    "total_lines_changed": 670,
-    "agent_percentage": 9.402985074626866,
+    "total_committed": 523,
+    "total_lines_changed": 686,
+    "agent_percentage": 16.909620991253643,
     "metric_version": 2
-  }
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
 }

@@ -5,7 +5,14 @@
   "branch": "beta/lifecycle-failure-hardening",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/artifact/store_test.go"
+    "Makefile",
+    "go/internal/artifact/store_test.go",
+    "go/internal/dockerengine/client_test.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/verification/docker.go",
+    "go/internal/verification/docker_test.go"
   ],
   "sessions": [
     {
@@ -13,14 +20,14 @@
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
-      "prompt": ""
+      "prompt": "/0/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 34691,
+    "input_tokens": 105448,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 5943808,
-    "output_tokens": 7492,
-    "api_call_count": 30
+    "cache_read_tokens": 1425152,
+    "output_tokens": 7961,
+    "api_call_count": 21
   }
 }
