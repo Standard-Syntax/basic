@@ -5,8 +5,7 @@
   "branch": "beta/lifecycle-failure-hardening",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/controlapi/intake.go",
-    "go/internal/controlapi/intake_integration_test.go"
+    "go/internal/artifact/store_test.go"
   ],
   "sessions": [
     {
@@ -18,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 20917,
+    "input_tokens": 34691,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2972672,
-    "output_tokens": 2342,
-    "api_call_count": 16
+    "cache_read_tokens": 5943808,
+    "output_tokens": 7492,
+    "api_call_count": 30
   }
 }
