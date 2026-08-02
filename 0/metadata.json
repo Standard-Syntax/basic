@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ2AKC2CPSZFQSNWNE9144W7",
+  "session_id": "019fc49f-07cd-7fa3-ae4d-f66bb2e45f67",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-02T22:48:03.749627613Z",
+  "branch": "beta/publication-client-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/publication/credential.go",
+    "go/internal/publication/credential_test.go",
+    "go/internal/publication/github.go",
+    "go/internal/publication/github_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "48d558d27d72",
+  "checkpoint_transcript_start": 265,
+  "transcript_lines_at_start": 265,
+  "compact_transcript_start": 58,
+  "token_usage": {
+    "input_tokens": 27324,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1144064,
+    "output_tokens": 3196,
+    "api_call_count": 7
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-02T22:48:03.69238988Z",
+    "agent_lines": 83,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 83,
+    "total_lines_changed": 91,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
