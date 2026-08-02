@@ -121,6 +121,7 @@ type Server struct {
 	intake      RunIntake
 	artifacts   ArtifactStore
 	bindings    BindingStore
+	taskGraphs  TaskGraphApproval
 	approval    ApprovalService
 	publication PublicationService
 	principals  []principalDigest
@@ -152,7 +153,7 @@ func isNilDependency(value any) bool {
 func New(
 	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
 	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
-	publicationService PublicationService, logger *slog.Logger,
+	taskGraphApproval TaskGraphApproval, publicationService PublicationService, logger *slog.Logger,
 ) (*Server, error) {
 	normalized, err := normalizeServerConfig(config)
 	if err != nil {
@@ -183,6 +184,9 @@ func New(
 	if isNilDependency(approvalService) {
 		return nil, errors.New("approval service is required")
 	}
+	if isNilDependency(taskGraphApproval) {
+		return nil, errors.New("task graph approval service is required")
+	}
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
 		return nil, err
@@ -198,7 +202,7 @@ func New(
 	}
 	return &Server{
 		config: normalized, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
-		artifacts: artifacts, bindings: bindings, approval: approvalService,
+		artifacts: artifacts, bindings: bindings, taskGraphs: taskGraphApproval, approval: approvalService,
 		publication: publicationService, principals: principals,
 		checks: checks, logger: logger,
 	}, nil
@@ -831,23 +835,20 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 		definition := workflow.TaskDefinition{
 			ID: task.GetTaskId(), MaxAttempts: s.config.TaskMaxAttempts,
 		}
-		result, err := s.workflow.ExecuteRun(ctx, workflow.ApproveTaskGraph{
+		command := workflow.ApproveTaskGraph{
 			Meta: humanMeta("approve-task-graph", run.Revision), ID: run.ID,
 			TaskGraph: *run.TaskGraph, Tasks: []workflow.TaskDefinition{definition},
-		})
-		if err == nil {
-			taskID := definition.ID
-			err = s.bindings.CheckpointTaskGraph(ctx, run.ID, *run.TaskGraph,
-				runtime.TaskBinding{RunID: run.ID, TaskID: taskID, ApprovedTask: taskRef})
 		}
-		if err == nil {
-			taskID := definition.ID
-			err = s.runtime.Enqueue(ctx, runtime.Job{
+		taskID := definition.ID
+		result, err := s.taskGraphs.ApproveTaskGraph(ctx, TaskGraphApprovalRequest{
+			Command: command, Graph: *run.TaskGraph,
+			Task: runtime.TaskBinding{RunID: run.ID, TaskID: taskID, ApprovedTask: taskRef},
+			StartJob: runtime.Job{
 				ID:    orchestration.StableID(run.ID, taskID, "1", orchestration.StageStart, "job"),
 				RunID: run.ID, TaskID: &taskID, Attempt: 1,
 				Stage: orchestration.StageStart, AvailableAt: body.DecisionTime.UTC(),
-			})
-		}
+			},
+		})
 		return http.StatusOK, result, err
 	case "/task-graph/reject":
 		if !hasApprovalRole(principal, false) || run.TaskGraph == nil {

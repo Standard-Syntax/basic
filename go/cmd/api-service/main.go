@@ -222,6 +222,10 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		return err
 	}
 	workflowStore := workflow.NewStore(pool)
+	taskGraphApproval, err := controlapi.NewTaskGraphApprovalCoordinator(pool, workflowStore)
+	if err != nil {
+		return err
+	}
 	runIntake, err := controlapi.NewRunIntakeCoordinator(
 		pool, workflowStore, artifacts, value.RepositoryRoot, value.Policy,
 	)
@@ -251,7 +255,8 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 			return err
 		},
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
-		runtime.NewBindingRepository(pool), approvalService, publicationService, slog.Default())
+		runtime.NewBindingRepository(pool), approvalService, taskGraphApproval,
+		publicationService, slog.Default())
 	if err != nil {
 		return err
 	}

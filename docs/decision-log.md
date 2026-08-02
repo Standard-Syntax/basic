@@ -703,3 +703,38 @@ names, and cannot turn successful checks into the required human `go` record.
 
 ### Date
 2026-07-31
+
+## DEC-030: Approve task graphs and schedule their first job atomically
+
+### Decision
+Stage the approved task artifact in CAS, then apply the task-graph workflow
+command, checkpoint its immutable graph and task bindings, and enqueue the
+deterministic start job in one retryable serializable PostgreSQL transaction.
+
+### Options considered
+Keep the three existing commits and repair partial state on replay; enqueue
+after workflow approval through a reconciler; coordinate all three durable
+writes in one application transaction.
+
+### Pros
+No approved task is visible without its binding and runnable start job. Exact
+replay converges on one command, binding, and job, and fault injection can prove
+rollback after every write boundary.
+
+### Cons
+The control API gains a narrow transaction-scoped coordinator and runtime
+helpers. A failed request may leave one unbound CAS artifact for normal
+collection.
+
+### Why this option
+All three records already share PostgreSQL and jointly define one approval
+decision. Compensation or later reconciliation would expose states that the
+worker cannot safely execute.
+
+### Consequences
+The HTTP handler performs validation and CAS staging only, then delegates the
+durable mutation. Cancellation rollback is detached and bounded; serializable
+and deadlock conflicts retry the complete transaction.
+
+### Date
+2026-08-02

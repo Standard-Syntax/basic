@@ -92,6 +92,12 @@ Operators must include repository-map objects in CAS retention sizing; unbound
 objects from failed pre-transaction staging are safe garbage-collection
 candidates.
 
+Task-graph approval stages one bounded task artifact before its transaction,
+then writes one workflow decision, one task snapshot and its events, one task
+binding, and one deterministic start job in the same short transaction.
+Rolled-back, unbound task artifacts are safe garbage-collection candidates;
+replay does not multiply database rows or jobs.
+
 Each accepted beta run additionally binds one small canonical policy object.
 Execution is capped by changed-file, per-file, and total-byte ceilings;
 execution and verification concurrency are independently bounded. The current

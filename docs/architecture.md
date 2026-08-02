@@ -187,6 +187,13 @@ blob entries, and exact base-commit binding, then performs the existing run and
 task lease transitions. Nullable repository-map columns remain migration-only
 compatibility: an incomplete legacy binding fails closed.
 
+Task-graph approval uses a second narrow application coordinator. The task
+artifact is staged in CAS first, then one retryable serializable transaction
+applies `ApproveTaskGraph`, checkpoints the immutable graph and task bindings,
+and inserts the deterministic start job before committing once. Any unbound
+artifact left by rollback is collectible; exact command replay converges on
+the same single binding and job.
+
 ### Immutable beta repository policy
 
 Slice 4 adds one canonical `beta_policy` shared by API intake, workflow

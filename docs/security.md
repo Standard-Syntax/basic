@@ -187,6 +187,10 @@ facts and completed rows are protected by PostgreSQL triggers.
 - Pre-commit failures leave no workflow run, binding, completed response, job,
   or provider invocation. A crash after commit replays the stored bytes and
   performs no Git, CAS, workflow, job, or provider operation.
+- Task-graph approval applies its workflow transition, immutable graph/task
+  binding, and deterministic start-job enqueue in one serializable transaction.
+  Cancellation uses bounded detached rollback, so no approved task or runnable
+  job can escape a failed approval boundary.
 - New beta bindings also contain the canonical policy artifact and immutable
   execution and verification image IDs. Missing, mutable, or configuration-
   mismatched bindings fail before a lease, provider call, candidate, or
