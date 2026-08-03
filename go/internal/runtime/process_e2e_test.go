@@ -195,6 +195,21 @@ func runBetaProcesses(t *testing.T) {
 		databaseURL = requireEnvironment(t, "TEST_DATABASE_URL")
 	}
 	root := t.TempDir()
+	var pythonReport *pythonProjectReport
+	if pythonProject {
+		sourceRoot := requireEnvironment(t, "RUNTIME_SOURCE_ROOT")
+		pythonReport = newPythonProjectReport(
+			requireEnvironment(t, "REPORT_OUTPUT"), databaseURL, filepath.Join(root, "repository"),
+			os.Getenv("PRESERVE_PROJECT"),
+		)
+		pythonReport.SourceCommit = strings.TrimSpace(runGitOutput(t, sourceRoot, "rev-parse", "HEAD"))
+		pythonReport.credentialValues = []string{apiKey, "runtime-operator-token"}
+		defer func() {
+			if err := pythonReport.finish(); err != nil {
+				t.Errorf("persist Python project evidence: %v", err)
+			}
+		}()
+	}
 	credentialRoot := ""
 	if packaged {
 		makeTreeAccessible(t, root)
@@ -223,6 +238,7 @@ func runBetaProcesses(t *testing.T) {
 		policy = canaryConfig.Policy
 	} else {
 		if pythonProject {
+			pythonReport.setStage("bootstrap")
 			repository, remote, baseCommit, project = fixturePythonRepository(
 				t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
 			)
@@ -239,8 +255,16 @@ func runBetaProcesses(t *testing.T) {
 			executionImage = requireEnvironment(t, "RUNTIME_EXECUTION_IMAGE")
 			verificationImage = requireEnvironment(t, "RUNTIME_VERIFICATION_IMAGE")
 		} else {
+			if pythonReport != nil {
+				pythonReport.setStage("image-resolution")
+			}
 			executionImage = dockerImageID(t, "basic-execution-worker:runtime")
 			verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
+		}
+		if pythonReport != nil {
+			pythonReport.BaseCommit = baseCommit
+			pythonReport.WorkerImageIDs["execution"] = executionImage
+			pythonReport.WorkerImageIDs["verification"] = verificationImage
 		}
 		paths := map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}}
 		if project != nil {
@@ -357,7 +381,10 @@ func runBetaProcesses(t *testing.T) {
 	writeJSONFile(t, workflowConfig, workflowValues)
 	operatorExecutable, operatorConfig, operatorState, operatorExport := "", "", "", ""
 	if project != nil {
-		operatorExecutable = installHarnessCLI(t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"))
+		pythonReport.setStage("operator-installation")
+		operatorExecutable, pythonReport.HarnessVersion = installHarnessCLI(
+			t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
+		)
 		operatorTokenFile := filepath.Join(root, "operator-token")
 		writeFile(t, operatorTokenFile, token)
 		operatorConfig = filepath.Join(root, "operator.json")
@@ -411,6 +438,7 @@ func runBetaProcesses(t *testing.T) {
 	var firstOperatorRun []byte
 	operatorApprovalKeys := [3]string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
 	if project != nil {
+		pythonReport.setStage("operator-intake")
 		_, firstOperatorRun = runOperatorCLI(t, operatorExecutable,
 			"operator", "run", "--config", operatorConfig, "--project", repository,
 			"--state-file", operatorState, "--idempotency-key", runKey)
@@ -418,6 +446,7 @@ func runBetaProcesses(t *testing.T) {
 		state := readJSONObject(t, operatorState)
 		runID = requireJSONString(t, state, "run_id")
 		taskID = requireJSONString(t, state, "task_id")
+		pythonReport.RunID, pythonReport.TaskID = runID, taskID
 		if requireJSONString(t, state, "base_commit") != baseCommit {
 			t.Fatalf("operator state base commit = %#v", state["base_commit"])
 		}
@@ -498,6 +527,10 @@ func runBetaProcesses(t *testing.T) {
 	if project != nil && !bytes.Equal(replayedOperatorRun, firstOperatorRun) {
 		t.Fatalf("operator run replay changed bytes: first=%s replay=%s",
 			firstOperatorRun, replayedOperatorRun)
+	}
+	if project != nil {
+		pythonReport.ReplayCounts["run"] = 1
+		pythonReport.setStage("implementation")
 	}
 	if project == nil && (!replayedRun.replay || !bytes.Equal(replayedRun.body, firstRun.body)) {
 		t.Fatalf("run replay header=%v first=%s replay=%s",
@@ -584,6 +617,7 @@ func runBetaProcesses(t *testing.T) {
 	approvalPath, approvalRevision := "", ""
 	var approvalRequest map[string]any
 	if project != nil {
+		pythonReport.setStage("candidate-approval")
 		operatorApprovalKeys[2] = approvalKey
 		approvalResponse, firstOperatorApproval = runOperatorCLI(t, operatorExecutable,
 			"operator", "approve", "--gate", "candidate", "--config", operatorConfig,
@@ -605,6 +639,7 @@ func runBetaProcesses(t *testing.T) {
 	submitPath, submitRevision := "", ""
 	var submitRequest map[string]any
 	if project != nil {
+		pythonReport.setStage("publication")
 		publicationValue, firstOperatorPublication = runOperatorCLI(t, operatorExecutable,
 			"operator", "submit", "--config", operatorConfig, "--state-file", operatorState,
 			"--idempotency-key", submitKey)
@@ -642,6 +677,9 @@ func runBetaProcesses(t *testing.T) {
 		t.Fatalf("publication = %#v", publicationValue)
 	}
 	candidate := publicationValue["candidate_commit"].(string)
+	if pythonReport != nil {
+		pythonReport.CandidateCommit = candidate
+	}
 	if candidate == baseCommit {
 		t.Fatal("candidate equals base")
 	}
@@ -673,15 +711,24 @@ func runBetaProcesses(t *testing.T) {
 		command.Dir = repository
 		_ = command.Run()
 	})
+	if pythonReport != nil {
+		pythonReport.setStage("trusted-check")
+	}
 	command := exec.Command("make", "check")
 	command.Dir = candidatePath
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("candidate verification: %v: %s", err, output)
+	output, checkErr := command.CombinedOutput()
+	if pythonReport != nil {
+		pythonReport.CheckResult = commandResult(output, checkErr)
+	}
+	if checkErr != nil {
+		t.Fatalf("candidate verification: %v: %s", checkErr, output)
 	}
 	if project != nil && project.Golden {
+		pythonReport.setStage("console-check")
 		console := exec.Command("uv", "run", "--frozen", project.Name)
 		console.Dir = candidatePath
 		output, err := console.CombinedOutput()
+		pythonReport.ConsoleResult = commandResult(output, err)
 		if err != nil || string(output) != "ready\n" {
 			t.Fatalf("golden console result: err=%v output=%q", err, output)
 		}
@@ -723,6 +770,8 @@ func runBetaProcesses(t *testing.T) {
 				bytes.Equal(replayedApproval, firstOperatorApproval),
 				bytes.Equal(replayedPublication, firstOperatorPublication))
 		}
+		pythonReport.ReplayCounts["approval"] = 1
+		pythonReport.ReplayCounts["publication"] = 1
 		assertFileMode(t, operatorConfig, 0o600)
 		assertFileMode(t, operatorState, 0o600)
 	} else {
@@ -815,6 +864,9 @@ func runBetaProcesses(t *testing.T) {
 			t.Fatal(err)
 		}
 		fmt.Println(string(encoded))
+	}
+	if pythonReport != nil {
+		pythonReport.markPassed()
 	}
 }
 
@@ -1642,7 +1694,7 @@ func dockerImageID(t *testing.T, image string) string {
 	return strings.TrimSpace(body)
 }
 
-func installHarnessCLI(t *testing.T, root, sourceRoot string) string {
+func installHarnessCLI(t *testing.T, root, sourceRoot string) (string, string) {
 	t.Helper()
 	wheelhouse := filepath.Join(root, "operator-wheel")
 	if err := os.Mkdir(wheelhouse, 0o700); err != nil {
@@ -1665,7 +1717,12 @@ func installHarnessCLI(t *testing.T, root, sourceRoot string) string {
 	if info, statErr := os.Stat(executable); statErr != nil || info.Mode()&0o111 == 0 {
 		t.Fatalf("installed operator executable is unavailable: %v", statErr)
 	}
-	return executable
+	version := strings.TrimSpace(runCommandOutput(t, filepath.Join(environment, "bin", "python"),
+		"-c", "import importlib.metadata; print(importlib.metadata.version('harness-agents'))"))
+	if version == "" {
+		t.Fatal("installed harness version is empty")
+	}
+	return executable, version
 }
 
 func runOperatorCLI(t *testing.T, executable string, arguments ...string) (map[string]any, []byte) {

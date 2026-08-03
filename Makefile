@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
+REPORT_OUTPUT ?= $(CURDIR)/.tools/evidence/python-project-report.json
 
 .PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-python-project-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
 
@@ -158,7 +159,9 @@ else
 endif
 
 beta-python-project-e2e:
+	@mkdir -p "$(CURDIR)/.tools/evidence"
 	@PROJECT_SPEC="$(PROJECT_SPEC)" CHECKS="$(CHECKS)" \
+		REPORT_OUTPUT="$(REPORT_OUTPUT)" PRESERVE_PROJECT="$(PRESERVE_PROJECT)" \
 		uv run --frozen python -m harness_agents.project_inputs
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	docker compose down --volumes
@@ -172,6 +175,7 @@ beta-python-project-e2e:
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		BETA_LIVE_E2E=1 BETA_PYTHON_PROJECT=1 RUNTIME_SOURCE_ROOT="$(CURDIR)" \
 		PROJECT_SPEC="$(PROJECT_SPEC)" CHECKS="$(CHECKS)" \
+		REPORT_OUTPUT="$(REPORT_OUTPUT)" PRESERVE_PROJECT="$(PRESERVE_PROJECT)" \
 		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
 		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
 		go test -v -tags=integration -count=1 \
