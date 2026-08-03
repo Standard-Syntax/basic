@@ -5,7 +5,7 @@
   "branch": "beta/publication-client-hardening",
   "checkpoints_count": 2,
   "files_touched": [
-    "go/internal/publication/github_test.go"
+    "go/internal/publication/github.go"
   ],
   "sessions": [
     {
@@ -17,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 12400,
+    "input_tokens": 25693,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 838400,
-    "output_tokens": 3042,
-    "api_call_count": 9
+    "cache_read_tokens": 2843904,
+    "output_tokens": 4329,
+    "api_call_count": 19
   }
 }
