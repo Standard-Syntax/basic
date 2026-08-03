@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3TTW8ATQMWHNERHZRE2HV3",
+  "strategy": "manual-commit",
+  "branch": "harness/python-live-gate",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "python/src/harness_agents/bootstrap.py",
+    "python/tests/test_cli.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1176719,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 52689152,
+    "output_tokens": 100084,
+    "api_call_count": 352
+  }
+}

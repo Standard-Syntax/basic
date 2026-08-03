@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3TTW8ATQMWHNERHZRE2HV3",
+  "session_id": "019fc596-29d0-7933-bc8c-ac8992109273",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T12:51:02.263060402Z",
+  "branch": "harness/python-live-gate",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "python/src/harness_agents/bootstrap.py",
+    "python/tests/test_cli.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "68d30e342a4f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1176719,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 52689152,
+    "output_tokens": 100084,
+    "api_call_count": 352
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T12:51:02.132203333Z",
+    "agent_lines": 44,
+    "agent_removed": 34,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 44,
+    "total_lines_changed": 78,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
