@@ -1,0 +1,135 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Live Four-Stage Python Harness Stack
+
+## Summary
+
+Close every software gap identified in the Python-project evaluation:
+
+- Preserve the accepted candidate as the default checkout and surface its exact revision.
+- Report the generated console command explicitly.
+- Replace client-fabricated specification and task-graph proposals with live MiniMax-M2.7 reasoning.
+- Preserve separate human approval gates and draft-only publication.
+- Upgrade the generated-project lifecycle from two to four provider invocations: specification, planning, implementation, and review.
+
+Real human approval, the real-GitHub canary, and release readiness remain explicit operator-run evidence gates; automated tests must not claim them.
+
+## Public Contracts
+
+- Bump `harness-agents` from `0.2.0` to `0.3.0`.
+- Make `harness-agents init` emit one `harness_python_project_init.v1` JSON result containing destination, trusted-base commit, and console command.
+- Replace the report contract with `harness_python_project_e2e_report.v2`, adding `generated_command`, per-stage invocation counts, and preservation status/checkout commit without exposing credential values or artifact paths.
+- Preserve successful projects at the exact candidate in detached-HEAD state; failed pre-candidate runs may preserve their current clean base and must report that revision.
+- Introduce `harness_operator_state.v2`, containing the trusted specification input but no prebuilt proposals or preselected task ID. Read v1 state for status-based recovery and atomically rewrite it as v2 without submitting its stored proposals.
+- Define a strict `run_intake_specification.v1` content object for `POST /v1/runs`. The server creates trusted envelopes and identities.
+- Remove the external `/specification` and `/task-graph` proposal-submission mutations. Human approve/reject endpoints remain.
+- Add live `SpecificationService.ProposeSpecification` and `PlanningService.ProposeTaskGraph` gateway APIs. Published Protobuf v1 contracts remain unchanged.
+- Version specification and planning prompts/manifests as `1.2.0`, with exact minimal closed-response examples. Trusted Go injects proposal identity, approved-specification bindings, and the single deterministic task ID.
+
+## Dependency-Ordered Vertical Slices
+
+1. **`harness/python-project-handoff` — accepted project handoff**
+   - Return structured initialization metadata from the installed CLI.
+   - Extend the v2 lifecycle report with command and preservation identity.
+   - Validate candidate reachability, copy into a temporary destination, safely detach at the exact accepted SHA, require a clean worktree, rescan files and Git objects, then atomically publish the preserved directory.
+   - Cover success, failure-before-candidate, candidate mismatch, dirty output, secret detection, and replacement/path rejection.
+   - Commit: `fix(harness): hand off accepted Python projects`.
+
+2. **`harness/live-specification` — provider-backed specification**
+   - Add the closed specification projection, MiniMax adapter, immutable gateway replay, structural malformed-output diagnostics, and specification-stage invocation migration `0022`.
+   - Reuse the existing credential, retry, budget, artifact, secret-scan, and kernel-validation boundaries.
+   - Upgrade the specification prompt/manifest and generated fixtures to `1.2.0`.
+   - Prove loopback protocol shape, trusted identity injection, exact replay, malformed output, provider failure, budget enforcement, and no workflow authority.
+   - Commit: `feat(reasoning): add live specification proposals`.
+
+3. **`harness/live-planning` — provider-backed one-task planning**
+   - Add the planning projection, adapter, gateway, and planning-stage invocation migration `0023`.
+   - Exclude task identity and dependencies from provider authority; inject one deterministic UUID task ID and an empty dependency set.
+   - Validate the result against the approved specification, repository map, bound beta policy, trusted checks, path limits, and one-task ceiling.
+   - Upgrade the planning prompt/manifest and fixtures to `1.2.0`.
+   - Test scope widening, missing/duplicate criterion coverage, unknown checks, malformed output, replay, and provider failures.
+   - Commit: `feat(reasoning): add live task planning`.
+
+4. **`harness/live-planning-runtime` — durable live planning workflow**
+   - Extend workflow-service configuration and packaged mounts with specification/planning manifests and prompts; map `general_reasoning` only to the pinned MiniMax model.
+   - Add run-level `specification_reasoning` and `planning_reasoning` jobs plus migration `0024` enforcing one job per run/stage when `task_id` is null.
+   - Atomically enqueue specification reasoning with run intake.
+   - Add a serializable specification-approval coordinator that commits the human approval, approved-specification binding, and deterministic planning job together.
+   - Have planning completion record the proposed graph and stop at human review; retain the existing atomic task-graph approval/start-job coordinator.
+   - Make schema-invalid or policy-invalid completed proposals fail the run with redacted durable evidence; transient provider failures remain bounded and recoverable.
+   - Update the v0.3 operator so `run` waits for specification review, specification approval waits for task-plan review, and no command manufactures or submits a proposal.
+   - Add rollback injection after every durable write and assert exact replay by identities and row counts.
+   - Commit: `feat(runtime): orchestrate live planning gates`.
+
+5. **`harness/live-planning-e2e` — four-stage lifecycle evidence**
+   - Update disposable Go, generated-Python, packaged-service, and canary fixtures to use the production live planning path.
+   - Require exactly one accepted MiniMax invocation for each of specification, planning, implementation, and review, with distinct request IDs and immutable raw-response/proposal artifacts.
+   - Update release readiness from two to four required reasoning stages and continue requiring one task, independent verification, human approval, draft publication, and exact replay.
+   - Assert that automated fixture approvals are labeled as such and never presented as human-made decisions.
+   - Refresh README and all affected architecture, security, resource, development, live-harness, release, decision-log, and evaluation documentation.
+   - Commit: `test(harness): gate four-stage Python lifecycle`.
+
+## Verification and Stack Publication
+
+Run from the repository root unless noted:
+
+```bash
+uv sync --frozen
+make generate-check
+make check
+make integration-test
+make runtime-e2e
+make beta-images
+git diff --check
+
+cd go
+go test -race ./internal/reasoning/gateway ./internal/controlapi ./internal/orchestration ./internal/runtime
+```
+
+Run the actual credentialed gates before marking the stack ready:
+
+```bash
+make beta-live-e2e
+make beta-python-project-e2e
+```
+
+The real GitHub evidence remains operator-only and pending until provisioned:
+
+```bash
+make beta-canary-e2e BETA_CONFIG=/absolute/path/to/canary.json
+make beta-readiness RELEASE_MANIFEST=/absolute/path/to/release.json
+```
+
+After Plan Mode ends, initialize and build the stack noninteractively:
+
+```bash
+git fetch origin
+git switch main
+git merge --ff-only origin/main
+git config rerere.enabled true
+git config remote.pushDefault origin
+gh stack init --base main harness/python-project-handoff
+```
+
+Commit and verify each slice before creating the next with `gh stack add <branch>`. Publish drafts with:
+
+```bash
+gh stack submit --auto --remote origin
+gh stack view --json
+```
+
+After both credentialed four-stage gates pass, mark the stack ready:
+
+```bash
+gh stack submit --auto --open --remote origin
+gh stack view --json
+```
+
+## Assumptions
+
+- The base is current `main`/`origin/main` at `f0f32e1`; no open PR exists.
+- Existing `.codex/`, `.entire/`, and `.opencode/` directories remain untouched.
+- The stale local stacks rooted at `main` are not extended or deleted; the new explicit branch starts a separate stack.
+- Provider credentials are currently available, but credential values must never appear in commands, logs, reports, artifacts, or commits.
+- No automatic merge, deployment, autonomous approval, multi-task scheduling, provider selection, or broader publication authority is added.
+- `gh stack init` and PR creation were intentionally deferred because this turn is Plan Mode.
