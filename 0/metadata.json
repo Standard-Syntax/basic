@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4TFMD25BRK22CS1T212A2C",
+  "session_id": "019fc928-74ed-72a1-8e79-1d165f28a97e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T22:04:08.48290579Z",
+  "branch": "harness/live-planning-runtime",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "python/tests/test_operator.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "0d481a013242",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 948933,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 46735360,
+    "output_tokens": 96368,
+    "api_call_count": 378
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T22:04:08.330209923Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 890,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 890,
+    "total_lines_changed": 1191,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}

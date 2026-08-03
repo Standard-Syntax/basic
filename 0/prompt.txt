@@ -1,0 +1,107 @@
+A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.
+
+# Python Project Harness Hardening Stack
+
+## Summary
+
+Implement five thin, dependency-ordered PRs covering every selected actionable finding: console correctness, operator-provided project inputs, installed-CLI lifecycle coverage, durable redacted evidence, and BuildKit migration.
+
+Current baseline is clean `main` at `2d3ad29`, with green CI and focused tests. The prior harness stack is merged. Planning mode prevented running `gh stack init` or creating PRs.
+
+No Protobuf, database, workflow-authority, approval-authority, or production API contract changes are planned.
+
+## Implementation Stack
+
+1. **`harness/python-console-entrypoint` — Correct generated executables**
+   - Generate a separate `_cli.py` wrapper whose `cli() -> None` invokes `main()`, prints non-`None` results, and always returns normally.
+   - Point `[project.scripts]` at `<package>._cli:cli`, keeping model implementation changes confined to `__init__.py`.
+   - Build and install the generated wheel in an isolated environment; assert the golden command prints `ready` and exits `0`.
+   - Commit: `fix(bootstrap): generate successful console entrypoints`.
+
+2. **`harness/python-project-inputs` — Generalize the live Python gate**
+   - Keep `make beta-python-project-e2e` as the golden profile when no custom inputs are supplied.
+   - Add paired `PROJECT_SPEC` and `CHECKS` parameters. Reject partial pairs, relative/unclean paths, missing inputs, and unsafe types before Docker, PostgreSQL, or provider work.
+   - Bootstrap custom inputs through the installed package, then derive objective, criteria, path policy, package identity, and task graph from committed `.harness/project.json`.
+   - Replace `live_demo`/`ready` prompt and diff assumptions with metadata-driven scope. Require a nonempty candidate entirely within the committed writable paths and successful trusted `make check`; retain the golden exact-file/stdout assertions.
+   - Preserve the one-task, `make-check-v1`, complete-file, bounded-resource profile.
+
+3. **`harness/operator-cli-e2e` — Exercise the installed operator**
+   - Build the wheel, install it into a disposable environment, and pass that exact executable to the process E2E.
+   - Route every lifecycle API interaction through subprocess calls to documented `harness-agents operator run`, three separate approvals, `submit`, `status`, and `export`.
+   - Retain the owner-only configuration/state files across API restart and replay the same derived idempotency keys.
+   - Use direct PostgreSQL reads only for waiting and immutable-evidence assertions, never as an alternate mutation path.
+   - Assert state/export mode `0600`, byte-equivalent replay, one implementation/review/publication effect, and no credentials in state, export, logs, CAS, database evidence, or Git objects.
+   - Keep test-fixture approvals explicitly classified as automated acceptance evidence, not real human decisions.
+
+4. **`harness/python-lifecycle-evidence` — Persist redacted pass/failure reports**
+   - Add `REPORT_OUTPUT`, defaulting to an ignored absolute `.tools/evidence/python-project-report.json`.
+   - Atomically write mode-`0600` `harness_python_project_e2e_report.v1` on normal pass or in-process failure.
+   - Include status, stable failure stage/code, run/task IDs, base and candidate commits when available, artifact digests without locations, durable lifecycle states, event-derived stage timing, installed harness version, source commit, worker image IDs, replay counts, and console/check results.
+   - Exclude credentials, provider bodies, prompts, free-form provider diagnostics, database exports, and artifact filesystem paths.
+   - Add optional `PRESERVE_PROJECT=/clean/absolute/nonexistent/path`; copy only the scanned generated repository after the run. Reject existing, symlinked, or unsafe destinations.
+   - Validate strict report shape, atomic replacement, partial failure reports, redaction, and preservation behavior.
+
+5. **`harness/buildx-images` — Remove the legacy builder and finish documentation**
+   - Require Buildx `v0.36.0`; fail fast with a clear prerequisite error when absent or mismatched. The current workstation lacks Buildx, so it must be installed before this layer is verified. `v0.36.0` is the current official release. [Docker Buildx releases](https://github.com/docker/buildx/releases/tag/v0.36.0)
+   - Convert every repository image build to `docker buildx build --load`, using `--iidfile` plus post-load `docker image inspect` equality checks so immutable image-ID recording remains authoritative. Docker documents both flags for loaded local images. [Docker buildx build reference](https://docs.docker.com/reference/cli/docker/buildx/build/)
+   - Provision CI with `docker/setup-buildx-action` pinned to commit `bb05f3f5519dd87d3ba754cc423b652a5edd6d2c` and `version: v0.36.0`.
+   - Update README, development/live-harness guidance, decision documentation, and the evaluation report. Mark a finding resolved only after its actual acceptance gate runs; retain live planning, real human approval, and real GitHub canary as explicit separate claims.
+   - Commit: `build(docker): require pinned BuildKit image builds`.
+
+## Public Interfaces
+
+- Generated console entry points change from `<package>:main` to `<package>._cli:cli`.
+- `beta-python-project-e2e` accepts:
+  - `PROJECT_SPEC` and `CHECKS`: both set or both omitted.
+  - `REPORT_OUTPUT`: optional absolute report destination with the documented default.
+  - `PRESERVE_PROJECT`: optional clean absolute, initially nonexistent destination.
+- New report contract: `harness_python_project_e2e_report.v1`.
+- Developer/CI Docker prerequisite: Buildx exactly `v0.36.0`.
+- No production HTTP endpoint, persistence schema, reasoning transport, or authority expansion.
+
+## Verification and Acceptance
+
+- Every layer: `make generate-check`, `make check`, targeted tests, and `git diff --check`.
+- Console layer: install the generated wheel and assert command stdout plus exit `0`.
+- Input layer: cover golden defaults, valid paired custom inputs, every invalid pairing/path case, and scope/check enforcement.
+- CLI layer: process-level installed-wheel command sequence across API restart, exact replay, status/export, and side-effect counts.
+- Evidence layer: deterministic pass and injected-failure reports, secret scanning, mode/atomicity checks, and preservation collisions.
+- Buildx layer: missing/wrong-version failures, successful `--load`, IID/inspection equality, `make integration-test`, and `make beta-images`.
+- Before ready-for-review submission, run the credentialed golden gate and one different operator-provided project:
+  - `make beta-python-project-e2e REPORT_OUTPUT=...`
+  - `make beta-python-project-e2e PROJECT_SPEC=... CHECKS=... REPORT_OUTPUT=...`
+- Do not substitute provider smoke, deterministic runtime recovery, or loopback publication for these credentialed results. Real GitHub evidence remains `make beta-canary-e2e`.
+
+## Stack and Publication Handoff
+
+After planning mode ends:
+
+```bash
+git fetch origin
+git switch main
+git merge --ff-only origin/main
+gh stack init --base main harness/python-console-entrypoint
+```
+
+After completing and committing each layer:
+
+```bash
+gh stack add harness/python-project-inputs
+gh stack add harness/operator-cli-e2e
+gh stack add harness/python-lifecycle-evidence
+gh stack add harness/buildx-images
+```
+
+Preserve `.codex/`, `.entire/`, and `.opencode/`. Stage only each layer’s intended files and use Conventional Commits. After all acceptance gates pass:
+
+```bash
+gh stack view --json
+gh stack submit --auto --open --remote origin
+gh stack view --json
+```
+
+This creates five ready-for-review PRs, each based on the preceding branch.
+
+---
+
+please read the review comments on pull requests and address them while staying inline with acceptance criteria
