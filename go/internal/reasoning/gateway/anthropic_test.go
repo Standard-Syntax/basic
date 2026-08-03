@@ -345,6 +345,27 @@ func TestAnthropicImplementationRejectsUnknownOutputFieldsDeterministically(t *t
 	}
 }
 
+func TestAnthropicImplementationClassifiesTrailingJSON(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		kind string
+	}{
+		{name: "value", text: `{} {}`, kind: "trailing_json_value"},
+		{name: "syntax", text: `{} untrusted-value`, kind: "trailing_json_syntax"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, malformed := decodeImplementationMessage(anthropicMessage(t, test.text))
+			if malformed == nil || malformed.Kind != test.kind || malformed.JSONOffset <= 0 {
+				t.Fatalf("diagnostic=%+v", malformed)
+			}
+			if strings.Contains(malformed.Message, "untrusted-value") {
+				t.Fatalf("diagnostic leaked provider text: %q", malformed.Message)
+			}
+		})
+	}
+}
+
 func TestAnthropicImplementationPreservesScopeChangeOnlyProjection(t *testing.T) {
 	value := implementationProjection{
 		Summary:             "Approved scope is insufficient for a safe proposal.",

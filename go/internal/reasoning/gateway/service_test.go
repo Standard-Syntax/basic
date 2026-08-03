@@ -523,8 +523,12 @@ func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
 	) (AdapterResult, error) {
 		return AdapterResult{
 			ProviderResponse: response,
-			MalformedOutput:  &MalformedOutput{Message: "unknown field unexpected"},
-			Provider:         "provider", Model: "model",
+			MalformedOutput: &MalformedOutput{
+				Message: "invalid content shape", Kind: "content_shape",
+				JSONOffset: 7, UnknownFields: []string{"unexpected"},
+				ContentBlockTypes: []string{"text", "tool_use"},
+			},
+			Provider: "provider", Model: "model",
 			ProviderRequestID: "req_123", Usage: Usage{ProviderRequests: 1},
 		}, nil
 	})
@@ -545,6 +549,20 @@ func TestMalformedProviderOutputIsPersistedAndReplayed(t *testing.T) {
 			"first=%+v second=%+v adapter=%d resolver=%d",
 			first, second, adapter.calls.Load(), resolver.calls.Load(),
 		)
+	}
+	details := map[string]string{}
+	for _, detail := range first.Rejection.GetDetails() {
+		details[detail.GetField()] = detail.GetMessage()
+	}
+	for field, want := range map[string]string{
+		"provider_response.kind":                "content_shape",
+		"provider_response.json_offset":         "7",
+		"provider_response.unknown_fields":      "unexpected",
+		"provider_response.content_block_types": "text,tool_use",
+	} {
+		if details[field] != want {
+			t.Fatalf("detail %q=%q; want %q in %+v", field, details[field], want, details)
+		}
 	}
 	store := service.artifacts.(*memoryArtifactStore)
 	stored, err := store.Get(t.Context(), first.ProviderResponseArtifact)

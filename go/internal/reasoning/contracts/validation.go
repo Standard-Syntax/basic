@@ -10,9 +10,13 @@ import (
 // ValidationFailure is a policy rejection produced while mapping untrusted
 // reasoning transport values into domain values.
 type ValidationFailure struct {
-	Code    reasoningv1.RejectionCode
-	Field   string
-	Message string
+	Code              reasoningv1.RejectionCode
+	Field             string
+	Message           string
+	Kind              string
+	JSONOffset        int64
+	UnknownFields     []string
+	ContentBlockTypes []string
 }
 
 func (e *ValidationFailure) Error() string {

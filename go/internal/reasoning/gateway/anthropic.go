@@ -727,12 +727,37 @@ func decodeImplementationMessage(
 	if err := decoder.Decode(&projection); err != nil {
 		return implementationProjection{}, malformedJSON("implementation", err)
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return implementationProjection{}, &MalformedOutput{
-			Message: "provider response contains trailing JSON",
+	trailingOffset := nextJSONOffset(text, decoder.InputOffset())
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return implementationProjection{}, &MalformedOutput{
+				Message:    "provider response contains a trailing JSON value; kind=trailing_json_value; offset=" + strconv.FormatInt(trailingOffset, 10),
+				Kind:       "trailing_json_value",
+				JSONOffset: trailingOffset,
+			}
 		}
+		malformed := malformedJSON("implementation", err)
+		malformed.Message = "provider response contains invalid trailing JSON; kind=trailing_json_syntax"
+		malformed.Kind = "trailing_json_syntax"
+		if malformed.JSONOffset > 0 {
+			malformed.Message += "; offset=" + strconv.FormatInt(malformed.JSONOffset, 10)
+		}
+		return implementationProjection{}, malformed
 	}
 	return projection, nil
+}
+
+func nextJSONOffset(text string, decoded int64) int64 {
+	for decoded < int64(len(text)) {
+		switch text[decoded] {
+		case ' ', '\t', '\r', '\n':
+			decoded++
+		default:
+			return decoded + 1
+		}
+	}
+	return decoded + 1
 }
 
 func providerText(message *anthropic.Message) (string, *MalformedOutput) {
