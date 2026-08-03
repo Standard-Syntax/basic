@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/beta"
+	"github.com/Standard-Syntax/basic/go/internal/orchestration"
 	postgresutil "github.com/Standard-Syntax/basic/go/internal/postgres"
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
@@ -41,6 +42,7 @@ const (
 	FaultAfterPolicyCAS     IntakeFaultPoint = "after_policy_cas"
 	FaultAfterWorkflow      IntakeFaultPoint = "after_workflow"
 	FaultAfterBinding       IntakeFaultPoint = "after_binding"
+	FaultAfterSpecEnqueue   IntakeFaultPoint = "after_specification_enqueue"
 	FaultAfterResponse      IntakeFaultPoint = "after_response"
 	FaultIntakeBeforeCommit IntakeFaultPoint = "before_commit"
 	FaultIntakeAfterCommit  IntakeFaultPoint = "after_commit"
@@ -277,6 +279,18 @@ func (c *RunIntakeCoordinator) commitIntakeOnce(
 		return nil, false, err
 	}
 	if err := c.fault(FaultAfterBinding); err != nil {
+		return nil, false, err
+	}
+	if err := runtime.EnqueueTx(ctx, tx, runtime.Job{
+		ID: orchestration.StableID(request.Command.ID, "-", "1",
+			orchestration.StageSpecificationReasoning, "job"),
+		RunID: request.Command.ID, Attempt: 1,
+		Stage:       orchestration.StageSpecificationReasoning,
+		AvailableAt: request.Command.Meta.Timestamp.UTC(),
+	}); err != nil {
+		return nil, false, err
+	}
+	if err := c.fault(FaultAfterSpecEnqueue); err != nil {
 		return nil, false, err
 	}
 	response, err = json.Marshal(result)

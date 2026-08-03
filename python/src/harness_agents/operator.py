@@ -2,44 +2,41 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from google.protobuf.json_format import MessageToDict, ParseDict, ParseError
-
-from harness_agents._generated.harness.reasoning.v1 import (
-    common_pb2 as _common_pb2,
-)
-from harness_agents._generated.harness.reasoning.v1 import (
-    planning_pb2 as _planning_pb2,
-)
-from harness_agents._generated.harness.reasoning.v1 import (
-    specification_pb2 as _specification_pb2,
-)
 from harness_agents.manifest import ManifestError
 
-common_pb2: Any = _common_pb2
-planning_pb2: Any = _planning_pb2
-specification_pb2: Any = _specification_pb2
-
 CONFIG_SCHEMA = "harness_operator_config.v1"
-STATE_SCHEMA = "harness_operator_state.v1"
+STATE_SCHEMA = "harness_operator_state.v2"
+LEGACY_STATE_SCHEMA = "harness_operator_state.v1"
 MAXIMUM_RESPONSE_BYTES = 1 << 20
 MAXIMUM_TOKEN_BYTES = 4096
 _STATE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "endpoint",
+        "project_root",
+        "run_id",
+        "base_commit",
+        "specification_input",
+        "operations",
+    }
+)
+_LEGACY_STATE_FIELDS = frozenset(
     {
         "schema_version",
         "endpoint",
@@ -270,46 +267,6 @@ def _git(project: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-def _message_dict(message: Any) -> dict[str, Any]:
-    return cast(
-        dict[str, Any],
-        MessageToDict(message, preserving_proto_field_name=True, use_integers_for_enums=False),
-    )
-
-
-def _envelope(run_id: str, request_id: str, stage: int, created: datetime) -> Any:
-    result = common_pb2.ReasoningRequestEnvelope(
-        schema_version="1",
-        request_id=request_id,
-        run_id=run_id,
-        stage=stage,
-        attempt=1,
-        authority=common_pb2.AuthorityConstraints(
-            mode=common_pb2.AUTHORITY_MODE_PROPOSAL_ONLY,
-        ),
-        budget=common_pb2.ReasoningBudget(
-            maximum_input_tokens=1,
-            maximum_output_tokens=1,
-            maximum_provider_requests=1,
-        ),
-        agent_manifest_digest=hashlib.sha256(f"trusted-{stage}".encode()).hexdigest(),
-    )
-    result.created_at.FromDatetime(created)
-    result.expires_at.FromDatetime(created + timedelta(hours=1))
-    return result
-
-
-def _identity(envelope: Any) -> Any:
-    return common_pb2.ProposalIdentity(
-        schema_version=envelope.schema_version,
-        request_id=envelope.request_id,
-        run_id=envelope.run_id,
-        stage=envelope.stage,
-        attempt=envelope.attempt,
-        agent_manifest_digest=envelope.agent_manifest_digest,
-    )
-
-
 def _project_head(config: OperatorConfig, project: Path) -> str:
     if project != config.project_root:
         raise OperatorError("project must equal the configured project root")
@@ -387,96 +344,29 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     base_commit = _project_head(config, project)
     metadata = _project_metadata(project)
     run_id = str(uuid.uuid5(root_key, "run"))
-    task_id = str(uuid.uuid5(root_key, "task"))
-    created = datetime.now(UTC).replace(microsecond=0)
-    specification_envelope = _envelope(
-        run_id,
-        str(uuid.uuid5(root_key, "specification-request")),
-        common_pb2.REASONING_STAGE_SPECIFICATION,
-        created,
-    )
-    specification_request = specification_pb2.SpecificationRequest(
-        envelope=specification_envelope,
-        problem_statement=metadata.objective,
-        desired_outcome=metadata.objective,
-        known_constraints=["Preserve trusted checks and immutable project configuration."],
-        known_non_goals=["Modify tests, lockfiles, or harness metadata."],
-        stakeholders=["operator"],
-        repository_summary="Trusted bootstrap Python project.",
-    )
-    specification_proposal = specification_pb2.SpecificationProposal(
-        identity=_identity(specification_envelope),
-        title=f"Implement {metadata.name}",
-        goal=metadata.objective,
-        actors=["operator", "implementation agent"],
-        constraints=["Only src is writable.", "All operator checks must pass."],
-        non_goals=["Modify trusted verification inputs."],
-        acceptance_criteria=[
-            specification_pb2.AcceptanceCriterion(
-                criterion_id=item["id"],
-                description=item["description"],
-                verification_method="make check",
-            )
-            for item in metadata.criteria
-        ],
-    )
-    specification_digest = hashlib.sha256(
-        specification_proposal.SerializeToString(deterministic=True)
-    ).hexdigest()
-    planning_envelope = _envelope(
-        run_id,
-        str(uuid.uuid5(root_key, "planning-request")),
-        common_pb2.REASONING_STAGE_PLANNING,
-        created,
-    )
-    repository_path = "pyproject.toml"
-    repository_digest = hashlib.sha256((project / repository_path).read_bytes()).hexdigest()
-    criterion_ids = [item["id"] for item in metadata.criteria]
-    planning_request = planning_pb2.TaskPlanningRequest(
-        envelope=planning_envelope,
-        approved_specification_id="SPEC-001",
-        approved_specification_digest=specification_digest,
-        repository_map=[
-            planning_pb2.RepositoryEntry(
-                path=repository_path, kind="file", sha256=repository_digest
-            )
-        ],
-        readable_paths=metadata.readable_paths,
-        writable_paths=metadata.writable_paths,
-        prohibited_paths=metadata.prohibited_paths,
-        task_count_limit=1,
-        parallelism_limit=1,
-        acceptance_criterion_ids=criterion_ids,
-    )
-    planning_proposal = planning_pb2.TaskGraphProposal(
-        identity=_identity(planning_envelope),
-        approved_specification_id="SPEC-001",
-        approved_specification_digest=specification_digest,
-        tasks=[
-            planning_pb2.PlannedTask(
-                task_id=task_id,
-                objective=metadata.objective,
-                acceptance_criterion_ids=criterion_ids,
-                readable_paths=metadata.readable_paths,
-                writable_paths=metadata.writable_paths,
-                prohibited_paths=metadata.prohibited_paths,
-                exclusive_resources=["source-tree"],
-                required_check_ids=metadata.trusted_checks,
-                stop_conditions=["Stop when make check passes or the attempt budget is exhausted."],
-            )
-        ],
-    )
     return {
         "schema_version": STATE_SCHEMA,
         "endpoint": config.endpoint,
         "project_root": str(project),
         "run_id": run_id,
-        "task_id": task_id,
         "base_commit": base_commit,
-        "specification_request": _message_dict(specification_request),
-        "specification_proposal": _message_dict(specification_proposal),
-        "planning_request": _message_dict(planning_request),
-        "planning_proposal": _message_dict(planning_proposal),
+        "specification_input": {
+            "schema_version": "run_intake_specification.v1",
+            "problem_statement": metadata.objective,
+            "desired_outcome": metadata.objective,
+            "known_constraints": [
+                "Preserve trusted checks and immutable project configuration.",
+                "Acceptance criteria: "
+                + "; ".join(f"{item['id']}: {item['description']}" for item in metadata.criteria),
+                "Readable paths: " + ", ".join(metadata.readable_paths),
+                "Writable paths: " + ", ".join(metadata.writable_paths),
+                "Prohibited paths: " + ", ".join(metadata.prohibited_paths),
+                "Trusted checks: " + ", ".join(metadata.trusted_checks),
+            ],
+            "known_non_goals": ["Modify tests, lockfiles, or harness metadata."],
+            "stakeholders": ["operator"],
+            "repository_summary": f"Trusted bootstrap Python project {metadata.name}.",
+        },
         "operations": {},
     }
 
@@ -502,14 +392,43 @@ def _write_state(path: Path, value: dict[str, Any], *, replace: bool = False) ->
 
 
 def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
-    root = _object(_json_file(path, "operator state"), "operator state", _STATE_FIELDS)
+    raw = _json_file(path, "operator state")
+    if isinstance(raw, dict) and raw.get("schema_version") == LEGACY_STATE_SCHEMA:
+        legacy = _object(raw, "operator state", _LEGACY_STATE_FIELDS)
+        request = legacy["specification_request"]
+        if not isinstance(request, dict):
+            raise OperatorError("legacy operator state contains invalid specification input")
+        root = {
+            "schema_version": STATE_SCHEMA,
+            "endpoint": legacy["endpoint"],
+            "project_root": legacy["project_root"],
+            "run_id": legacy["run_id"],
+            "base_commit": legacy["base_commit"],
+            "specification_input": {
+                "schema_version": "run_intake_specification.v1",
+                "problem_statement": request.get("problem_statement"),
+                "desired_outcome": request.get("desired_outcome"),
+                "known_constraints": request.get("known_constraints", []),
+                "known_non_goals": request.get("known_non_goals", []),
+                "stakeholders": request.get("stakeholders", []),
+                **(
+                    {"repository_summary": request["repository_summary"]}
+                    if "repository_summary" in request
+                    else {}
+                ),
+            },
+            "operations": legacy["operations"],
+        }
+        _write_state(path, root, replace=True)
+    else:
+        root = _object(raw, "operator state", _STATE_FIELDS)
     if (
         root["schema_version"] != STATE_SCHEMA
         or root["endpoint"] != config.endpoint
         or root["project_root"] != str(config.project_root)
     ):
         raise OperatorError("operator state does not match configuration")
-    for field in ("run_id", "task_id"):
+    for field in ("run_id",):
         try:
             uuid.UUID(cast(str, root[field]))
         except (TypeError, ValueError) as error:
@@ -524,10 +443,12 @@ def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
         for name, value in operations.items()
     ):
         raise OperatorError("operator state contains invalid operation recovery data")
-    try:
-        validate_transport_state(root)
-    except (ParseError, TypeError, ValueError) as error:
-        raise OperatorError("operator state contains invalid transport JSON") from error
+    specification_input = root["specification_input"]
+    if (
+        not isinstance(specification_input, dict)
+        or specification_input.get("schema_version") != "run_intake_specification.v1"
+    ):
+        raise OperatorError("operator state contains invalid specification input")
     return root
 
 
@@ -558,6 +479,24 @@ def _revision(config: OperatorConfig, run_id: str) -> int:
     return cast(int, run["revision"])
 
 
+def _wait_for_run_state(
+    config: OperatorConfig, run_id: str, expected: str, *, timeout: float = 120.0
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    terminal = {"FAILED", "CANCELLED", "REJECTED"}
+    while True:
+        response = _request(config, "GET", f"/v1/runs/{run_id}")
+        run = response.get("run")
+        state = run.get("state") if isinstance(run, dict) else None
+        if state == expected:
+            return response
+        if state in terminal:
+            raise OperatorError(f"run reached terminal state before {expected}")
+        if time.monotonic() >= deadline:
+            raise OperatorError(f"timed out waiting for run state {expected}")
+        time.sleep(0.25)
+
+
 def run_lifecycle(
     config: OperatorConfig, project: Path, state_path: Path, idempotency_key: uuid.UUID
 ) -> dict[str, Any]:
@@ -568,37 +507,19 @@ def run_lifecycle(
         _write_state(state_path, state)
     run_id = cast(str, state["run_id"])
     now = _operation_timestamp(state_path, state, "run", idempotency_key)
-    specification_request = cast(dict[str, Any], state["specification_request"])
-    objective = specification_request.get("desired_outcome")
-    if not isinstance(objective, str) or not objective:
-        raise OperatorError("operator state contains an invalid project objective")
-    created = _request(
+    _request(
         config,
         "POST",
         "/v1/runs",
         body={
             "run_id": run_id,
             "base_commit": state["base_commit"],
-            "content": {"objective": objective},
+            "content": state["specification_input"],
             "decision_timestamp": now,
         },
         idempotency_key=_key(idempotency_key, "create-run"),
     )
-    revision = created.get("revision")
-    if not isinstance(revision, int):
-        revision = _revision(config, run_id)
-    return _request(
-        config,
-        "POST",
-        f"/v1/runs/{run_id}/specification",
-        body={
-            "request": state["specification_request"],
-            "proposal": state["specification_proposal"],
-            "decision_timestamp": now,
-        },
-        idempotency_key=_key(idempotency_key, "propose-specification"),
-        revision=revision,
-    )
+    return _wait_for_run_state(config, run_id, "SPECIFICATION_REVIEW")
 
 
 def approve_gate(
@@ -608,7 +529,7 @@ def approve_gate(
     run_id = cast(str, state["run_id"])
     now = _operation_timestamp(state_path, state, "approve-" + gate, idempotency_key)
     if gate == "specification":
-        approved = _request(
+        _request(
             config,
             "POST",
             f"/v1/runs/{run_id}/specification/approve",
@@ -616,19 +537,7 @@ def approve_gate(
             idempotency_key=_key(idempotency_key, "approve-specification"),
             revision=_revision(config, run_id),
         )
-        _ = approved
-        return _request(
-            config,
-            "POST",
-            f"/v1/runs/{run_id}/task-graph",
-            body={
-                "request": state["planning_request"],
-                "proposal": state["planning_proposal"],
-                "decision_timestamp": now,
-            },
-            idempotency_key=_key(idempotency_key, "propose-task-graph"),
-            revision=_revision(config, run_id),
-        )
+        return _wait_for_run_state(config, run_id, "TASK_PLAN_REVIEW")
     suffix = "task-graph/approve" if gate == "task-graph" else "approval"
     return _request(
         config,
@@ -668,11 +577,3 @@ def export_bundle(config: OperatorConfig, run_id: str, output: Path) -> dict[str
     bundle = _request(config, "GET", f"/v1/runs/{run_id}/support-bundle")
     _write_state(output, bundle, replace=False)
     return bundle
-
-
-def validate_transport_state(state: dict[str, Any]) -> None:
-    """Validate stored protobuf JSON before any service request."""
-    ParseDict(state["specification_request"], specification_pb2.SpecificationRequest())
-    ParseDict(state["specification_proposal"], specification_pb2.SpecificationProposal())
-    ParseDict(state["planning_request"], planning_pb2.TaskPlanningRequest())
-    ParseDict(state["planning_proposal"], planning_pb2.TaskGraphProposal())

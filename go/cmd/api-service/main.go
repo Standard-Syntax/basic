@@ -226,6 +226,10 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	if err != nil {
 		return err
 	}
+	specificationApproval, err := controlapi.NewSpecificationApprovalCoordinator(pool, workflowStore)
+	if err != nil {
+		return err
+	}
 	runIntake, err := controlapi.NewRunIntakeCoordinator(
 		pool, workflowStore, artifacts, value.RepositoryRoot, value.Policy,
 	)
@@ -260,7 +264,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		},
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, taskGraphApproval,
-		publicationService, supportReader, slog.Default())
+		publicationService, supportReader, slog.Default(), specificationApproval)
 	if err != nil {
 		return err
 	}

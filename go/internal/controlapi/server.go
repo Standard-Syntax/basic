@@ -29,7 +29,6 @@ import (
 	"github.com/Standard-Syntax/basic/go/internal/runtime"
 	"github.com/Standard-Syntax/basic/go/internal/workflow"
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -115,22 +114,23 @@ type Config struct {
 }
 
 type Server struct {
-	config      Config
-	workflow    WorkflowStore
-	runtime     IdempotencyLedger
-	intake      RunIntake
-	artifacts   ArtifactStore
-	bindings    BindingStore
-	taskGraphs  TaskGraphApproval
-	approval    ApprovalService
-	publication PublicationService
-	support     SupportReader
-	principals  []principalDigest
-	checks      map[string]struct{}
-	logger      *slog.Logger
-	requests    atomic.Uint64
-	failures    atomic.Uint64
-	elapsedNS   atomic.Uint64
+	config         Config
+	workflow       WorkflowStore
+	runtime        IdempotencyLedger
+	intake         RunIntake
+	artifacts      ArtifactStore
+	bindings       BindingStore
+	taskGraphs     TaskGraphApproval
+	specifications SpecificationApproval
+	approval       ApprovalService
+	publication    PublicationService
+	support        SupportReader
+	principals     []principalDigest
+	checks         map[string]struct{}
+	logger         *slog.Logger
+	requests       atomic.Uint64
+	failures       atomic.Uint64
+	elapsedNS      atomic.Uint64
 }
 
 type principalDigest struct {
@@ -203,7 +203,11 @@ func New(
 	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
 	taskGraphApproval TaskGraphApproval, publicationService PublicationService, support SupportReader,
 	logger *slog.Logger,
+	specificationApprovals ...SpecificationApproval,
 ) (*Server, error) {
+	if len(specificationApprovals) > 1 {
+		return nil, errors.New("at most one specification approval service is allowed")
+	}
 	prepared, err := prepareServerConfig(config)
 	if err != nil {
 		return nil, err
@@ -223,11 +227,19 @@ func New(
 	if logger == nil {
 		logger = slog.Default()
 	}
+	var specificationApproval SpecificationApproval
+	if len(specificationApprovals) == 1 {
+		if isNilDependency(specificationApprovals[0]) {
+			return nil, errors.New("specification approval service is required")
+		}
+		specificationApproval = specificationApprovals[0]
+	}
 	return &Server{
 		config: prepared.config, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
 		artifacts: artifacts, bindings: bindings, taskGraphs: taskGraphApproval, approval: approvalService,
 		publication: publicationService, support: support, principals: prepared.principals,
-		checks: prepared.checks, logger: logger,
+		specifications: specificationApproval,
+		checks:         prepared.checks, logger: logger,
 	}, nil
 }
 
@@ -545,8 +557,6 @@ type mutationBody struct {
 	RunID        string          `json:"run_id,omitempty"`
 	BaseCommit   string          `json:"base_commit,omitempty"`
 	Content      json.RawMessage `json:"content,omitempty"`
-	Request      json.RawMessage `json:"request,omitempty"`
-	Proposal     json.RawMessage `json:"proposal,omitempty"`
 	Reason       string          `json:"reason,omitempty"`
 	Terminal     bool            `json:"terminal,omitempty"`
 	DecisionTime time.Time       `json:"decision_timestamp"`
@@ -696,6 +706,10 @@ func (s *Server) handleRunIntake(
 		s.writeDomainError(w, workflow.ErrInvalid)
 		return
 	}
+	if _, err := runtime.DecodeRunIntakeSpecification(body.Content); err != nil {
+		s.writeDomainError(w, workflow.ErrInvalid)
+		return
+	}
 	for _, value := range body.BaseCommit {
 		if !strings.ContainsRune("0123456789abcdef", value) {
 			s.writeDomainError(w, workflow.ErrInvalid)
@@ -807,35 +821,27 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 			workflow.ActorHuman, revision, body.DecisionTime)
 	}
 	switch suffix {
-	case "/specification":
-		if !hasRole(principal, RoleOperator) {
-			return 0, nil, workflow.ErrUnauthorized
-		}
-		var specificationRequest reasoningv1.SpecificationRequest
-		var specificationProposal reasoningv1.SpecificationProposal
-		if err := decodeProtoPair(
-			body.Request, body.Proposal, &specificationRequest, &specificationProposal,
-		); err != nil {
-			return 0, nil, workflow.ErrInvalid
-		}
-		ref, err := runtime.BuildApprovedSpecification(
-			ctx, s.artifacts, &specificationRequest, &specificationProposal,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		result, err := s.workflow.ExecuteRun(ctx, workflow.ProposeSpecification{
-			Meta: serviceMeta("propose-specification", run.Revision), ID: run.ID, Specification: ref,
-		})
-		return http.StatusOK, result, err
 	case "/specification/approve":
 		if !hasApprovalRole(principal, false) || run.Specification == nil {
 			return 0, nil, workflow.ErrUnauthorized
 		}
-		result, err := s.workflow.ExecuteRun(ctx, workflow.ApproveSpecification{
+		command := workflow.ApproveSpecification{
 			Meta: humanMeta("approve-specification", run.Revision), ID: run.ID,
 			Specification: *run.Specification,
-		})
+		}
+		if s.specifications != nil {
+			result, err := s.specifications.ApproveSpecification(ctx, SpecificationApprovalRequest{
+				Command: command,
+				PlanningJob: runtime.Job{
+					ID: orchestration.StableID(run.ID, "-", "1",
+						orchestration.StagePlanningReasoning, "job"),
+					RunID: run.ID, Attempt: 1, Stage: orchestration.StagePlanningReasoning,
+					AvailableAt: body.DecisionTime.UTC(),
+				},
+			})
+			return http.StatusOK, result, err
+		}
+		result, err := s.workflow.ExecuteRun(ctx, command)
 		if err == nil {
 			err = s.bindings.CheckpointSpecification(ctx, run.ID, *run.Specification)
 		}
@@ -847,27 +853,6 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 		result, err := s.workflow.ExecuteRun(ctx, workflow.RejectSpecification{
 			Meta: humanMeta("reject-specification", run.Revision), ID: run.ID,
 			Specification: *run.Specification, Reason: body.Reason, Terminal: body.Terminal,
-		})
-		return http.StatusOK, result, err
-	case "/task-graph":
-		if !hasRole(principal, RoleOperator) {
-			return 0, nil, workflow.ErrUnauthorized
-		}
-		var planningRequest reasoningv1.TaskPlanningRequest
-		var graphProposal reasoningv1.TaskGraphProposal
-		if err := decodeProtoPair(
-			body.Request, body.Proposal, &planningRequest, &graphProposal,
-		); err != nil {
-			return 0, nil, workflow.ErrInvalid
-		}
-		ref, _, _, err := runtime.BuildApprovedTaskGraph(
-			ctx, s.artifacts, &planningRequest, &graphProposal, s.checks, s.config.Policy,
-		)
-		if err != nil {
-			return 0, nil, err
-		}
-		result, err := s.workflow.ExecuteRun(ctx, workflow.ProposeTaskGraph{
-			Meta: serviceMeta("propose-task-graph", run.Revision), ID: run.ID, TaskGraph: ref,
 		})
 		return http.StatusOK, result, err
 	case "/task-graph/approve":
@@ -1159,20 +1144,6 @@ func (*Server) envelope(
 		ExpectedRevision: revision, Timestamp: at.UTC(),
 		CorrelationID: commandID, CausationID: commandID,
 	}
-}
-
-func decodeProtoPair(
-	requestBody, proposalBody json.RawMessage, request, proposal proto.Message,
-) error {
-	if len(requestBody) == 0 || len(proposalBody) == 0 ||
-		string(requestBody) == "null" || string(proposalBody) == "null" {
-		return workflow.ErrInvalid
-	}
-	options := protojson.UnmarshalOptions{DiscardUnknown: false}
-	if err := options.Unmarshal(requestBody, request); err != nil {
-		return err
-	}
-	return options.Unmarshal(proposalBody, proposal)
 }
 
 func stableStepID(key, step string) string {

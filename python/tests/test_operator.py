@@ -24,6 +24,7 @@ from harness_agents.operator import (
 class LifecycleHandler(BaseHTTPRequestHandler):
     calls: list[tuple[str, str, dict[str, str], dict[str, Any]]] = []
     revision = 1
+    state = "DRAFT"
 
     def log_message(self, format: str, *args: object) -> None:  # skipcq: PYL-W0622
         """Keep the loopback test server silent."""
@@ -41,7 +42,7 @@ class LifecycleHandler(BaseHTTPRequestHandler):
         if self.path.endswith("/support-bundle"):
             self._respond({"schema_version": "support_bundle.v1", "reasoning_diagnostics": []})
         else:
-            self._respond({"run": {"revision": self.revision, "state": "DRAFT"}})
+            self._respond({"run": {"revision": self.revision, "state": type(self).state}})
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -49,9 +50,12 @@ class LifecycleHandler(BaseHTTPRequestHandler):
         self.calls.append(("POST", self.path, dict(self.headers), body))
         if self.path == "/v1/runs":
             self.revision = 1
+            type(self).state = "SPECIFICATION_REVIEW"
             self._respond({"revision": self.revision}, 201)
             return
         self.revision += 1
+        if self.path.endswith("/specification/approve"):
+            type(self).state = "TASK_PLAN_REVIEW"
         self._respond({"revision": self.revision})
 
 
@@ -77,6 +81,7 @@ def operator_fixture(tmp_path: Path) -> Iterator[tuple[Any, Path, Path, Threadin
     server = ThreadingHTTPServer(("127.0.0.1", 0), LifecycleHandler)
     LifecycleHandler.calls = []
     LifecycleHandler.revision = 1
+    LifecycleHandler.state = "DRAFT"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     token = tmp_path / "token"
@@ -112,9 +117,11 @@ def test_operator_runs_explicit_gates_submits_and_exports_redacted_bundle(
     run_lifecycle(config, project.resolve(), state_path, root_key)
     state = json.loads(state_path.read_text())
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
-    assert state["schema_version"] == "harness_operator_state.v1"
+    assert state["schema_version"] == "harness_operator_state.v2"
     assert state["operations"]["run"]["decision_timestamp"] == first_timestamp
-    assert state["planning_proposal"]["tasks"][0]["required_check_ids"] == ["make-check-v1"]
+    assert "planning_proposal" not in state
+    assert "specification_proposal" not in state
+    assert "task_id" not in state
 
     approve_gate(config, state_path, "specification", uuid.uuid4())
     approve_gate(config, state_path, "task-graph", uuid.uuid4())
@@ -139,8 +146,11 @@ def test_operator_runs_explicit_gates_submits_and_exports_redacted_bundle(
     create_calls = [call for call in LifecycleHandler.calls if call[1] == "/v1/runs"]
     assert len(create_calls) == 2
     assert all(
-        call[3]["content"]["objective"] == "Implement the operator demo." for call in create_calls
+        call[3]["content"]["schema_version"] == "run_intake_specification.v1"
+        for call in create_calls
     )
+    assert not any(call[1].endswith("/specification") for call in LifecycleHandler.calls)
+    assert not any(call[1].endswith("/task-graph") for call in LifecycleHandler.calls)
 
 
 def test_operator_rejects_token_file_readable_by_group(

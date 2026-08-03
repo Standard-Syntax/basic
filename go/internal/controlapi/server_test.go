@@ -608,7 +608,7 @@ func TestCreateRunRequiresRoleStrictJSONAndIdempotency(t *testing.T) {
 	server, workflowStore, runtimeLedger, token := testServer(t, RoleOperator)
 	runID, key := uuid.NewString(), uuid.NewString()
 	body := `{"run_id":"` + runID + `","base_commit":"0123456789012345678901234567890123456789",` +
-		`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`
+		`"content":{"schema_version":"run_intake_specification.v1","problem_statement":"fix","desired_outcome":"fixed","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]},"decision_timestamp":"2026-07-29T12:00:00Z"}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body))
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Idempotency-Key", key)
@@ -640,7 +640,7 @@ func TestRunIntakeSurvivesClientCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	body := `{"run_id":"` + uuid.NewString() + `","base_commit":"0123456789012345678901234567890123456789",` +
-		`"content":{"objective":"fix"},"decision_timestamp":"2026-08-01T12:00:00Z"}`
+		`"content":{"schema_version":"run_intake_specification.v1","problem_statement":"fix","desired_outcome":"fixed","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]},"decision_timestamp":"2026-08-01T12:00:00Z"}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/runs", strings.NewReader(body)).WithContext(ctx)
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Idempotency-Key", uuid.NewString())
@@ -654,7 +654,7 @@ func TestRunIntakeSurvivesClientCancellation(t *testing.T) {
 func TestCreateRunReportsRecoverableIntakeFailure(t *testing.T) {
 	body := `{"run_id":"` + uuid.NewString() +
 		`","base_commit":"0123456789012345678901234567890123456789",` +
-		`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`
+		`"content":{"schema_version":"run_intake_specification.v1","problem_statement":"fix","desired_outcome":"fixed","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]},"decision_timestamp":"2026-07-29T12:00:00Z"}`
 	tests := []string{"artifact", "binding", "transaction"}
 	for _, test := range tests {
 		t.Run(test, func(t *testing.T) {
@@ -683,7 +683,7 @@ func TestCreateRunRejectsMissingKeyAndWrongRole(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/v1/runs",
 			strings.NewReader(`{"run_id":"`+uuid.NewString()+
 				`","base_commit":"0123456789012345678901234567890123456789",`+
-				`"content":{"objective":"fix"},"decision_timestamp":"2026-07-29T12:00:00Z"}`))
+				`"content":{"schema_version":"run_intake_specification.v1","problem_statement":"fix","desired_outcome":"fixed","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]},"decision_timestamp":"2026-07-29T12:00:00Z"}`))
 		request.Header.Set("Authorization", "Bearer "+token)
 		if roles[0] == RoleApprover {
 			request.Header.Set("Idempotency-Key", uuid.NewString())

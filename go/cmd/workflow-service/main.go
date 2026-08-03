@@ -58,6 +58,10 @@ type config struct {
 	ImplementationPromptPath   string                 `json:"implementation_prompt_path"`
 	ReviewManifestPath         string                 `json:"review_manifest_path"`
 	ReviewPromptPath           string                 `json:"review_prompt_path"`
+	SpecificationManifestPath  string                 `json:"specification_manifest_path"`
+	SpecificationPromptPath    string                 `json:"specification_prompt_path"`
+	PlanningManifestPath       string                 `json:"planning_manifest_path"`
+	PlanningPromptPath         string                 `json:"planning_prompt_path"`
 	ContextMaxFiles            int                    `json:"context_max_files"`
 	ContextMaxBytes            int64                  `json:"context_max_bytes"`
 	TaskLeaseDuration          time.Duration          `json:"task_lease_duration_nanoseconds"`
@@ -150,6 +154,8 @@ func normalizeConfig(value *config) (config, error) {
 		value.ArtifactRoot, value.RepositoryRoot, value.WorktreeRoot,
 		value.VerificationWorkspaceRoot, value.ImplementationManifestPath,
 		value.ImplementationPromptPath, value.ReviewManifestPath, value.ReviewPromptPath,
+		value.SpecificationManifestPath, value.SpecificationPromptPath,
+		value.PlanningManifestPath, value.PlanningPromptPath,
 	}); err != nil {
 		return config{}, err
 	}
@@ -258,6 +264,16 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	if err != nil {
 		return fmt.Errorf("bootstrap implementation manifest: %w", err)
 	}
+	specificationDigest, err := bootstrapManifest(ctx, artifacts, agentRegistry,
+		value.SpecificationManifestPath, value.SpecificationPromptPath)
+	if err != nil {
+		return fmt.Errorf("bootstrap specification manifest: %w", err)
+	}
+	planningDigest, err := bootstrapManifest(ctx, artifacts, agentRegistry,
+		value.PlanningManifestPath, value.PlanningPromptPath)
+	if err != nil {
+		return fmt.Errorf("bootstrap planning manifest: %w", err)
+	}
 	reviewDigest, err := bootstrapManifest(
 		ctx, artifacts, agentRegistry, value.ReviewManifestPath, value.ReviewPromptPath,
 	)
@@ -275,8 +291,21 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		return err
 	}
 	gatewayArtifacts := artifact.Gateway{Store: artifacts}
-	implementationAdapter, reviewAdapter, err := providerAdapters(
+	specificationAdapter, planningAdapter, implementationAdapter, reviewAdapter, err := providerAdapters(
 		value, credentials, gatewayArtifacts,
+	)
+	if err != nil {
+		return err
+	}
+	specificationGateway, err := gateway.NewSpecificationService(
+		resolver, specificationAdapter, gatewayArtifacts, invocations, gateway.SystemClock{},
+	)
+	if err != nil {
+		return err
+	}
+	planningGateway, err := gateway.NewPlanningService(
+		resolver, planningAdapter, gatewayArtifacts, invocations, gateway.SystemClock{},
+		gateway.PlanningPolicy{TrustedCheckIDs: value.Policy.TrustedChecks},
 	)
 	if err != nil {
 		return err
@@ -355,10 +384,33 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	if err != nil {
 		return err
 	}
+	livePlanningHandlers, err := stage.NewLivePlanning(stage.LivePlanningConfig{
+		ServiceActorID: value.ServiceActorID, ReasoningActorID: value.ReasoningActorID,
+		SpecificationManifestDigest: specificationDigest,
+		PlanningManifestDigest:      planningDigest,
+		ReasoningTimeout:            value.TaskLeaseDuration,
+		Policy:                      value.Policy,
+		SpecificationBudget: runtime.ReasoningLimits{
+			MaximumInputTokens: 32_000, MaximumOutputTokens: 8_000,
+			MaximumProviderRequests: 1,
+		},
+		PlanningBudget: runtime.ReasoningLimits{
+			MaximumInputTokens: 64_000, MaximumOutputTokens: 12_000,
+			MaximumProviderRequests: 1,
+		},
+	}, artifacts, runtimePorts{Ledger: runtimeLedger, BindingRepository: bindings},
+		workflowStore, specificationGateway, planningGateway)
+	if err != nil {
+		return err
+	}
+	handlerMap := stageHandlers.Map()
+	for name, handler := range livePlanningHandlers.Map() {
+		handlerMap[name] = handler
+	}
 	reconciler, err := orchestration.New(orchestration.Config{
 		OwnerID: value.OwnerID, ClaimTTL: value.ClaimTTL,
 		PollInterval: 250 * time.Millisecond, MaxRetries: 5, InitialBackoff: time.Second,
-	}, runtimeLedger, artifacts, stageHandlers.Map(), slog.Default())
+	}, runtimeLedger, artifacts, handlerMap, slog.Default())
 	if err != nil {
 		return err
 	}
@@ -422,7 +474,8 @@ func workflowReady(ctx context.Context, value *config, credentials gateway.Crede
 		}
 	}
 	for _, path := range []string{value.ArtifactRoot, value.RepositoryRoot, value.WorktreeRoot, value.VerificationWorkspaceRoot,
-		value.ImplementationManifestPath, value.ImplementationPromptPath, value.ReviewManifestPath, value.ReviewPromptPath} {
+		value.ImplementationManifestPath, value.ImplementationPromptPath, value.ReviewManifestPath, value.ReviewPromptPath,
+		value.SpecificationManifestPath, value.SpecificationPromptPath, value.PlanningManifestPath, value.PlanningPromptPath} {
 		if _, err := os.Stat(path); err != nil {
 			return err
 		}
@@ -485,7 +538,7 @@ func bootstrapManifest(
 
 func providerAdapters(
 	value *config, credentials gateway.CredentialSource, artifacts gateway.ArtifactStore,
-) (gateway.ImplementationAdapter, gateway.ReviewAdapter, error) {
+) (gateway.SpecificationAdapter, gateway.PlanningAdapter, gateway.ImplementationAdapter, gateway.ReviewAdapter, error) {
 	models := gateway.MiniMaxModels()
 	options := []gateway.AnthropicOption{
 		gateway.WithAnthropicBaseURL(value.Provider.BaseURL),
@@ -495,10 +548,22 @@ func providerAdapters(
 		credentials, models, artifacts, options...,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, nil, err
+	}
+	specificationAdapter, err := gateway.NewAnthropicSpecificationAdapter(
+		credentials, models, artifacts, options...,
+	)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	planningAdapter, err := gateway.NewAnthropicPlanningAdapter(
+		credentials, models, artifacts, options...,
+	)
+	if err != nil {
+		return nil, nil, nil, nil, err
 	}
 	reviewAdapter, err := gateway.NewAnthropicReviewAdapter(
 		credentials, models, artifacts, options...,
 	)
-	return implementationAdapter, reviewAdapter, err
+	return specificationAdapter, planningAdapter, implementationAdapter, reviewAdapter, err
 }
