@@ -1038,24 +1038,25 @@ func (s *Server) submitRun(
 func (s *Server) publicationRequest(
 	ctx context.Context, key string, at time.Time, run workflow.Run,
 ) (publication.Request, error) {
-	if s.publication == nil || run.State != workflow.RunStateMergeReady || run.Approval == nil {
+	if s.publication == nil {
+		return publication.Request{}, workflow.ErrInvalidTransition
+	}
+	if run.State != workflow.RunStateMergeReady || run.Approval == nil {
 		return publication.Request{}, workflow.ErrInvalidTransition
 	}
 	tasks, err := s.workflow.ListTasks(ctx, run.ID)
-	if err != nil || len(tasks) != 1 {
+	if err != nil {
 		return publication.Request{}, workflow.ErrInvalid
 	}
-	task := tasks[0]
-	if task.State != workflow.TaskStateAccepted || task.Proposal == nil || task.Execution == nil ||
-		task.Verification == nil || task.Review == nil || task.CandidateCommit == "" {
-		return publication.Request{}, workflow.ErrInvalidTransition
+	task, err := publicationTask(tasks)
+	if err != nil {
+		return publication.Request{}, err
 	}
 	binding, err := s.bindings.GetRun(ctx, run.ID)
 	if err != nil {
 		return publication.Request{}, err
 	}
-	if binding.ApprovedSpecification == nil || binding.CompositeApproval == nil ||
-		!binding.CompositeApproval.Equal(*run.Approval) {
+	if !publicationBindingMatches(binding, *run.Approval) {
 		return publication.Request{}, workflow.ErrInvalidTransition
 	}
 	return publication.Request{
@@ -1065,6 +1066,30 @@ func (s *Server) publicationRequest(
 		Execution: *task.Execution, Verification: *task.Verification, Review: *task.Review,
 		Approval: *binding.CompositeApproval, ExpectedRunRevision: run.Revision,
 	}, nil
+}
+
+func publicationTask(tasks []workflow.Task) (workflow.Task, error) {
+	if len(tasks) != 1 {
+		return workflow.Task{}, workflow.ErrInvalid
+	}
+	task := tasks[0]
+	if !taskReadyForPublication(task) {
+		return workflow.Task{}, workflow.ErrInvalidTransition
+	}
+	return task, nil
+}
+
+func taskReadyForPublication(task workflow.Task) bool {
+	return task.State == workflow.TaskStateAccepted && task.Proposal != nil &&
+		task.Execution != nil && task.Verification != nil && task.Review != nil &&
+		task.CandidateCommit != ""
+}
+
+func publicationBindingMatches(
+	binding runtime.RunBinding, approval workflow.ArtifactRef,
+) bool {
+	return binding.ApprovedSpecification != nil && binding.CompositeApproval != nil &&
+		binding.CompositeApproval.Equal(approval)
 }
 
 func (*Server) envelope(
