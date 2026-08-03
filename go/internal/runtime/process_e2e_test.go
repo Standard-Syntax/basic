@@ -39,6 +39,29 @@ import (
 
 const packagedHelperImage = "alpine:3.23.3@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95"
 
+type pythonProjectMetadata struct {
+	SchemaVersion      string                      `json:"schema_version"`
+	Name               string                      `json:"name"`
+	PackageName        string                      `json:"package_name"`
+	Objective          string                      `json:"objective"`
+	AcceptanceCriteria []pythonAcceptanceCriterion `json:"acceptance_criteria"`
+	Paths              pythonProjectPaths          `json:"paths"`
+	TrustedChecks      []string                    `json:"trusted_checks"`
+	MaximumTasks       int                         `json:"maximum_tasks"`
+	Golden             bool                        `json:"-"`
+}
+
+type pythonAcceptanceCriterion struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+}
+
+type pythonProjectPaths struct {
+	Readable   []string `json:"readable"`
+	Writable   []string `json:"writable"`
+	Prohibited []string `json:"prohibited"`
+}
+
 func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	if os.Getenv("BETA_LIVE_E2E") != "1" {
 		t.Skip("BETA_LIVE_E2E=1 is required")
@@ -61,6 +84,59 @@ func TestBetaCanaryProcessesPublishRealDraft(t *testing.T) {
 		t.Skip("BETA_CANARY=1 is required")
 	}
 	runBetaProcesses(t)
+}
+
+func TestPythonProjectMetadataDrivesLifecycleScope(t *testing.T) {
+	project := &pythonProjectMetadata{
+		Name: "operator-demo", PackageName: "operator_demo", Objective: "Return the operator value.",
+		AcceptanceCriteria: []pythonAcceptanceCriterion{
+			{ID: "AC-001", Description: "returns the value"},
+			{ID: "AC-002", Description: "passes the trusted checks"},
+		},
+		Paths: pythonProjectPaths{
+			Readable: []string{"src", "tests"}, Writable: []string{"src/operator_demo"},
+			Prohibited: []string{"tests"},
+		},
+		TrustedChecks: []string{"make-check-v1"}, MaximumTasks: 1,
+	}
+	now := time.Now().UTC()
+	request, proposal := specificationPair(uuid.NewString(), now, project)
+	if request.DesiredOutcome != project.Objective || proposal.Goal != project.Objective ||
+		len(proposal.AcceptanceCriteria) != 2 ||
+		proposal.AcceptanceCriteria[1].CriterionId != "AC-002" {
+		t.Fatalf("metadata-derived specification = %#v %#v", request, proposal)
+	}
+	planning, graph := planningPair(uuid.NewString(), uuid.NewString(), now, "", RepositorySnapshot{},
+		strings.Repeat("a", 64), project)
+	if !slices.Equal(planning.WritablePaths, project.Paths.Writable) ||
+		graph.Tasks[0].Objective != project.Objective ||
+		!slices.Equal(graph.Tasks[0].AcceptanceCriterionIds, []string{"AC-001", "AC-002"}) {
+		t.Fatalf("metadata-derived task graph = %#v %#v", planning, graph)
+	}
+	prompts, _ := runtimeManifests(t, t.TempDir(), project)
+	promptBody, err := os.ReadFile(prompts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(promptBody)
+	for _, expected := range []string{project.Name, project.PackageName, project.Objective} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("implementation prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestPythonCandidatePathsMustRemainWithinCommittedWritableRoots(t *testing.T) {
+	for _, path := range []string{"src", "src/package/__init__.py"} {
+		if !pathWithinPolicy(path, []string{"src"}) {
+			t.Fatalf("expected path %q to be writable", path)
+		}
+	}
+	for _, path := range []string{"tests/test_app.py", "../src/app.py", "/src/app.py", "src/../tests"} {
+		if pathWithinPolicy(path, []string{"src"}) {
+			t.Fatalf("unsafe path %q was writable", path)
+		}
+	}
 }
 
 func TestPackagedProcessMountsAreExplicitAndCredentialFilesAreReadOnly(t *testing.T) {
@@ -128,6 +204,7 @@ func runBetaProcesses(t *testing.T) {
 		}
 	}
 	repository, remote, remoteURL, baseCommit := "", "", "", ""
+	var project *pythonProjectMetadata
 	repositoryOwner, repositoryName, branchPrefix := "local", "fixture", "harness/"
 	tokenFile, pushCredential, apiEndpoint := "", "", ""
 	artifactRoot, worktrees, verificationRoot := "", "", ""
@@ -146,7 +223,7 @@ func runBetaProcesses(t *testing.T) {
 		policy = canaryConfig.Policy
 	} else {
 		if pythonProject {
-			repository, remote, baseCommit = fixturePythonRepository(
+			repository, remote, baseCommit, project = fixturePythonRepository(
 				t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
 			)
 		} else {
@@ -166,11 +243,10 @@ func runBetaProcesses(t *testing.T) {
 			verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
 		}
 		paths := map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}}
-		if pythonProject {
+		if project != nil {
 			paths = map[string]any{
-				"readable":   []string{"Makefile", "pyproject.toml", "src", "tests", "uv.lock"},
-				"writable":   []string{"src"},
-				"prohibited": []string{".harness", "Makefile", "pyproject.toml", "tests", "uv.lock"},
+				"readable": project.Paths.Readable, "writable": project.Paths.Writable,
+				"prohibited": project.Paths.Prohibited,
 			}
 		}
 		policy = map[string]any{
@@ -193,7 +269,7 @@ func runBetaProcesses(t *testing.T) {
 			}
 		}
 	}
-	promptPaths, manifestPaths := runtimeManifests(t, root)
+	promptPaths, manifestPaths := runtimeManifests(t, root, project)
 	token := "runtime-operator-token"
 	tokenDigest := sha256.Sum256([]byte(token))
 	var prServer *httptest.Server
@@ -318,8 +394,8 @@ func runBetaProcesses(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	runKey := uuid.NewString()
 	objective := "correct Add without changing tests"
-	if pythonProject {
-		objective = "implement the trusted Python project without changing tests or configuration"
+	if project != nil {
+		objective = project.Objective
 	}
 	runRequest := map[string]any{
 		"run_id": runID, "base_commit": baseCommit,
@@ -332,14 +408,14 @@ func runBetaProcesses(t *testing.T) {
 	if firstRun.replay {
 		t.Fatal("initial run intake was marked as a replay")
 	}
-	specRequest, specProposal := specificationPair(runID, now)
+	specRequest, specProposal := specificationPair(runID, now, project)
 	client.mutate(t, "/v1/runs/"+runID+"/specification", client.revision(t, runID),
 		protoPair(t, specRequest, specProposal, now.Add(time.Second)), http.StatusOK)
 	client.mutate(t, "/v1/runs/"+runID+"/specification/approve", client.revision(t, runID),
 		map[string]any{"decision_timestamp": now.Add(2 * time.Second)}, http.StatusOK)
 	specBody, _ := proto.MarshalOptions{Deterministic: true}.Marshal(specProposal)
 	planningRequest, graph := planningPair(
-		runID, taskID, now, repository, planningSnapshot, Digest(specBody),
+		runID, taskID, now, repository, planningSnapshot, Digest(specBody), project,
 	)
 	client.mutate(t, "/v1/runs/"+runID+"/task-graph", client.revision(t, runID),
 		protoPair(t, planningRequest, graph, now.Add(3*time.Second)), http.StatusOK)
@@ -485,12 +561,21 @@ func runBetaProcesses(t *testing.T) {
 		t.Fatalf("publication branch = %#v", publicationValue["branch"])
 	}
 	changed := strings.Fields(runGitOutput(t, repository, "diff", "--name-only", baseCommit, candidate))
-	expectedChanged := "add.go"
-	if pythonProject {
-		expectedChanged = "src/live_demo/__init__.py"
-	}
-	if len(changed) != 1 || changed[0] != expectedChanged {
+	if project == nil && (len(changed) != 1 || changed[0] != "add.go") {
 		t.Fatalf("changed paths = %v", changed)
+	}
+	if project != nil {
+		if len(changed) == 0 {
+			t.Fatal("candidate did not change any files")
+		}
+		for _, path := range changed {
+			if !pathWithinPolicy(path, project.Paths.Writable) {
+				t.Fatalf("candidate path %q is outside committed writable paths %v", path, project.Paths.Writable)
+			}
+		}
+		if project.Golden && (len(changed) != 1 || changed[0] != "src/live_demo/__init__.py") {
+			t.Fatalf("golden changed paths = %v", changed)
+		}
 	}
 	candidatePath := filepath.Join(root, "candidate")
 	runGitE2E(t, repository, "worktree", "add", "--detach", candidatePath, candidate)
@@ -503,6 +588,14 @@ func runBetaProcesses(t *testing.T) {
 	command.Dir = candidatePath
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("candidate verification: %v: %s", err, output)
+	}
+	if project != nil && project.Golden {
+		console := exec.Command("uv", "run", "--frozen", project.Name)
+		console.Dir = candidatePath
+		output, err := console.CombinedOutput()
+		if err != nil || string(output) != "ready\n" {
+			t.Fatalf("golden console result: err=%v output=%q", err, output)
+		}
 	}
 	runGitE2E(t, repository, "worktree", "remove", candidatePath)
 	if canaryMode {
@@ -990,26 +1083,32 @@ func fixtureRepository(t *testing.T, root string) (string, string, string) {
 
 func fixturePythonRepository(
 	t *testing.T, root, sourceRoot string,
-) (string, string, string) {
+) (string, string, string, *pythonProjectMetadata) {
 	t.Helper()
 	repository := filepath.Join(root, "repository")
 	remote := filepath.Join(root, "remote.git")
-	specification := filepath.Join(root, "project-spec.json")
-	checks := filepath.Join(root, "checks")
-	if err := os.Mkdir(checks, 0o700); err != nil {
-		t.Fatal(err)
+	specification, checks := os.Getenv("PROJECT_SPEC"), os.Getenv("CHECKS")
+	golden := specification == "" && checks == ""
+	if golden {
+		specification = filepath.Join(root, "project-spec.json")
+		checks = filepath.Join(root, "checks")
+		if err := os.Mkdir(checks, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeJSONFile(t, specification, map[string]any{
+			"schema_version": "harness_python_project.v1",
+			"name":           "live-demo", "package_name": "live_demo",
+			"objective": "Implement main so it returns the exact string ready.",
+			"acceptance_criteria": []map[string]string{{
+				"id": "AC-001", "description": "main returns the exact string ready",
+			}},
+		})
+		writeFile(t, filepath.Join(checks, "test_acceptance.py"),
+			"from live_demo import main\n\n\ndef test_main_returns_ready() -> None:\n"+
+				"    assert main() == \"ready\"\n")
+	} else if specification == "" || checks == "" {
+		t.Fatal("PROJECT_SPEC and CHECKS must be set together")
 	}
-	writeJSONFile(t, specification, map[string]any{
-		"schema_version": "harness_python_project.v1",
-		"name":           "live-demo", "package_name": "live_demo",
-		"objective": "Implement main so it returns the exact string ready.",
-		"acceptance_criteria": []map[string]string{{
-			"id": "AC-001", "description": "main returns the exact string ready",
-		}},
-	})
-	writeFile(t, filepath.Join(checks, "test_acceptance.py"),
-		"from live_demo import main\n\n\ndef test_main_returns_ready() -> None:\n"+
-			"    assert main() == \"ready\"\n")
 	command := exec.Command("uv", "run", "--frozen", "harness-agents", "init", repository,
 		"--project-spec", specification, "--checks", checks)
 	command.Dir = sourceRoot
@@ -1020,7 +1119,59 @@ func fixturePythonRepository(
 	runGitE2E(t, repository, "remote", "add", "origin", remote)
 	runGitE2E(t, repository, "push", "-q", "origin", "main:main")
 	base := strings.TrimSpace(runGitOutput(t, repository, "rev-parse", "HEAD"))
-	return repository, "origin", base
+	project := loadPythonProjectMetadata(t, repository, base)
+	project.Golden = golden
+	return repository, "origin", base, project
+}
+
+func loadPythonProjectMetadata(t *testing.T, repository, commit string) *pythonProjectMetadata {
+	t.Helper()
+	body := runGitOutput(t, repository, "show", commit+":.harness/project.json")
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var project pythonProjectMetadata
+	if err := decoder.Decode(&project); err != nil {
+		t.Fatalf("decode committed Python project metadata: %v", err)
+	}
+	if project.SchemaVersion != "harness_python_project.v1" || project.Name == "" ||
+		project.PackageName == "" || project.Objective == "" || project.MaximumTasks != 1 ||
+		len(project.AcceptanceCriteria) == 0 ||
+		!slices.Equal(project.TrustedChecks, []string{"make-check-v1"}) ||
+		len(project.Paths.Readable) == 0 || len(project.Paths.Writable) == 0 {
+		t.Fatalf("unsupported committed Python project metadata: %#v", project)
+	}
+	for _, paths := range [][]string{
+		project.Paths.Readable, project.Paths.Writable, project.Paths.Prohibited,
+	} {
+		for _, path := range paths {
+			if !cleanRelativePath(path) {
+				t.Fatalf("unsafe committed project path %q", path)
+			}
+		}
+	}
+	for _, criterion := range project.AcceptanceCriteria {
+		if criterion.ID == "" || criterion.Description == "" {
+			t.Fatalf("invalid committed acceptance criterion: %#v", criterion)
+		}
+	}
+	return &project
+}
+
+func cleanRelativePath(path string) bool {
+	return path != "" && path != "." && !filepath.IsAbs(path) && filepath.Clean(path) == path &&
+		path != ".." && !strings.HasPrefix(path, ".."+string(filepath.Separator))
+}
+
+func pathWithinPolicy(path string, roots []string) bool {
+	if !cleanRelativePath(path) {
+		return false
+	}
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func smartGitRemote(t *testing.T, repository string) *httptest.Server {
@@ -1079,7 +1230,9 @@ func smartGitRemote(t *testing.T, repository string) *httptest.Server {
 	return server
 }
 
-func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
+func runtimeManifests(
+	t *testing.T, root string, project *pythonProjectMetadata,
+) ([2]string, [2]string) {
 	t.Helper()
 	var prompts [2]string
 	var manifests [2]string
@@ -1091,7 +1244,7 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 			"a non-empty rationale, and acceptance_criterion_ids exactly [\"AC-001\"]. " +
 			"Set requested_declared_check_ids exactly [\"make-check-v1\"]. Do not request a " +
 			"scope change and do not change tests or any other file."
-		if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
+		if project != nil && project.Golden {
 			prompt = "Return only a valid implementation_proposal.v1 JSON object for the " +
 				"approved task. Set a non-empty summary and exactly one changes item: path " +
 				"src/live_demo/__init__.py, operation update, expected_original_sha256 equal " +
@@ -1103,6 +1256,22 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 				"exactly [\"AC-001\"]. Set requested_declared_check_ids exactly " +
 				"[\"make-check-v1\"]. Do not request a scope change and do not change tests, " +
 				"lockfiles, configuration, metadata, or any other file."
+		} else if project != nil {
+			criteria, err := json.Marshal(project.AcceptanceCriteria)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt = fmt.Sprintf(
+				"Return only a valid implementation_proposal.v1 JSON object for the approved task. "+
+					"Implement the operator objective %q for Python distribution %q and package %q. "+
+					"The acceptance criteria are %s. Inspect the supplied repository context and "+
+					"return a non-empty set of complete-file changes entirely within the committed "+
+					"writable paths %v. Set a non-empty rationale, set acceptance_criterion_ids to "+
+					"exactly the committed criterion IDs, set requested_declared_check_ids exactly "+
+					"[\"make-check-v1\"], do not request a scope change, and do not change any "+
+					"prohibited path.", project.Objective, project.Name, project.PackageName,
+				criteria, project.Paths.Writable,
+			)
 		}
 		if stageName == "review" {
 			prompt = "Independently review the exact candidate diff and verification evidence. " +
@@ -1144,7 +1313,7 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 }
 
 func specificationPair(
-	runID string, now time.Time,
+	runID string, now time.Time, project *pythonProjectMetadata,
 ) (*reasoningv1.SpecificationRequest, *reasoningv1.SpecificationProposal) {
 	envelope := reasoningEnvelope(runID, nil,
 		reasoningv1.ReasoningStage_REASONING_STAGE_SPECIFICATION, now)
@@ -1159,12 +1328,17 @@ func specificationPair(
 			VerificationMethod: "make check",
 		}},
 	}
-	if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
-		request.ProblemStatement = "The trusted Python main function is not implemented"
-		request.DesiredOutcome = "main returns the exact string ready"
-		proposal.Title = "Implement live demo"
-		proposal.Goal = "Return ready from main"
-		proposal.AcceptanceCriteria[0].Description = "main returns the exact string ready"
+	if project != nil {
+		request.ProblemStatement = "The trusted Python project requires the operator objective"
+		request.DesiredOutcome = project.Objective
+		proposal.Title = "Implement " + project.Name
+		proposal.Goal = project.Objective
+		proposal.AcceptanceCriteria = make([]*reasoningv1.AcceptanceCriterion, 0, len(project.AcceptanceCriteria))
+		for _, criterion := range project.AcceptanceCriteria {
+			proposal.AcceptanceCriteria = append(proposal.AcceptanceCriteria,
+				&reasoningv1.AcceptanceCriterion{CriterionId: criterion.ID,
+					Description: criterion.Description, VerificationMethod: "make check"})
+		}
 	}
 	return request, proposal
 }
@@ -1172,6 +1346,7 @@ func specificationPair(
 func planningPair(
 	runID, taskID string, now time.Time,
 	repository string, snapshot RepositorySnapshot, specificationDigest string,
+	project *pythonProjectMetadata,
 ) (*reasoningv1.TaskPlanningRequest, *reasoningv1.TaskGraphProposal) {
 	envelope := reasoningEnvelope(runID, nil,
 		reasoningv1.ReasoningStage_REASONING_STAGE_PLANNING, now.Add(time.Second))
@@ -1197,14 +1372,21 @@ func planningPair(
 			StopConditions:         []string{"make check passes"},
 		}},
 	}
-	if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
-		request.ReadablePaths = []string{"Makefile", "pyproject.toml", "src", "tests", "uv.lock"}
-		request.WritablePaths = []string{"src"}
-		request.ProhibitedPaths = []string{".harness", "Makefile", "pyproject.toml", "tests", "uv.lock"}
-		graph.Tasks[0].Objective = "Implement main so it returns ready"
+	if project != nil {
+		criterionIDs := make([]string, 0, len(project.AcceptanceCriteria))
+		for _, criterion := range project.AcceptanceCriteria {
+			criterionIDs = append(criterionIDs, criterion.ID)
+		}
+		request.ReadablePaths = slices.Clone(project.Paths.Readable)
+		request.WritablePaths = slices.Clone(project.Paths.Writable)
+		request.ProhibitedPaths = slices.Clone(project.Paths.Prohibited)
+		request.AcceptanceCriterionIds = criterionIDs
+		graph.Tasks[0].Objective = project.Objective
+		graph.Tasks[0].AcceptanceCriterionIds = slices.Clone(criterionIDs)
 		graph.Tasks[0].ReadablePaths = slices.Clone(request.ReadablePaths)
 		graph.Tasks[0].WritablePaths = slices.Clone(request.WritablePaths)
 		graph.Tasks[0].ProhibitedPaths = slices.Clone(request.ProhibitedPaths)
+		graph.Tasks[0].RequiredCheckIds = slices.Clone(project.TrustedChecks)
 	}
 	return request, graph
 }

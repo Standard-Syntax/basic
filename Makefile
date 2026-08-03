@@ -158,6 +158,8 @@ else
 endif
 
 beta-python-project-e2e:
+	@PROJECT_SPEC="$(PROJECT_SPEC)" CHECKS="$(CHECKS)" \
+		uv run --frozen python -m harness_agents.project_inputs
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	docker compose down --volumes
 	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
@@ -169,6 +171,7 @@ beta-python-project-e2e:
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
 		BETA_LIVE_E2E=1 BETA_PYTHON_PROJECT=1 RUNTIME_SOURCE_ROOT="$(CURDIR)" \
+		PROJECT_SPEC="$(PROJECT_SPEC)" CHECKS="$(CHECKS)" \
 		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
 		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
 		go test -v -tags=integration -count=1 \
