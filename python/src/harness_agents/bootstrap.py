@@ -164,7 +164,7 @@ requires-python = ">=3.13,<3.15"
 dependencies = []
 
 [project.scripts]
-{spec.name} = "{spec.package_name}:main"
+{spec.name} = "{spec.package_name}._cli:cli"
 
 [dependency-groups]
 dev = [
@@ -267,6 +267,15 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
         (temporary / "src" / spec.package_name / "__init__.py").write_text(
             '"""Application entry point to be implemented by the harness."""\n\n\n'
             'def main() -> None:\n    raise NotImplementedError("implementation pending")\n',
+            encoding="utf-8",
+        )
+        (temporary / "src" / spec.package_name / "_cli.py").write_text(
+            '"""Stable console entry point for the generated application."""\n\n'
+            "from . import main\n\n\n"
+            "def cli() -> None:\n"
+            "    result = main()\n"
+            "    if result is not None:\n"
+            "        print(result)\n",
             encoding="utf-8",
         )
         for relative, body in checks:
