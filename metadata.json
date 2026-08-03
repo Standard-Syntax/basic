@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3QM2M8HZ9F560H5DSCMEZA",
+  "strategy": "manual-commit",
+  "branch": "harness/trusted-python-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/security.md",
+    "pyproject.toml",
+    "python/src/harness_agents/bootstrap.py",
+    "python/src/harness_agents/cli.py",
+    "python/tests/test_bootstrap.py",
+    "python/tests/test_cli.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24878,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2773248,
+    "output_tokens": 9292,
+    "api_call_count": 15
+  }
+}
