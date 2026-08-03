@@ -3,40 +3,36 @@
   "checkpoint_id": "01KZ4SBKGM2NRZSQPNYE2R5H2C",
   "session_id": "019fc98c-8916-7cf1-9e7a-38b3c6fd5562",
   "strategy": "manual-commit",
-  "created_at": "2026-08-03T21:44:26.761795395Z",
+  "created_at": "2026-08-03T21:45:35.929963044Z",
   "branch": "harness/live-specification",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/reasoning/gateway/anthropic_specification.go",
-    "go/internal/reasoning/gateway/migrations/0022_specification_invocations.sql",
     "go/internal/reasoning/gateway/specification_service.go",
-    "go/internal/reasoning/gateway/specification_service_test.go",
-    "python/agents/specification.json",
-    "python/src/harness_agents/prompt_protocol.py"
+    "go/internal/reasoning/gateway/specification_service_test.go"
   ],
   "agent": "Codex",
   "model": "gpt-5.6-sol",
   "turn_id": "83bc0b41c07c",
-  "checkpoint_transcript_start": 113,
-  "transcript_lines_at_start": 113,
-  "compact_transcript_start": 21,
+  "checkpoint_transcript_start": 228,
+  "transcript_lines_at_start": 228,
+  "compact_transcript_start": 47,
   "token_usage": {
-    "input_tokens": 78597,
+    "input_tokens": 12523,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 3415552,
-    "output_tokens": 15145,
-    "api_call_count": 26
+    "cache_read_tokens": 1232896,
+    "output_tokens": 2477,
+    "api_call_count": 8
   },
   "initial_attribution": {
-    "calculated_at": "2026-08-03T21:44:26.704457661Z",
-    "agent_lines": 767,
-    "agent_removed": 3,
-    "human_added": 10,
+    "calculated_at": "2026-08-03T21:45:35.873674929Z",
+    "agent_lines": 532,
+    "agent_removed": 0,
+    "human_added": 265,
     "human_modified": 0,
     "human_removed": 0,
-    "total_committed": 777,
-    "total_lines_changed": 782,
-    "agent_percentage": 98.46547314578005,
+    "total_committed": 797,
+    "total_lines_changed": 802,
+    "agent_percentage": 66.33416458852868,
     "metric_version": 2
   }
 }
