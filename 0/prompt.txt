@@ -89,3 +89,11 @@ gh stack view --json
 ```
 
 After each slice passes its focused gates, create the next layer with `gh stack add` using the branch names above. Preserve untracked `.codex/`, `.entire/`, and `.opencode/`. Use regression tests instead of introducing a new lint tool solely for typed-nil detection.
+
+---
+
+commit and push and create pull requests
+
+---
+
+please read the review comments on pull requests and address them while staying inline with acceptance criteria

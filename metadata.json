@@ -3,10 +3,8 @@
   "checkpoint_id": "01KZ2A1VJ5JK9494K69KVEWR5M",
   "strategy": "manual-commit",
   "branch": "beta/api-boundary-hardening",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "go/cmd/api-service/main.go",
-    "go/cmd/api-service/main_test.go",
     "go/internal/controlapi/server.go",
     "go/internal/controlapi/server_test.go"
   ],
@@ -20,10 +18,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 63673,
+    "input_tokens": 351119,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 592384,
-    "output_tokens": 3999,
-    "api_call_count": 14
+    "cache_read_tokens": 9337088,
+    "output_tokens": 10970,
+    "api_call_count": 60
   }
 }
