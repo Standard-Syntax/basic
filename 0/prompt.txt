@@ -1,0 +1,1 @@
+install and run the harness to create a real python project. document any error, gaps or improvements for the harness in a markdown artifact when you run the harness.
