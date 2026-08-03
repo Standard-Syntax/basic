@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ452Q61W5FN1T5JRAJQVEZ2",
+  "strategy": "manual-commit",
+  "branch": "harness/redacted-support-bundles",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/controlapi/server.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9759,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 622080,
+    "output_tokens": 1964,
+    "api_call_count": 6
+  }
+}
