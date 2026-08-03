@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3RFCWB9VDQ5BZ1Q4J0AVFW",
+  "session_id": "019fc596-29d0-7933-bc8c-ac8992109273",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T12:09:48.379909028Z",
+  "branch": "harness/approval-publication-split",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/architecture.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "docs/security.md",
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
+    "go/internal/runtime/process_e2e_test.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "68d30e342a4f",
+  "checkpoint_transcript_start": 350,
+  "transcript_lines_at_start": 350,
+  "compact_transcript_start": 74,
+  "token_usage": {
+    "input_tokens": 157204,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 14023168,
+    "output_tokens": 13095,
+    "api_call_count": 83
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T12:09:48.295280723Z",
+    "agent_lines": 189,
+    "agent_removed": 55,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 189,
+    "total_lines_changed": 244,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
