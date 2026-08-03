@@ -107,9 +107,12 @@ def test_operator_runs_explicit_gates_submits_and_exports_redacted_bundle(
     state_path = (tmp_path / "state.json").resolve()
     root_key = uuid.uuid4()
     run_lifecycle(config, project.resolve(), state_path, root_key)
+    first_timestamp = json.loads(state_path.read_text())["operations"]["run"]["decision_timestamp"]
+    run_lifecycle(config, project.resolve(), state_path, root_key)
     state = json.loads(state_path.read_text())
     assert stat.S_IMODE(state_path.stat().st_mode) == 0o600
     assert state["schema_version"] == "harness_operator_state.v1"
+    assert state["operations"]["run"]["decision_timestamp"] == first_timestamp
     assert state["planning_proposal"]["tasks"][0]["required_check_ids"] == ["make-check-v1"]
 
     approve_gate(config, state_path, "specification", uuid.uuid4())

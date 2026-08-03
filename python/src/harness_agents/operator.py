@@ -49,6 +49,7 @@ _STATE_FIELDS = frozenset(
         "specification_proposal",
         "planning_request",
         "planning_proposal",
+        "operations",
     }
 )
 
@@ -378,6 +379,7 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
         "specification_proposal": _message_dict(specification_proposal),
         "planning_request": _message_dict(planning_request),
         "planning_proposal": _message_dict(planning_proposal),
+        "operations": {},
     }
 
 
@@ -414,6 +416,16 @@ def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
             uuid.UUID(cast(str, root[field]))
         except (TypeError, ValueError) as error:
             raise OperatorError("operator state contains an invalid identity") from error
+    operations = root["operations"]
+    if not isinstance(operations, dict) or not all(
+        isinstance(name, str)
+        and isinstance(value, dict)
+        and set(value) == {"root_key", "decision_timestamp"}
+        and isinstance(value["root_key"], str)
+        and isinstance(value["decision_timestamp"], str)
+        for name, value in operations.items()
+    ):
+        raise OperatorError("operator state contains invalid operation recovery data")
     try:
         validate_transport_state(root)
     except (ParseError, TypeError, ValueError) as error:
@@ -423,6 +435,21 @@ def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
 
 def _key(root: uuid.UUID, operation: str) -> uuid.UUID:
     return uuid.uuid5(root, operation)
+
+
+def _operation_timestamp(
+    state_path: Path, state: dict[str, Any], operation: str, root_key: uuid.UUID
+) -> str:
+    operations = cast(dict[str, dict[str, str]], state["operations"])
+    existing = operations.get(operation)
+    if existing is not None:
+        if existing["root_key"] != str(root_key):
+            raise OperatorError(f"operation {operation!r} already has a different idempotency root")
+        return existing["decision_timestamp"]
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    operations[operation] = {"root_key": str(root_key), "decision_timestamp": timestamp}
+    _write_state(state_path, state, replace=True)
+    return timestamp
 
 
 def _revision(config: OperatorConfig, run_id: str) -> int:
@@ -442,7 +469,7 @@ def run_lifecycle(
         state = _project_state(config, project, idempotency_key)
         _write_state(state_path, state)
     run_id = cast(str, state["run_id"])
-    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    now = _operation_timestamp(state_path, state, "run", idempotency_key)
     created = _request(
         config,
         "POST",
@@ -477,7 +504,7 @@ def approve_gate(
 ) -> dict[str, Any]:
     state = load_state(state_path, config)
     run_id = cast(str, state["run_id"])
-    now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    now = _operation_timestamp(state_path, state, "approve-" + gate, idempotency_key)
     if gate == "specification":
         approved = _request(
             config,
@@ -516,11 +543,12 @@ def submit_candidate(
 ) -> dict[str, Any]:
     state = load_state(state_path, config)
     run_id = cast(str, state["run_id"])
+    decision_timestamp = _operation_timestamp(state_path, state, "submit", idempotency_key)
     return _request(
         config,
         "POST",
         f"/v1/runs/{run_id}/submit",
-        body={"decision_timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z")},
+        body={"decision_timestamp": decision_timestamp},
         idempotency_key=_key(idempotency_key, "submit"),
         revision=_revision(config, run_id),
     )
