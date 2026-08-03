@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ44T4TQVADV3B66R2TGN1X2",
+  "strategy": "manual-commit",
+  "branch": "harness/review-output-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/reasoning/contracts/validation.go",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/review_service.go",
+    "go/internal/reasoning/gateway/service.go",
+    "go/internal/reasoning/gateway/service_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 313710,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1075712,
+    "output_tokens": 8059,
+    "api_call_count": 23
+  }
+}
