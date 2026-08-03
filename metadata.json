@@ -3,11 +3,8 @@
   "checkpoint_id": "01KZ2AKC2CPSZFQSNWNE9144W7",
   "strategy": "manual-commit",
   "branch": "beta/publication-client-hardening",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "go/internal/publication/credential.go",
-    "go/internal/publication/credential_test.go",
-    "go/internal/publication/github.go",
     "go/internal/publication/github_test.go"
   ],
   "sessions": [
@@ -20,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 27324,
+    "input_tokens": 12400,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1144064,
-    "output_tokens": 3196,
-    "api_call_count": 7
+    "cache_read_tokens": 838400,
+    "output_tokens": 3042,
+    "api_call_count": 9
   }
 }
