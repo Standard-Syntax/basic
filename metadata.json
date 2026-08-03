@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ45B92PZYWTDEAQ6QFV36MX",
+  "strategy": "manual-commit",
+  "branch": "harness/operator-lifecycle-cli",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "python/tests/test_operator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2726,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 424192,
+    "output_tokens": 524,
+    "api_call_count": 3
+  }
+}
