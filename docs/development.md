@@ -83,7 +83,7 @@ make beta-python-project-e2e \
 
 Partial pairs, missing or symlinked inputs, unsafe report paths, and existing
 preservation destinations fail before Docker, PostgreSQL, or provider work.
-The report is the closed `harness_python_project_e2e_report.v1` contract, is
+The report is the closed `harness_python_project_e2e_report.v2` contract, is
 atomically replaced as a regular mode-`0600` file, and contains only bounded
 redacted lifecycle evidence and artifact digests. Preservation copies only the
 generated repository after a complete credential and file-type scan.
@@ -226,7 +226,8 @@ live smoke separately:
 ANTHROPIC_API_KEY='...' ANTHROPIC_MODEL='...' make provider-smoke
 ```
 
-This performs exactly one real implementation invocation and one real review
+This performs exactly one real invocation for specification, planning,
+implementation, and review
 invocation and validates both against the unchanged kernel mappings. It never
 silently skips: missing variables or either provider failure make the target
 fail. The live smoke is not part of `make check` or `make integration-test`.

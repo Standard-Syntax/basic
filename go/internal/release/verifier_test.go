@@ -280,16 +280,20 @@ func TestEvidenceBindingPredicates(t *testing.T) {
 		{"invocation", func(mutated bool) bool {
 			proposal := testRef("proposal")
 			values := []invocationEvidence{
+				{stage: "specification", provider: gateway.MiniMaxAnthropicProvider, model: gateway.MiniMaxModel,
+					requestID: "specification", providerRequestID: "provider-1", proposal: testRef("specification"), requests: 1, input: 1, output: 1},
+				{stage: "planning", provider: gateway.MiniMaxAnthropicProvider, model: gateway.MiniMaxModel,
+					requestID: "planning", providerRequestID: "provider-2", proposal: testRef("planning"), requests: 1, input: 1, output: 1},
 				{stage: "implementation", provider: gateway.MiniMaxAnthropicProvider, model: gateway.MiniMaxModel,
-					requestID: "implementation", providerRequestID: "provider-1", proposal: proposal, requests: 1, input: 1, output: 1},
+					requestID: "implementation", providerRequestID: "provider-3", proposal: proposal, requests: 1, input: 1, output: 1},
 				{stage: "review", provider: gateway.MiniMaxAnthropicProvider, model: gateway.MiniMaxModel,
-					requestID: "review", providerRequestID: "provider-2", requests: 1, input: 1, output: 1},
+					requestID: "review", providerRequestID: "provider-4", requests: 1, input: 1, output: 1},
 			}
 			if mutated {
-				values[0].proposal = testRef("mutated")
+				values[2].proposal = testRef("mutated")
 			}
 			task := workflow.Task{Proposal: &proposal}
-			return validInvocationSet(values, &task) && validLiveInvocation(&values[0]) && validLiveInvocation(&values[1])
+			return validInvocationSet(values, &task) && validLiveInvocation(&values[0]) && validLiveInvocation(&values[3])
 		}},
 		{"publication", func(mutated bool) bool {
 			manifest := testManifest()

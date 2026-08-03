@@ -111,7 +111,7 @@ func (h *LivePlanningHandlers) specify(ctx context.Context, job runtime.Job,
 		return orchestration.HandlerResult{}, err
 	}
 	_, err = h.workflow.ExecuteRun(ctx, workflow.ProposeSpecification{Meta: h.envelope(ids.CommandID,
-		h.config.ReasoningActorID, workflow.ActorReasoningService, run.Revision, created), ID: job.RunID,
+		h.config.ServiceActorID, workflow.ActorWorkflowService, run.Revision, created), ID: job.RunID,
 		Specification: ref})
 	return orchestration.HandlerResult{Artifact: ref, Continue: false}, err
 }
@@ -172,7 +172,7 @@ func (h *LivePlanningHandlers) plan( // skipcq: GO-R1005 -- explicit fail-closed
 		return orchestration.HandlerResult{}, err
 	}
 	_, err = h.workflow.ExecuteRun(ctx, workflow.ProposeTaskGraph{Meta: h.envelope(ids.CommandID,
-		h.config.ReasoningActorID, workflow.ActorReasoningService, run.Revision, created), ID: job.RunID,
+		h.config.ServiceActorID, workflow.ActorWorkflowService, run.Revision, created), ID: job.RunID,
 		TaskGraph: ref})
 	return orchestration.HandlerResult{Artifact: ref, Continue: false}, err
 }

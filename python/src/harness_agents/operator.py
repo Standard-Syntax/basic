@@ -490,11 +490,31 @@ def _wait_for_run_state(
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     terminal = {"FAILED", "CANCELLED", "REJECTED"}
+    reached = {
+        "SPECIFICATION_REVIEW": {
+            "SPECIFICATION_REVIEW",
+            "TASK_PLANNING",
+            "TASK_PLAN_REVIEW",
+            "READY",
+            "EXECUTING",
+            "AWAITING_APPROVAL",
+            "APPROVED",
+            "PUBLISHED",
+        },
+        "TASK_PLAN_REVIEW": {
+            "TASK_PLAN_REVIEW",
+            "READY",
+            "EXECUTING",
+            "AWAITING_APPROVAL",
+            "APPROVED",
+            "PUBLISHED",
+        },
+    }.get(expected, {expected})
     while True:
         response = _request(config, "GET", f"/v1/runs/{run_id}")
         run = response.get("run")
         state = run.get("state") if isinstance(run, dict) else None
-        if state == expected:
+        if state in reached:
             return response
         if state in terminal:
             raise OperatorError(f"run reached terminal state before {expected}")

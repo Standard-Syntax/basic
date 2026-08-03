@@ -1,5 +1,11 @@
 # Beta release evidence and cut
 
+Release readiness requires exactly one accepted live MiniMax invocation for
+each of specification, planning, implementation, and review, with distinct
+request/provider identities and immutable proposal and raw-response artifacts.
+Automated fixture approvals are test evidence only and never human release
+decisions.
+
 Slice 7 turns one packaged real-GitHub canary into a reproducible release
 decision. It does not announce a beta automatically. The operator retains the
 successful canary draft, constructs the secret-free release manifest, records

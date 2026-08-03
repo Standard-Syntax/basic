@@ -1,7 +1,7 @@
 # Live MiniMax beta profile
 
-Beta Slice 2 ships the credentialed full-process gate for the live-only
-implementation and independent-review composition.
+The beta ships a credentialed four-stage process gate for live specification,
+one-task planning, implementation, and independent review.
 
 ## Closed production profile
 
@@ -21,13 +21,13 @@ fields, unknown fields, and trailing JSON fail closed.
 The service performs a redacted credential-availability check before
 migrations, database connections, manifest bootstrap, job claiming, or
 reconciliation. That value is discarded. The same uncached environment source
-is read again for every implementation and review invocation. Credentials are
+is read again for every reasoning invocation. Credentials are
 not written to configuration, artifacts, PostgreSQL, provider context, errors,
 or logs.
 
 ## Adapter protocol
 
-Both stages use non-streaming, tool-free Anthropic Messages requests through
+All four stages use non-streaming, tool-free Anthropic Messages requests through
 MiniMax's compatibility endpoint. Requests contain no tools, thinking
 configuration, or `output_config`; the closed stage schema is embedded in the
 system prompt. MiniMax's documented signed `thinking` response block is kept
@@ -77,13 +77,14 @@ The second target defaults to an exact golden profile and also accepts a paired
 It invokes the installed bootstrap path for a fresh `src/`-layout Python
 repository and committed operator checks, then derives objective, criteria,
 package identity, path policy, and the one-task graph from committed
-`.harness/project.json`. A custom candidate must be nonempty, remain entirely
+`.harness/project.json`; it never stores or submits a prebuilt proposal or task
+identity. A custom candidate must be nonempty, remain entirely
 inside committed writable roots, and pass trusted `make check`; the golden
 profile additionally requires its exact source file and `ready` console output.
 
 `REPORT_OUTPUT` defaults to the ignored absolute
 `.tools/evidence/python-project-report.json`. Pass/failure reports use
-`harness_python_project_e2e_report.v1`, are atomically replaced at mode `0600`,
+`harness_python_project_e2e_report.v2`, are atomically replaced at mode `0600`,
 and exclude credentials, prompts, provider bodies and diagnostics, database
 exports, and filesystem artifact locations. Optional `PRESERVE_PROJECT` must be
 a clean absolute nonexistent destination and receives only the generated
@@ -110,8 +111,8 @@ automated acceptance-fixture approval, a separate operator submission, and
 draft publication. The Git repository and publication
 remote are disposable; GitHub REST remains loopback-only in Slice 2.
 
-Acceptance requires one implementation request and one distinct review
-request, one provider request per stage, immutable proposal/raw-response
+Acceptance requires exactly one distinct request for specification, planning,
+implementation, and review, one provider request per stage, immutable proposal/raw-response
 evidence with request IDs and token usage, an independently passing nonempty
 candidate confined to committed writable paths, one approval and one
 submission, and exact replay after API restart

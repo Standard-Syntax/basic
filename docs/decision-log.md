@@ -1,5 +1,15 @@
 # Decision log
 
+## 2026-08-03: live four-stage planning lifecycle
+
+Run intake now contains only trusted `run_intake_specification.v1` data and
+atomically enqueues specification reasoning. Human specification approval
+atomically binds that proposal and enqueues planning. MiniMax proposes the
+closed specification and one-task plan; trusted Go injects identities, the
+approved-specification binding, a deterministic task UUID, and an empty
+dependency set. External proposal-submission mutations were removed. Human
+approval and draft-only publication remain separate authority boundaries.
+
 ## DEC-001: Go microservices form the trusted kernel
 
 ### Decision
@@ -948,7 +958,7 @@ secret persistence.
 Require Docker Buildx exactly v0.36.0 for every repository image build, load
 each result through `docker buildx build --load`, and accept the image only when
 its `--iidfile` value equals the loaded Docker image ID. Persist the generated
-Python lifecycle result as the closed `harness_python_project_e2e_report.v1`
+Python lifecycle result as the closed `harness_python_project_e2e_report.v2`
 contract and optionally preserve only its scanned generated repository.
 
 ### Options considered

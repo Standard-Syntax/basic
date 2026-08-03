@@ -20,8 +20,10 @@
 - Registry reads revalidate stored manifest bytes and verify their canonical
   form, digest, and embedded identity against the indexed columns. Corrupt
   persisted data is never returned as a valid record.
-- The reasoning gateway accepts only the implementation stage and exact
-  `implementation_proposal.v1` manifest output. Registry lookup, adapter,
+- The reasoning gateway accepts only the four closed specification, planning,
+  implementation, and review stage/output pairs. Provider specification and
+  planning projections omit trusted identities, dependencies, and workflow
+  authority; Go injects those bindings. Registry lookup, adapter,
   artifact, cancellation, and database failures cannot be recast as policy
   rejections.
 - Request IDs bind to deterministic request bytes. A committed in-progress
@@ -53,6 +55,8 @@
   listener.
 - Humans alone approve or reject specifications, task graphs, reviewed tasks,
   and runs, and humans alone cancel runs.
+- The operator stores trusted `run_intake_specification.v1` input only. Legacy
+  v1 state is rewritten atomically without submitting its stored proposals.
 - Service actors record only stage-specific operational facts. Python, model,
   and unknown actor kinds have no transition authority.
 - Revisions and row locks prevent lost updates. A command ID is bound to its

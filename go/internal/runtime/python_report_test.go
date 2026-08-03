@@ -164,6 +164,18 @@ func (r *pythonProjectReport) collectDurableEvidence() {
 		}
 		rows.Close()
 	}
+	invocations, err := pool.Query(ctx, `SELECT stage,count(*) FROM reasoning_invocations
+		WHERE run_id=$1 AND final_status='accepted' GROUP BY stage`, r.RunID)
+	if err == nil {
+		for invocations.Next() {
+			var stage string
+			var count int
+			if invocations.Scan(&stage, &count) == nil {
+				r.InvocationCounts[stage] = count
+			}
+		}
+		invocations.Close()
+	}
 	r.collectEventTimings(ctx, pool)
 	r.collectArtifactDigests(ctx, pool)
 }
