@@ -63,17 +63,30 @@ def load_project_spec(path: Path) -> ProjectSpec:
     )
     if root["schema_version"] != PROJECT_SCHEMA:
         raise ManifestError("unsupported project spec schema")
-    if not isinstance(root["name"], str) or not _DISTRIBUTION.fullmatch(root["name"]):
+    name = root["name"]
+    package_name = root["package_name"]
+    if not isinstance(name, str) or not _DISTRIBUTION.fullmatch(name):
         raise ManifestError("invalid distribution name")
-    if not isinstance(root["package_name"], str) or not _MODULE.fullmatch(root["package_name"]):
+    if not isinstance(package_name, str) or not _MODULE.fullmatch(package_name):
         raise ManifestError("invalid package name")
-    if (
-        not isinstance(root["objective"], str)
-        or not root["objective"].strip()
-        or len(root["objective"]) > 4096
-    ):
-        raise ManifestError("objective must be a non-empty string of at most 4096 characters")
-    criteria = root["acceptance_criteria"]
+    objective = _bounded_text(root["objective"], "objective", 4096)
+    normalized = _acceptance_criteria(root["acceptance_criteria"])
+    return ProjectSpec(
+        name=name,
+        package_name=package_name,
+        objective=objective,
+        acceptance_criteria=tuple(normalized),
+    )
+
+
+def _bounded_text(value: object, name: str, maximum: int) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise ManifestError(f"{name} must be a non-empty string of at most {maximum} characters")
+    return value
+
+
+def _acceptance_criteria(value: object) -> list[dict[str, str]]:
+    criteria = value
     if not isinstance(criteria, list) or not criteria or len(criteria) > 20:
         raise ManifestError("acceptance_criteria must contain between 1 and 20 entries")
     normalized: list[dict[str, str]] = []
@@ -87,16 +100,24 @@ def load_project_spec(path: Path) -> ProjectSpec:
             or identifier in seen
         ):
             raise ManifestError("acceptance criterion IDs must be unique AC-NNN identifiers")
-        if not isinstance(description, str) or not description.strip() or len(description) > 2048:
-            raise ManifestError("acceptance criterion descriptions must be non-empty and bounded")
+        description = _bounded_text(description, "acceptance criterion description", 2048)
         seen.add(identifier)
         normalized.append({"id": identifier, "description": description})
-    return ProjectSpec(
-        name=root["name"],
-        package_name=root["package_name"],
-        objective=root["objective"],
-        acceptance_criteria=tuple(normalized),
-    )
+    return normalized
+
+
+def _check_body(source: Path, path: Path) -> tuple[Path, bytes]:
+    if path.is_symlink() or not path.is_file() or path.suffix != ".py":
+        raise ManifestError("trusted checks must contain regular Python files only")
+    relative = path.relative_to(source)
+    if any(part.startswith(".") or part in {"__pycache__", ".."} for part in relative.parts):
+        raise ManifestError("trusted check paths must be visible and normalized")
+    body = path.read_bytes()
+    try:
+        body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ManifestError("trusted checks must be UTF-8") from error
+    return relative, body
 
 
 def _trusted_checks(source: Path) -> list[tuple[Path, bytes]]:
@@ -108,23 +129,10 @@ def _trusted_checks(source: Path) -> list[tuple[Path, bytes]]:
         directories.sort()
         files.sort()
         root_path = Path(root)
-        for directory in directories:
-            if (root_path / directory).is_symlink():
-                raise ManifestError("trusted checks cannot contain symlinks")
+        if any((root_path / directory).is_symlink() for directory in directories):
+            raise ManifestError("trusted checks cannot contain symlinks")
         for filename in files:
-            path = root_path / filename
-            if path.is_symlink() or not path.is_file() or path.suffix != ".py":
-                raise ManifestError("trusted checks must contain regular Python files only")
-            relative = path.relative_to(source)
-            if any(
-                part.startswith(".") or part in {"__pycache__", ".."} for part in relative.parts
-            ):
-                raise ManifestError("trusted check paths must be visible and normalized")
-            body = path.read_bytes()
-            try:
-                body.decode("utf-8")
-            except UnicodeDecodeError as error:
-                raise ManifestError("trusted checks must be UTF-8") from error
+            relative, body = _check_body(source, root_path / filename)
             total += len(body)
             result.append((relative, body))
     if not result or len(result) > MAX_CHECK_FILES or total > MAX_CHECK_BYTES:

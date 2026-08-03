@@ -248,7 +248,9 @@ def test_cli_init_bootstraps_project_from_installed_wheel(tmp_path: Path) -> Non
         capture_output=True,
         text=True,
     )
-    wheel = next(wheel_dir.glob("*.whl"))
+    wheels = list(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel = wheels[0]
     subprocess.run(
         ["uv", "pip", "install", "--python", str(environment / "bin/python"), str(wheel)],
         check=True,
