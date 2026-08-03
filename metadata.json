@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3TEPQQF9MWJYGWQC3J8QEY",
+  "strategy": "manual-commit",
+  "branch": "harness/python-live-gate",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "README.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/live-harness.md",
+    "go/internal/runtime/process_e2e_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 110970,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 14507008,
+    "output_tokens": 14931,
+    "api_call_count": 80
+  }
+}
