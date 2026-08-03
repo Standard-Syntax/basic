@@ -159,7 +159,9 @@ def test_operator_rejects_token_file_readable_by_group(
     assert server
 
 
-@pytest.mark.parametrize("endpoint", ["file:///tmp/control", "https://127.0.0.1:8443", "http://example.com"])
+@pytest.mark.parametrize(
+    "endpoint", ["file:///tmp/control", "https://127.0.0.1:8443", "http://example.com"]
+)
 def test_operator_rejects_non_loopback_http_endpoints(
     operator_fixture: tuple[Any, Path, Path, ThreadingHTTPServer],
     tmp_path: Path,
