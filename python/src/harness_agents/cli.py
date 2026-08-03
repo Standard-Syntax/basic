@@ -23,7 +23,6 @@ from harness_agents.manifest import (
     ToolRequestPolicy,
 )
 from harness_agents.operator import (
-    OperatorError,
     approve_gate,
     export_bundle,
     load_config,
@@ -206,7 +205,7 @@ def operator_command(args: argparse.Namespace) -> int:
         else:
             result = export_bundle(config, args.run_id, args.output)
         print(json.dumps(result, indent=2, sort_keys=True))
-    except (OSError, OperatorError, ValueError) as error:
+    except (OSError, ManifestError) as error:
         print(f"harness-agents: {error}", file=sys.stderr)
         return 2
     return 0

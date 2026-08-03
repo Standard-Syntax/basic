@@ -3,6 +3,7 @@ import stat
 import subprocess
 import threading
 import uuid
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,8 +25,8 @@ class LifecycleHandler(BaseHTTPRequestHandler):
     calls: list[tuple[str, str, dict[str, str], dict[str, Any]]] = []
     revision = 1
 
-    def log_message(self, format: str, *args: object) -> None:
-        pass
+    def log_message(self, format: str, *args: object) -> None:  # skipcq: PYL-W0622
+        """Keep the loopback test server silent."""
 
     def _respond(self, value: dict[str, Any], status_code: int = 200) -> None:
         body = json.dumps(value).encode()
@@ -55,7 +56,7 @@ class LifecycleHandler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def operator_fixture(tmp_path: Path) -> tuple[Any, Path, Path, ThreadingHTTPServer]:
+def operator_fixture(tmp_path: Path) -> Iterator[tuple[Any, Path, Path, ThreadingHTTPServer]]:
     spec = tmp_path / "spec.json"
     checks = tmp_path / "checks"
     project = tmp_path / "project"
@@ -158,6 +159,44 @@ def test_operator_rejects_token_file_readable_by_group(
     assert server
 
 
+@pytest.mark.parametrize("endpoint", ["file:///tmp/control", "https://127.0.0.1:8443", "http://example.com"])
+def test_operator_rejects_non_loopback_http_endpoints(
+    operator_fixture: tuple[Any, Path, Path, ThreadingHTTPServer],
+    tmp_path: Path,
+    endpoint: str,
+) -> None:
+    _, project, token, _ = operator_fixture
+    path = tmp_path / "bad-endpoint.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "harness_operator_config.v1",
+                "endpoint": endpoint,
+                "token_file": str(token),
+                "project_root": str(project),
+            }
+        )
+    )
+
+    with pytest.raises(OperatorError, match="loopback HTTP origin"):
+        load_config(path.resolve())
+
+
+def test_operator_refuses_token_replaced_by_symlink(
+    operator_fixture: tuple[Any, Path, Path, ThreadingHTTPServer], tmp_path: Path
+) -> None:
+    config, _, token, _ = operator_fixture
+    outside = tmp_path / "outside-token"
+    outside.write_text("replacement-secret")
+    outside.chmod(0o600)
+    token.unlink()
+    token.symlink_to(outside)
+
+    with pytest.raises(OperatorError, match="token file has invalid content"):
+        status(config, str(uuid.uuid4()))
+    assert not LifecycleHandler.calls
+
+
 def test_operator_refuses_dirty_project_before_network(
     operator_fixture: tuple[Any, Path, Path, ThreadingHTTPServer], tmp_path: Path
 ) -> None:
@@ -167,5 +206,7 @@ def test_operator_refuses_dirty_project_before_network(
         run_lifecycle(config, project.resolve(), (tmp_path / "state.json").resolve(), uuid.uuid4())
     assert not LifecycleHandler.calls
     assert subprocess.run(
-        ["git", "-C", project, "status", "--porcelain"], capture_output=True
+        ["git", "-C", project, "status", "--porcelain"],
+        check=False,
+        capture_output=True,
     ).stdout

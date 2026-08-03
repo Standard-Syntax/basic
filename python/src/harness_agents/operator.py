@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -37,6 +38,7 @@ specification_pb2: Any = _specification_pb2
 CONFIG_SCHEMA = "harness_operator_config.v1"
 STATE_SCHEMA = "harness_operator_state.v1"
 MAXIMUM_RESPONSE_BYTES = 1 << 20
+MAXIMUM_TOKEN_BYTES = 4096
 _STATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -63,6 +65,17 @@ class OperatorConfig:
     endpoint: str
     token_file: Path
     project_root: Path
+
+
+@dataclass(frozen=True)
+class ProjectMetadata:
+    name: str
+    objective: str
+    criteria: tuple[dict[str, str], ...]
+    readable_paths: tuple[str, ...]
+    writable_paths: tuple[str, ...]
+    prohibited_paths: tuple[str, ...]
+    trusted_checks: tuple[str, ...]
 
 
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -92,6 +105,37 @@ def _object(value: object, name: str, fields: frozenset[str]) -> dict[str, Any]:
     return result
 
 
+def _loopback_origin(endpoint: str) -> str:
+    parsed = urllib.parse.urlsplit(endpoint)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise OperatorError("endpoint must be a loopback HTTP origin")
+    return endpoint.rstrip("/")
+
+
+def _clean_absolute_path(value: str, name: str) -> Path:
+    path = Path(value)
+    if not path.is_absolute() or path != Path(os.path.normpath(path)):
+        raise OperatorError(f"{name} must be clean and absolute")
+    return path
+
+
+def _private_token_file(token_stat: os.stat_result) -> None:
+    if (
+        not stat.S_ISREG(token_stat.st_mode)
+        or token_stat.st_uid != os.getuid()
+        or token_stat.st_mode & 0o077
+    ):
+        raise OperatorError("token file must be owner-owned, regular, and owner-only")
+
+
 def load_config(path: Path) -> OperatorConfig:
     root = _object(
         _json_file(path, "operator config"),
@@ -104,40 +148,51 @@ def load_config(path: Path) -> OperatorConfig:
         isinstance(root[field], str) for field in ("endpoint", "token_file", "project_root")
     ):
         raise OperatorError("operator config paths and endpoint must be strings")
-    endpoint = cast(str, root["endpoint"])
-    parsed = urllib.parse.urlsplit(endpoint)
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in {"", "/"}
-    ):
-        raise OperatorError("endpoint must be a loopback HTTP origin")
-    token_file = Path(cast(str, root["token_file"]))
-    project_root = Path(cast(str, root["project_root"]))
-    for value, name in ((token_file, "token file"), (project_root, "project root")):
-        if not value.is_absolute() or value != Path(os.path.normpath(value)):
-            raise OperatorError(f"{name} must be clean and absolute")
-    token_stat = token_file.lstat()
-    if (
-        not stat.S_ISREG(token_stat.st_mode)
-        or token_stat.st_uid != os.getuid()
-        or token_stat.st_mode & 0o077
-    ):
-        raise OperatorError("token file must be owner-owned, regular, and owner-only")
+    endpoint = _loopback_origin(cast(str, root["endpoint"]))
+    token_file = _clean_absolute_path(cast(str, root["token_file"]), "token file")
+    project_root = _clean_absolute_path(cast(str, root["project_root"]), "project root")
+    _private_token_file(token_file.lstat())
     if not project_root.is_dir() or project_root.is_symlink():
         raise OperatorError("project root must be a regular directory")
-    return OperatorConfig(endpoint.rstrip("/"), token_file, project_root)
+    return OperatorConfig(endpoint, token_file, project_root)
 
 
 def _token(config: OperatorConfig) -> str:
-    value = config.token_file.read_text(encoding="utf-8").strip()
-    if not value or "\n" in value or "\r" in value or len(value) > 4096:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(config.token_file, flags)
+        with os.fdopen(descriptor, "rb") as token_stream:
+            _private_token_file(os.fstat(token_stream.fileno()))
+            raw = token_stream.read(MAXIMUM_TOKEN_BYTES + 1)
+        value = raw.decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError) as error:
+        raise OperatorError("token file has invalid content") from error
+    if not value or "\n" in value or "\r" in value or len(raw) > MAXIMUM_TOKEN_BYTES:
         raise OperatorError("token file has invalid content")
     return value
+
+
+def _service_url(config: OperatorConfig, target: str) -> str:
+    target_parts = urllib.parse.urlsplit(target)
+    if (
+        not target.startswith("/v1/")
+        or target.startswith("//")
+        or target_parts.scheme
+        or target_parts.netloc
+        or target_parts.query
+        or target_parts.fragment
+    ):
+        raise OperatorError("service target must be an absolute v1 API path")
+    url = config.endpoint + target
+    parsed = urllib.parse.urlsplit(url)
+    origin = urllib.parse.urlsplit(config.endpoint)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.netloc != origin.netloc
+    ):
+        raise OperatorError("service URL must remain on the configured loopback origin")
+    return url
 
 
 def _request(
@@ -158,7 +213,7 @@ def _request(
         headers["Idempotency-Key"] = str(idempotency_key)
     if revision is not None:
         headers["If-Match"] = f'"{revision}"'
-    request = urllib.request.Request(config.endpoint + target, payload, headers, method=method)
+    request = urllib.request.Request(_service_url(config, target), payload, headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(MAXIMUM_RESPONSE_BYTES + 1)
@@ -174,7 +229,7 @@ def _request(
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
         raise OperatorError(f"service returned HTTP {error.code}: {code}") from error
-    except (OSError, urllib.error.URLError) as error:
+    except OSError as error:
         raise OperatorError("service request failed") from error
     if len(raw) > MAXIMUM_RESPONSE_BYTES:
         raise OperatorError("service response exceeds byte limit")
@@ -188,19 +243,27 @@ def _request(
 
 
 def _git(project: Path, *arguments: str) -> str:
-    result = subprocess.run(
-        ["git", "-c", "core.hooksPath=/dev/null", *arguments],
-        cwd=project,
-        env={
-            "PATH": os.environ.get("PATH", ""),
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_TERMINAL_PROMPT": "0",
-        },
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    environment = {
+        "PATH": os.environ.get("PATH", ""),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    executable = shutil.which("git", path=environment["PATH"])
+    if executable is None or not Path(executable).is_absolute():
+        raise OperatorError("absolute Git executable not found")
+    try:
+        result = subprocess.run(
+            [executable, "-c", "core.hooksPath=/dev/null", *arguments],
+            cwd=project,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise OperatorError("project Git inspection timed out") from error
     if result.returncode != 0:
         raise OperatorError("project Git inspection failed")
     return result.stdout.strip()
@@ -246,7 +309,7 @@ def _identity(envelope: Any) -> Any:
     )
 
 
-def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -> dict[str, Any]:
+def _project_head(config: OperatorConfig, project: Path) -> str:
     if project != config.project_root:
         raise OperatorError("project must equal the configured project root")
     if _git(project, "status", "--porcelain", "--untracked-files=all"):
@@ -254,9 +317,34 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     base_commit = _git(project, "rev-parse", "HEAD")
     if len(base_commit) != 40 or any(value not in "0123456789abcdef" for value in base_commit):
         raise OperatorError("project HEAD is not a full Git commit")
-    metadata_path = project / ".harness" / "project.json"
+    return base_commit
+
+
+def _string_tuple(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        raise OperatorError(f"{name} must be a non-empty string array")
+    return tuple(cast(list[str], value))
+
+
+def _criteria(value: object) -> tuple[dict[str, str], ...]:
+    if not isinstance(value, list) or not value:
+        raise OperatorError("project acceptance criteria must be a non-empty array")
+    result: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        criterion = _object(
+            item,
+            f"project acceptance_criteria[{index}]",
+            frozenset({"id", "description"}),
+        )
+        if not isinstance(criterion["id"], str) or not isinstance(criterion["description"], str):
+            raise OperatorError("project acceptance criteria must contain string values")
+        result.append(cast(dict[str, str], criterion))
+    return tuple(result)
+
+
+def _project_metadata(project: Path) -> ProjectMetadata:
     metadata = _object(
-        _json_file(metadata_path, "project metadata"),
+        _json_file(project / ".harness" / "project.json", "project metadata"),
         "project metadata",
         frozenset(
             {
@@ -274,20 +362,29 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     paths = _object(
         metadata["paths"], "project paths", frozenset({"readable", "writable", "prohibited"})
     )
-    criteria = metadata["acceptance_criteria"]
-    checks = metadata["trusted_checks"]
-    if (
-        metadata["schema_version"] != "harness_python_project.v1"
-        or not isinstance(metadata["objective"], str)
-        or not isinstance(criteria, list)
-        or not criteria
-        or not isinstance(checks, list)
-        or checks != ["make-check-v1"]
-        or metadata["maximum_tasks"] != 1
-        or not all(isinstance(paths[name], list) for name in paths)
-    ):
+    if metadata["schema_version"] != "harness_python_project.v1":
         raise OperatorError("project metadata is incompatible with lifecycle v1")
-    criterion_values = cast(list[dict[str, str]], criteria)
+    if not isinstance(metadata["name"], str) or not isinstance(metadata["objective"], str):
+        raise OperatorError("project metadata is incompatible with lifecycle v1")
+    if metadata["maximum_tasks"] != 1:
+        raise OperatorError("project metadata is incompatible with lifecycle v1")
+    checks = _string_tuple(metadata["trusted_checks"], "trusted_checks")
+    if checks != ("make-check-v1",):
+        raise OperatorError("project metadata is incompatible with lifecycle v1")
+    return ProjectMetadata(
+        name=cast(str, metadata["name"]),
+        objective=cast(str, metadata["objective"]),
+        criteria=_criteria(metadata["acceptance_criteria"]),
+        readable_paths=_string_tuple(paths["readable"], "readable paths"),
+        writable_paths=_string_tuple(paths["writable"], "writable paths"),
+        prohibited_paths=_string_tuple(paths["prohibited"], "prohibited paths"),
+        trusted_checks=checks,
+    )
+
+
+def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -> dict[str, Any]:
+    base_commit = _project_head(config, project)
+    metadata = _project_metadata(project)
     run_id = str(uuid.uuid5(root_key, "run"))
     task_id = str(uuid.uuid5(root_key, "task"))
     created = datetime.now(UTC).replace(microsecond=0)
@@ -299,8 +396,8 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     )
     specification_request = specification_pb2.SpecificationRequest(
         envelope=specification_envelope,
-        problem_statement=cast(str, metadata["objective"]),
-        desired_outcome=cast(str, metadata["objective"]),
+        problem_statement=metadata.objective,
+        desired_outcome=metadata.objective,
         known_constraints=["Preserve trusted checks and immutable project configuration."],
         known_non_goals=["Modify tests, lockfiles, or harness metadata."],
         stakeholders=["operator"],
@@ -308,8 +405,8 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     )
     specification_proposal = specification_pb2.SpecificationProposal(
         identity=_identity(specification_envelope),
-        title=f"Implement {metadata['name']}",
-        goal=cast(str, metadata["objective"]),
+        title=f"Implement {metadata.name}",
+        goal=metadata.objective,
         actors=["operator", "implementation agent"],
         constraints=["Only src is writable.", "All operator checks must pass."],
         non_goals=["Modify trusted verification inputs."],
@@ -319,7 +416,7 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
                 description=item["description"],
                 verification_method="make check",
             )
-            for item in criterion_values
+            for item in metadata.criteria
         ],
     )
     specification_digest = hashlib.sha256(
@@ -333,7 +430,7 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
     )
     repository_path = "pyproject.toml"
     repository_digest = hashlib.sha256((project / repository_path).read_bytes()).hexdigest()
-    criterion_ids = [item["id"] for item in criterion_values]
+    criterion_ids = [item["id"] for item in metadata.criteria]
     planning_request = planning_pb2.TaskPlanningRequest(
         envelope=planning_envelope,
         approved_specification_id="SPEC-001",
@@ -343,9 +440,9 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
                 path=repository_path, kind="file", sha256=repository_digest
             )
         ],
-        readable_paths=paths["readable"],
-        writable_paths=paths["writable"],
-        prohibited_paths=paths["prohibited"],
+        readable_paths=metadata.readable_paths,
+        writable_paths=metadata.writable_paths,
+        prohibited_paths=metadata.prohibited_paths,
         task_count_limit=1,
         parallelism_limit=1,
         acceptance_criterion_ids=criterion_ids,
@@ -357,13 +454,13 @@ def _project_state(config: OperatorConfig, project: Path, root_key: uuid.UUID) -
         tasks=[
             planning_pb2.PlannedTask(
                 task_id=task_id,
-                objective=cast(str, metadata["objective"]),
+                objective=metadata.objective,
                 acceptance_criterion_ids=criterion_ids,
-                readable_paths=paths["readable"],
-                writable_paths=paths["writable"],
-                prohibited_paths=paths["prohibited"],
+                readable_paths=metadata.readable_paths,
+                writable_paths=metadata.writable_paths,
+                prohibited_paths=metadata.prohibited_paths,
                 exclusive_resources=["source-tree"],
-                required_check_ids=checks,
+                required_check_ids=metadata.trusted_checks,
                 stop_conditions=["Stop when make check passes or the attempt budget is exhausted."],
             )
         ],
