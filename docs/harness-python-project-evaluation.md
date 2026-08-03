@@ -18,6 +18,37 @@ submission, idempotent replay, and disposable draft publication. It does not
 prove a real GitHub canary, a human-made approval decision, or generic
 operator-CLI execution against the preserved project.
 
+## Hardening acceptance
+
+The five-layer hardening stack was exercised at source commit `08f4a92` on
+2026-08-03. The first credentialed attempt exposed an operator configuration
+defect before any provider call: the CLI had been given the publication token
+file and received `401 unauthenticated`. The operator layer was corrected to
+use its dedicated API credential file, the dependent commits were rebased, and
+both required credentialed profiles then passed:
+
+```bash
+make beta-python-project-e2e \
+  REPORT_OUTPUT=/home/dscv/Repo/basic/.tools/evidence/python-project-golden-report.json
+
+make beta-python-project-e2e \
+  PROJECT_SPEC=/home/dscv/Repo/basic/.tools/evidence/operator-alt-input/project-spec.json \
+  CHECKS=/home/dscv/Repo/basic/.tools/evidence/operator-alt-input/checks \
+  REPORT_OUTPUT=/home/dscv/Repo/basic/.tools/evidence/python-project-operator-alt-report.json
+```
+
+The golden profile passed in 21.44 seconds and the different operator-provided
+`operator_alt` project passed in 28.28 seconds. Both reports have mode `0600`,
+status `passed`, installed harness version `0.2.0`, complete base/candidate/run
+and task identifiers, successful trusted checks, and one replay each for run,
+candidate approval, and publication. The golden report also records a
+successful console check; the custom profile intentionally has no golden-only
+console assertion.
+
+`make integration-test` and `make beta-images` also passed through Buildx
+v0.36.0. These results do not provide live specification/planning, a real human
+approval decision, or a real GitHub canary.
+
 ## Artifacts
 
 - Installed wheel: `dist/harness_agents-0.2.0-py3-none-any.whl`
@@ -151,7 +182,7 @@ The generator now emits a separate `cli() -> None` wrapper, points
 `[project.scripts]` at that wrapper, installs the generated wheel into an
 isolated environment, and asserts stdout `ready` with exit status `0`.
 
-### Implemented; credentialed acceptance pending - Durable redacted evidence
+### Resolved P1 - Durable redacted evidence
 
 The passing target prints only the Go test name and duration. Its temporary
 repository, run ID, candidate commit, artifact digests, stage timings, and
@@ -160,10 +191,10 @@ The gate now atomically writes a mode-`0600`
 `harness_python_project_e2e_report.v1` report on pass or in-process failure and
 can preserve only a fully scanned generated repository at an explicitly safe,
 nonexistent destination. Deterministic shape, redaction, replacement, failure,
-and preservation tests pass; a credentialed report is recorded only after the
-live gate runs.
+and preservation tests pass. Both credentialed profiles produced passing,
+mode-`0600` reports.
 
-### Implemented; credentialed acceptance pending - Operator project inputs
+### Resolved P1 - Operator project inputs
 
 The target hard-codes the `live-demo` specification, acceptance test, objective,
 and expected changed file. It proves the supported generated-project profile,
@@ -171,15 +202,17 @@ but it does not run the preserved project or accept an operator-provided
 specification/check directory. The target now accepts a validated paired
 `PROJECT_SPEC` and `CHECKS`, commits them through the installed package, and
 derives the bounded lifecycle from `.harness/project.json`; the fixed profile
-remains the reproducible golden case.
+remains the reproducible golden case. Both the golden profile and the distinct
+`operator_alt` profile passed the credentialed gate.
 
-### Implemented; credentialed acceptance pending - Installed operator CLI
+### Resolved P1 - Installed operator CLI
 
 The test drives the control API from Go. It does not prove that an operator can
 The process test now builds and installs the current wheel, then routes run,
 three approvals, submit, status, and export through that exact executable and
 its mode-`0600` state/configuration files across an API restart. PostgreSQL is
-read only for waits and immutable-evidence assertions.
+read only for waits and immutable-evidence assertions. Both credentialed
+profiles completed through this installed-CLI path.
 
 ### P1 - Some lifecycle authority remains test-fixture supplied
 
@@ -215,8 +248,8 @@ IID with the post-load inspected image ID. Missing/mismatched version tests and
 | Approve and publish exact candidate | Pass, disposable | Separate approval/submission and loopback draft publication asserted |
 | Preserve replay and credential safety | Pass | Restart, idempotency, side-effect, and secret-absence assertions passed |
 | Run generated console command successfully | Pass | Installed generated wheel prints `ready` and exits `0` |
-| Accept operator-provided project inputs | Implemented; live pending | Paired-input/path/scope tests pass; credentialed alternate project not yet recorded |
-| Persist redacted lifecycle evidence | Implemented; live pending | Deterministic report/redaction/failure/preservation tests pass |
-| Exercise installed operator CLI end to end | Implemented; live pending | Process lifecycle uses installed wheel; credentialed completion not yet recorded |
+| Accept operator-provided project inputs | Pass | Golden and distinct `operator_alt` credentialed profiles passed |
+| Persist redacted lifecycle evidence | Pass | Both credentialed runs emitted mode-`0600` passing reports; failure/redaction/preservation tests pass |
+| Exercise installed operator CLI end to end | Pass, automated approvals | Both credentialed profiles used installed wheel across restart and replay |
 | Build repository images with pinned Buildx | Pass | Missing/version/IID tests and `make beta-images` passed with v0.36.0 |
 | Publish a real GitHub draft | Not run | Requires the separate credentialed canary profile |
