@@ -234,7 +234,7 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
         (temporary / "pyproject.toml").write_text(_pyproject(spec), encoding="utf-8")
         (temporary / "Makefile").write_text(
             ".PHONY: check\ncheck:\n\tuv run --frozen ruff check .\n"
-            "\tuv run --frozen ty check src\n\tuv run --frozen pytest\n\tuv build\n",
+            "\tuv run --frozen ty check src\n\tPYTHONPATH=src uv run --frozen pytest\n\tuv build\n",
             encoding="utf-8",
         )
         (temporary / ".gitignore").write_text(

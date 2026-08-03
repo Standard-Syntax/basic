@@ -81,6 +81,28 @@ def test_bootstrap_rejects_existing_destination_without_changes(tmp_path: Path) 
     assert not list(destination.iterdir())
 
 
+def test_bootstrap_candidate_passes_operator_checks_offline(tmp_path: Path) -> None:
+    spec = tmp_path / "spec.json"
+    checks = tmp_path / "checks"
+    destination = tmp_path / "project"
+    checks.mkdir()
+    write_spec(spec)
+    (checks / "test_acceptance.py").write_text(
+        "from trusted_demo import main\n\n\n"
+        "def test_main_returns_ready() -> None:\n"
+        '    assert main() == "ready"\n'
+    )
+    bootstrap_project(destination, spec.resolve(), checks.resolve())
+    (destination / "src/trusted_demo/__init__.py").write_text(
+        'def main() -> str:\n    return "ready"\n'
+    )
+
+    result = subprocess.run(
+        ["make", "check"], cwd=destination, check=False, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_bootstrap_rejects_symlinked_checks_before_creating_destination(tmp_path: Path) -> None:
     spec = tmp_path / "spec.json"
     checks = tmp_path / "checks"
