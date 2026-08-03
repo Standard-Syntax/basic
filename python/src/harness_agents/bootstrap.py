@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -56,6 +57,8 @@ def load_project_spec(path: Path) -> ProjectSpec:
         value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_pairs)
     except UnicodeDecodeError as error:
         raise ManifestError("project spec must be UTF-8") from error
+    except json.JSONDecodeError as error:
+        raise ManifestError("project spec must be valid JSON") from error
     root = _object(
         value,
         "project spec",
@@ -107,12 +110,20 @@ def _acceptance_criteria(value: object) -> list[dict[str, str]]:
 
 
 def _check_body(source: Path, path: Path) -> tuple[Path, bytes]:
-    if path.is_symlink() or not path.is_file() or path.suffix != ".py":
+    if path.suffix != ".py":
         raise ManifestError("trusted checks must contain regular Python files only")
     relative = path.relative_to(source)
     if any(part.startswith(".") or part in {"__pycache__", ".."} for part in relative.parts):
         raise ManifestError("trusted check paths must be visible and normalized")
-    body = path.read_bytes()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise ManifestError("trusted checks must contain regular Python files only") from error
+    with os.fdopen(descriptor, "rb") as check_file:
+        if not stat.S_ISREG(os.fstat(check_file.fileno()).st_mode):
+            raise ManifestError("trusted checks must contain regular Python files only")
+        body = check_file.read(MAX_CHECK_BYTES + 1)
     try:
         body.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -212,14 +223,18 @@ def _run(arguments: list[str], root: Path) -> None:
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
     }
-    result = subprocess.run(
-        arguments,
-        cwd=root,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            arguments,
+            cwd=root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ManifestError(f"bootstrap command timed out: {arguments[0]}") from error
     if result.returncode != 0:
         diagnostic = result.stderr.strip() or result.stdout.strip() or arguments[0]
         raise ManifestError(f"bootstrap command failed: {diagnostic}")

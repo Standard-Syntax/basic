@@ -6,10 +6,12 @@
 - Python configuration has no database, Git, shell, network, write, credential,
   workflow-transition, approval, publication, or task-scope capability.
 - The separately invoked Python bootstrap may write only a new destination and
-  execute fixed `uv lock` and Git initialization arguments. It rejects existing
-  destinations, symlinks, non-Python check inputs, unknown project-spec fields,
-  and unbounded check trees; trusted checks and policy metadata are committed
-  before any model call and are outside model-writable `src` scope.
+  execute fixed Git initialization arguments. It renders `uv.lock` from a
+  packaged deterministic template without executing `uv` or resolving
+  dependencies. It rejects existing destinations, symlinks, non-Python check
+  inputs, unknown project-spec fields, and unbounded check trees; trusted checks
+  and policy metadata are committed before any model call and are outside
+  model-writable `src` scope.
 - Manifests are schema-validated, canonicalized, immutable, and SHA-256
   addressed.
 - Registry versions and manifest digests are unique. Exact replay is

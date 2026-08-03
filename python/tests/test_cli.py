@@ -274,3 +274,30 @@ def test_cli_init_bootstraps_project_from_installed_wheel(tmp_path: Path) -> Non
     )
     assert result.returncode == 0, result.stderr
     assert (destination / ".harness/project.json").is_file()
+
+
+def test_cli_init_reports_malformed_project_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = tmp_path / "project-spec.json"
+    checks = tmp_path / "checks"
+    destination = tmp_path / "project"
+    spec.write_text("{")
+    checks.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harness-agents",
+            "init",
+            str(destination),
+            "--project-spec",
+            str(spec.resolve()),
+            "--checks",
+            str(checks.resolve()),
+        ],
+    )
+
+    assert main() == 2
+    assert "project spec must be valid JSON" in capsys.readouterr().err
+    assert not destination.exists()
