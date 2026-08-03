@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3SCFHZY7T3B8XB0BN4C8XC",
+  "strategy": "manual-commit",
+  "branch": "harness/trusted-python-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/decision-log.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2301,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 397568,
+    "output_tokens": 386,
+    "api_call_count": 3
+  }
+}
