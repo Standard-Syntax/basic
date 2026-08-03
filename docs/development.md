@@ -100,7 +100,7 @@ The strict `harness_python_project.v1` specification contains `name`,
 `package_name`, `objective`, and one or more unique `AC-NNN` acceptance
 criteria. The checks directory contains only bounded regular UTF-8 `.py`
 files. Bootstrap writes a fixed Python 3.13/3.14 package, exact dependency
-pins, `make check`, and immutable path metadata; runs `uv lock`; creates a
+pins, `make check`, immutable path metadata, and a packaged lockfile; creates a
 fresh `main` repository with hooks and global Git configuration disabled; and
 commits the trusted base. The destination must not already exist.
 

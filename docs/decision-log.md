@@ -777,8 +777,8 @@ logs and rejections expose structural metadata only.
 ### Decision
 Add `harness-agents init` for a new non-existent destination. Build one fixed
 Python package around a strict project specification and bounded
-operator-supplied Python acceptance checks, then lock and commit the trusted
-base before runtime use.
+operator-supplied Python acceptance checks, then copy a packaged deterministic
+lockfile and commit the trusted base before runtime use.
 
 ### Options considered
 Support prepared repositories only; ship one canonical demo objective; accept
@@ -801,7 +801,8 @@ and allowing the model to create its own checks would collapse the independent
 verification boundary.
 
 ### Consequences
-`harness-agents` becomes version `0.2.0`. Bootstrap fails if the destination
+`harness-agents` becomes version `0.2.0`. Bootstrap performs no dependency
+resolution while constructing the project and fails if the destination
 exists or if trusted checks are unsafe, and it does not call a provider,
 control-plane API, publication endpoint, merge operation, or deployment.
 
