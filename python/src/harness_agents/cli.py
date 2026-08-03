@@ -184,10 +184,21 @@ def compile_command(args: argparse.Namespace) -> int:
 
 def init_command(args: argparse.Namespace) -> int:
     try:
-        bootstrap_project(args.destination, args.project_spec, args.checks)
+        result = bootstrap_project(args.destination, args.project_spec, args.checks)
     except (OSError, ManifestError) as error:
         print(f"harness-agents: {error}", file=sys.stderr)
         return 2
+    print(
+        json.dumps(
+            {
+                "schema_version": "harness_python_project_init.v1",
+                "destination": str(result.destination),
+                "trusted_base_commit": result.trusted_base_commit,
+                "console_command": result.console_command,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

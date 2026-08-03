@@ -32,6 +32,13 @@ class ProjectSpec:
     acceptance_criteria: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True)
+class BootstrapResult:
+    destination: Path
+    trusted_base_commit: str
+    console_command: str
+
+
 def _object(value: object, name: str, fields: frozenset[str]) -> dict[str, Any]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ManifestError(f"{name} must be an object")
@@ -240,7 +247,7 @@ def _run(arguments: list[str], root: Path) -> None:
         raise ManifestError(f"bootstrap command failed: {diagnostic}")
 
 
-def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> None:
+def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> BootstrapResult:
     destination = destination.resolve()
     if destination.exists():
         raise ManifestError("destination must not exist")
@@ -302,7 +309,27 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             ],
             temporary,
         )
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=temporary,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_SYSTEM": os.devnull,
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        trusted_base_commit = completed.stdout.strip()
         temporary.rename(destination)
+        return BootstrapResult(
+            destination=destination,
+            trusted_base_commit=trusted_base_commit,
+            console_command=f"uv run --frozen {spec.name}",
+        )
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
