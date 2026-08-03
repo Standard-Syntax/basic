@@ -907,3 +907,37 @@ atomic mode-`0600` files and contain no credential.
 
 ### Date
 2026-08-03
+
+## DEC-036: Require a credentialed generated-Python-project gate
+
+### Decision
+Add `make beta-python-project-e2e` as a distinct acceptance target that creates
+a new trusted Python repository and runs its exact objective through the live
+MiniMax lifecycle and disposable publication boundary.
+
+### Options considered
+Treat SDK/wheel tests as sufficient; reuse only the Go fixture; add a
+deterministic Python fixture; require a generated project with live reasoning.
+
+### Pros
+The gate proves project generation, closed planning scope, live implementation,
+offline operator checks, independent review, approval, submission, replay, and
+publication as one observable capability.
+
+### Cons
+It requires a provider credential, Docker, PostgreSQL, image builds, and is
+subject to bounded provider structured-output variability.
+
+### Why this option
+Successful manifest compilation or a generic runtime cannot demonstrate that a
+fresh Python target is importable and verifiable inside the production offline
+worker. The first live run exposed exactly that missing `src/` import boundary.
+
+### Consequences
+Bootstrap test execution sets `PYTHONPATH=src`; the lockfile and all other
+trusted inputs remain immutable. The gate fails on provider rejection, any
+unrequested path, failed offline check, review failure, replayed effect, or
+secret persistence.
+
+### Date
+2026-08-03

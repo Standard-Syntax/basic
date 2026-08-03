@@ -55,6 +55,7 @@ make build
 make integration-test
 make runtime-e2e      # credential-free PostgreSQL/CAS/reconciler recovery
 make beta-live-e2e    # requires ANTHROPIC_API_KEY; complete live process gate
+make beta-python-project-e2e # live generated-Python-project acceptance gate
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
@@ -63,6 +64,10 @@ an expired PostgreSQL stage claim through the reconciler, consumes a
 pre-existing integrity-checked CAS artifact, and makes no reasoning-provider
 request. It is not beta lifecycle completion. See
 [Run the agent harness live](live-harness.md) for the credentialed gate.
+The objective-specific `beta-python-project-e2e` target first bootstraps a new
+repository from operator-owned checks, then requires live implementation and
+review, offline verification, separate approval/submission, replay safety, and
+disposable draft publication.
 
 ## Installed manifest compiler
 

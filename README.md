@@ -85,3 +85,5 @@ After trusted Python bootstrap, `harness-agents operator` drives run creation,
 the three explicit approval gates, separate draft submission, status reads,
 and redacted support export against a configured loopback control API. See the
 development guide for the strict configuration and command sequence.
+`make beta-python-project-e2e` is the credentialed acceptance gate for a newly
+generated Python target and uses only disposable Git and publication endpoints.

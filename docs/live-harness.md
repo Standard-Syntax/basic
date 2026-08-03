@@ -69,7 +69,17 @@ environment, then run:
 
 ```bash
 make beta-live-e2e
+make beta-python-project-e2e
 ```
+
+The second target is objective-specific: it invokes the installed bootstrap
+path for a fresh `src/`-layout Python repository and immutable acceptance test,
+then exercises the same credentialed runtime against that generated target.
+Acceptance requires exactly one source-file change, offline lint/type/test/build
+success, independent live review, distinct approval and submission, replay
+safety, secret scanning, and disposable draft publication. It is stronger
+evidence for Python-project support than SDK compilation, wheel installation,
+or the generic Go fixture.
 
 The disposable API configuration supplies its fixture repository as the
 required top-level `repository_root`. `POST /v1/runs` resolves and binds the
