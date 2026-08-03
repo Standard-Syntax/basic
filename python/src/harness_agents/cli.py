@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
+from harness_agents.bootstrap import bootstrap_project
 from harness_agents.manifest import (
     AgentDefinition,
     ConfigurationMetadata,
@@ -172,6 +173,15 @@ def compile_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def init_command(args: argparse.Namespace) -> int:
+    try:
+        bootstrap_project(args.destination, args.project_spec, args.checks)
+    except (OSError, ManifestError) as error:
+        print(f"harness-agents: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="harness-agents")
     commands = root.add_subparsers(required=True)
@@ -181,6 +191,11 @@ def parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--digest-output", type=Path, required=True)
     compile_parser.set_defaults(handler=compile_command)
+    init_parser = commands.add_parser("init")
+    init_parser.add_argument("destination", type=Path)
+    init_parser.add_argument("--project-spec", type=Path, required=True)
+    init_parser.add_argument("--checks", type=Path, required=True)
+    init_parser.set_defaults(handler=init_command)
     return root
 
 

@@ -771,3 +771,39 @@ logs and rejections expose structural metadata only.
 
 ### Date
 2026-08-03
+
+## DEC-032: Bootstrap Python projects from operator-owned checks
+
+### Decision
+Add `harness-agents init` for a new non-existent destination. Build one fixed
+Python package around a strict project specification and bounded
+operator-supplied Python acceptance checks, then lock and commit the trusted
+base before runtime use.
+
+### Options considered
+Support prepared repositories only; ship one canonical demo objective; accept
+arbitrary objectives with generic quality checks; require operator-owned
+objective-specific checks.
+
+### Pros
+The installed harness creates the project while trusted evidence still comes
+from a human-owned source. Model-writable `src` never overlaps tests, lockfiles,
+build configuration, policy metadata, or `make check`.
+
+### Cons
+Operators must author acceptance tests and provision a remote and beta service
+configuration separately. Bootstrap invokes installed `uv` and Git and targets
+Python 3.13 or 3.14 only.
+
+### Why this option
+Generic lint and build health cannot prove an arbitrary natural-language goal,
+and allowing the model to create its own checks would collapse the independent
+verification boundary.
+
+### Consequences
+`harness-agents` becomes version `0.2.0`. Bootstrap fails if the destination
+exists or if trusted checks are unsafe, and it does not call a provider,
+control-plane API, publication endpoint, merge operation, or deployment.
+
+### Date
+2026-08-03

@@ -2,8 +2,9 @@
 
 This repository contains the Phase 0–10 kernel and the Phase 12 executable
 first-slice runtime for a kernel-driven agent harness.
-Go is the trusted control-plane language; Python is limited to declarative agent
-configuration. Reasoning outputs are untrusted, provider-neutral proposals.
+Go is the trusted control-plane language; Python owns declarative agent
+configuration and a deterministic operator-invoked project bootstrap. Reasoning
+outputs are untrusted, provider-neutral proposals.
 The runtime adds a loopback authenticated HTTP API, a durable PostgreSQL
 reconciler, a filesystem SHA-256 content-addressed store, and a closed
 live-only MiniMax-M2.7 provider configuration.
@@ -21,6 +22,11 @@ Merge and deployment remain external.
 The installed Python SDK compiles offline definitions for all four reasoning
 stages into schema-validated RFC 8785 manifests and SHA-256 sidecars. The Go
 reader independently enforces the same v1 stage/output and safety policy.
+
+`harness-agents init` creates a new Python package only from an explicit strict
+project specification and operator-supplied trusted Python checks. It commits
+the checks, fixed `make check` entry point, lockfile, and path policy before any
+model call; an existing destination or symlinked check fails closed.
 
 The in-process Go reasoning gateway executes implementation and review stages
 only through the runtime's closed MiniMax-M2.7 Anthropic-compatible adapter.

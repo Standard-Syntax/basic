@@ -70,7 +70,7 @@ Build and install the SDK wheel, then invoke the CLI from any directory:
 
 ```bash
 uv build --wheel
-uv tool install --force dist/harness_agents-0.1.0-py3-none-any.whl
+uv tool install --force dist/harness_agents-0.2.0-py3-none-any.whl
 cd /tmp/agent-authoring
 harness-agents compile ./implementation.json \
   --output ./implementation.manifest.json \
@@ -87,6 +87,22 @@ and local writes of the two requested outputs. It makes no provider, network,
 database, Git, shell, registration, or workflow call. Authoring and I/O errors
 print to stderr and return exit code `2`; neither output is attempted until
 validation succeeds.
+
+The same installed wheel can establish a new trusted Python base:
+
+```bash
+harness-agents init /absolute/path/to/new-project \
+  --project-spec /absolute/path/to/project-spec.json \
+  --checks /absolute/path/to/operator-checks
+```
+
+The strict `harness_python_project.v1` specification contains `name`,
+`package_name`, `objective`, and one or more unique `AC-NNN` acceptance
+criteria. The checks directory contains only bounded regular UTF-8 `.py`
+files. Bootstrap writes a fixed Python 3.13/3.14 package, exact dependency
+pins, `make check`, and immutable path metadata; runs `uv lock`; creates a
+fresh `main` repository with hooks and global Git configuration disabled; and
+commits the trusted base. The destination must not already exist.
 
 Generation uses `grpcio-tools==1.75.1` from `uv.lock` and installs
 `protoc-gen-go@v1.36.10` into the ignored `.tools/bin` directory. It does not
