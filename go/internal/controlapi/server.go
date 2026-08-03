@@ -138,6 +138,11 @@ type principalDigest struct {
 	digest    [sha256.Size]byte
 }
 
+type namedDependency struct {
+	name  string
+	value any
+}
+
 func isNilDependency(value any) bool {
 	if value == nil {
 		return true
@@ -149,6 +154,15 @@ func isNilDependency(value any) bool {
 	default:
 		return false
 	}
+}
+
+func validateServerDependencies(dependencies ...namedDependency) error {
+	for _, dependency := range dependencies {
+		if isNilDependency(dependency.value) {
+			return fmt.Errorf("%s is required", dependency.name)
+		}
+	}
+	return nil
 }
 
 func New(
@@ -168,29 +182,17 @@ func New(
 	if len(principals) == 0 {
 		return nil, errors.New("at least one principal is required")
 	}
-	if isNilDependency(workflowStore) {
-		return nil, errors.New("workflow store is required")
-	}
-	if isNilDependency(runtimeLedger) {
-		return nil, errors.New("runtime ledger is required")
-	}
-	if isNilDependency(runIntake) {
-		return nil, errors.New("run intake is required")
-	}
-	if isNilDependency(artifacts) {
-		return nil, errors.New("artifact store is required")
-	}
-	if isNilDependency(bindings) {
-		return nil, errors.New("binding store is required")
-	}
-	if isNilDependency(approvalService) {
-		return nil, errors.New("approval service is required")
-	}
-	if isNilDependency(taskGraphApproval) {
-		return nil, errors.New("task graph approval service is required")
-	}
-	if isNilDependency(support) {
-		return nil, errors.New("support reader is required")
+	if err := validateServerDependencies(
+		namedDependency{"workflow store", workflowStore},
+		namedDependency{"runtime ledger", runtimeLedger},
+		namedDependency{"run intake", runIntake},
+		namedDependency{"artifact store", artifacts},
+		namedDependency{"binding store", bindings},
+		namedDependency{"approval service", approvalService},
+		namedDependency{"task graph approval service", taskGraphApproval},
+		namedDependency{"support reader", support},
+	); err != nil {
+		return nil, err
 	}
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
