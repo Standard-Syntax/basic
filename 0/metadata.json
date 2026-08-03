@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4MMEPDVYCTMG6Z5FMEQT7M",
+  "session_id": "019fc928-74ed-72a1-8e79-1d165f28a97e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T20:21:54.447979059Z",
+  "branch": "harness/buildx-images",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/harness-python-project-evaluation.md"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "5a3739cfe98d",
+  "checkpoint_transcript_start": 706,
+  "transcript_lines_at_start": 706,
+  "compact_transcript_start": 155,
+  "token_usage": {
+    "input_tokens": 32278,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2050560,
+    "output_tokens": 4258,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T20:21:54.348182901Z",
+    "agent_lines": 70,
+    "agent_removed": 25,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 70,
+    "total_lines_changed": 95,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

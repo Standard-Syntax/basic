@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4MMEPDVYCTMG6Z5FMEQT7M",
+  "strategy": "manual-commit",
+  "branch": "harness/buildx-images",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/harness-python-project-evaluation.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32278,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 2050560,
+    "output_tokens": 4258,
+    "api_call_count": 26
+  }
+}
