@@ -143,6 +143,12 @@ type namedDependency struct {
 	value any
 }
 
+type preparedServerConfig struct {
+	config     Config
+	principals []principalDigest
+	checks     map[string]struct{}
+}
+
 func isNilDependency(value any) bool {
 	if value == nil {
 		return true
@@ -165,22 +171,42 @@ func validateServerDependencies(dependencies ...namedDependency) error {
 	return nil
 }
 
+func prepareServerConfig(config Config) (preparedServerConfig, error) {
+	normalized, err := normalizeServerConfig(config)
+	if err != nil {
+		return preparedServerConfig{}, err
+	}
+	principals, err := compilePrincipals(normalized.Principals)
+	if err != nil {
+		return preparedServerConfig{}, err
+	}
+	if len(principals) == 0 {
+		return preparedServerConfig{}, errors.New("at least one principal is required")
+	}
+	checks, err := compileTrustedChecks(normalized.TrustedChecks)
+	if err != nil {
+		return preparedServerConfig{}, err
+	}
+	if err := normalized.Policy.Validate(); err != nil {
+		return preparedServerConfig{}, err
+	}
+	if !slices.Equal(normalized.TrustedChecks, normalized.Policy.TrustedChecks) {
+		return preparedServerConfig{}, errors.New("trusted checks do not match beta policy")
+	}
+	return preparedServerConfig{
+		config: normalized, principals: principals, checks: checks,
+	}, nil
+}
+
 func New(
 	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
 	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
 	taskGraphApproval TaskGraphApproval, publicationService PublicationService, support SupportReader,
 	logger *slog.Logger,
 ) (*Server, error) {
-	normalized, err := normalizeServerConfig(config)
+	prepared, err := prepareServerConfig(config)
 	if err != nil {
 		return nil, err
-	}
-	principals, err := compilePrincipals(normalized.Principals)
-	if err != nil {
-		return nil, err
-	}
-	if len(principals) == 0 {
-		return nil, errors.New("at least one principal is required")
 	}
 	if err := validateServerDependencies(
 		namedDependency{"workflow store", workflowStore},
@@ -194,24 +220,14 @@ func New(
 	); err != nil {
 		return nil, err
 	}
-	checks, err := compileTrustedChecks(normalized.TrustedChecks)
-	if err != nil {
-		return nil, err
-	}
-	if err := normalized.Policy.Validate(); err != nil {
-		return nil, err
-	}
-	if !slices.Equal(normalized.TrustedChecks, normalized.Policy.TrustedChecks) {
-		return nil, errors.New("trusted checks do not match beta policy")
-	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Server{
-		config: normalized, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
+		config: prepared.config, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
 		artifacts: artifacts, bindings: bindings, taskGraphs: taskGraphApproval, approval: approvalService,
-		publication: publicationService, support: support, principals: principals,
-		checks: checks, logger: logger,
+		publication: publicationService, support: support, principals: prepared.principals,
+		checks: prepared.checks, logger: logger,
 	}, nil
 }
 
