@@ -258,6 +258,14 @@ def test_cli_init_bootstraps_project_from_installed_wheel(tmp_path: Path) -> Non
         text=True,
     )
 
+    help_result = subprocess.run(
+        [str(environment / "bin/harness-agents"), "operator", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+
     result = subprocess.run(
         [
             str(environment / "bin/harness-agents"),

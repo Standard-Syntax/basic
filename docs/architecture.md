@@ -138,6 +138,14 @@ provider diagnostics, provider request identifiers, and artifact locations;
 rejections expose only a stable category, code, retryability, and safe field
 names.
 
+The installed operator CLI is a service client, not an alternate runtime. It
+derives one specification and one-task graph from trusted bootstrap metadata,
+stores their exact Protobuf JSON transports in an owner-only recovery file, and
+uses separate derived idempotency keys for each API mutation. It never approves
+a subsequent gate implicitly: specification approval only submits the pending
+task graph, task-graph approval starts execution, candidate approval records the
+human decision, and submission alone crosses the publication boundary.
+
 Phase 10 adds constructor-selected Anthropic Messages adapters behind the
 existing implementation and review gateway seams. The official Go SDK is
 pinned at `v1.61.0` with SDK retries disabled. Trusted capability

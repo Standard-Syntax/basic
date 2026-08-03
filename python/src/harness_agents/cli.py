@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,15 @@ from harness_agents.manifest import (
     OutputContract,
     PromptTemplate,
     ToolRequestPolicy,
+)
+from harness_agents.operator import (
+    OperatorError,
+    approve_gate,
+    export_bundle,
+    load_config,
+    run_lifecycle,
+    status,
+    submit_candidate,
 )
 
 
@@ -182,6 +192,26 @@ def init_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def operator_command(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(args.config)
+        if args.operator_command == "run":
+            result = run_lifecycle(config, args.project, args.state_file, args.idempotency_key)
+        elif args.operator_command == "approve":
+            result = approve_gate(config, args.state_file, args.gate, args.idempotency_key)
+        elif args.operator_command == "submit":
+            result = submit_candidate(config, args.state_file, args.idempotency_key)
+        elif args.operator_command == "status":
+            result = status(config, args.run_id)
+        else:
+            result = export_bundle(config, args.run_id, args.output)
+        print(json.dumps(result, indent=2, sort_keys=True))
+    except (OSError, OperatorError, ValueError) as error:
+        print(f"harness-agents: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="harness-agents")
     commands = root.add_subparsers(required=True)
@@ -196,6 +226,36 @@ def parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--project-spec", type=Path, required=True)
     init_parser.add_argument("--checks", type=Path, required=True)
     init_parser.set_defaults(handler=init_command)
+    operator_parser = commands.add_parser("operator")
+    operator_commands = operator_parser.add_subparsers(dest="operator_command", required=True)
+
+    def configure_operator(command: argparse.ArgumentParser) -> None:
+        command.add_argument("--config", type=Path, required=True)
+        command.set_defaults(handler=operator_command)
+
+    run_parser = operator_commands.add_parser("run")
+    configure_operator(run_parser)
+    run_parser.add_argument("--project", type=Path, required=True)
+    run_parser.add_argument("--state-file", type=Path, required=True)
+    run_parser.add_argument("--idempotency-key", type=uuid.UUID, required=True)
+    approve_parser = operator_commands.add_parser("approve")
+    configure_operator(approve_parser)
+    approve_parser.add_argument(
+        "--gate", choices=("specification", "task-graph", "candidate"), required=True
+    )
+    approve_parser.add_argument("--state-file", type=Path, required=True)
+    approve_parser.add_argument("--idempotency-key", type=uuid.UUID, required=True)
+    submit_parser = operator_commands.add_parser("submit")
+    configure_operator(submit_parser)
+    submit_parser.add_argument("--state-file", type=Path, required=True)
+    submit_parser.add_argument("--idempotency-key", type=uuid.UUID, required=True)
+    status_parser = operator_commands.add_parser("status")
+    configure_operator(status_parser)
+    status_parser.add_argument("run_id")
+    export_parser = operator_commands.add_parser("export")
+    configure_operator(export_parser)
+    export_parser.add_argument("run_id")
+    export_parser.add_argument("--output", type=Path, required=True)
     return root
 
 

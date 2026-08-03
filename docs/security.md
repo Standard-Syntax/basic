@@ -188,6 +188,10 @@ composite approval, a fresh revision precondition, and its own idempotency key.
   regular, owner-only `0600` file.
 - Phase 11 adds no automatic merge, deployment, arbitrary shell, unrestricted
   network, provider fallback, or cross-repository authority.
+- The operator CLI accepts only a loopback HTTP origin and an owner-owned,
+  owner-only token file. It writes no token to state, derives independent UUID
+  keys per mutation, refuses a dirty bootstrap repository, and keeps lifecycle
+  state and support exports at mode `0600`.
 
 ## Beta Slice 3 intake boundary
 

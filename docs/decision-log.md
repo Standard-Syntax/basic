@@ -874,3 +874,36 @@ control-plane API, publication endpoint, merge operation, or deployment.
 
 ### Date
 2026-08-03
+
+## DEC-035: Keep the Python operator as a thin explicit-gate client
+
+### Decision
+Ship a strict `harness-agents operator` client that drives the existing service
+API, stores exact proposal transports for recovery, and exposes specification,
+task-graph, candidate, and submission actions as separate commands.
+
+### Options considered
+Embed a local runtime; automate every gate; provide raw HTTP examples only;
+ship a configured service client with explicit gates.
+
+### Pros
+Operators get one installed entrypoint and durable idempotent recovery without
+duplicating kernel state, worker orchestration, evidence storage, approval, or
+publication logic in Python.
+
+### Cons
+The client requires a running beta service and an operator must supply a fresh
+idempotency root for every explicit action.
+
+### Why this option
+The control plane already owns lifecycle and authority transitions. A second
+runtime would split those security boundaries, while fully automatic approval
+would erase the human gates required by the evaluation.
+
+### Consequences
+Configuration is closed-schema, absolute, loopback-only, and uses an owner-only
+token file. Run creation requires a clean exact Git base. State and exports are
+atomic mode-`0600` files and contain no credential.
+
+### Date
+2026-08-03

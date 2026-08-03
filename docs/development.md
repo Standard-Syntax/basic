@@ -104,6 +104,46 @@ pins, `make check`, immutable path metadata, and a packaged lockfile; creates a
 fresh `main` repository with hooks and global Git configuration disabled; and
 commits the trusted base. The destination must not already exist.
 
+The operator client uses a strict absolute configuration:
+
+```json
+{
+  "schema_version": "harness_operator_config.v1",
+  "endpoint": "http://127.0.0.1:8080",
+  "token_file": "/absolute/path/operator.token",
+  "project_root": "/absolute/path/to/new-project"
+}
+```
+
+The token file must be a regular owner-owned `0600` file. The endpoint must be
+a loopback HTTP origin. Start the lifecycle from a clean trusted base and keep
+the generated `0600` state file for idempotent recovery:
+
+```bash
+harness-agents operator run --config /absolute/path/operator.json \
+  --project /absolute/path/to/new-project \
+  --state-file /absolute/path/run-state.json \
+  --idempotency-key 11111111-1111-4111-8111-111111111111
+harness-agents operator approve --gate specification \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 22222222-2222-4222-8222-222222222222
+harness-agents operator approve --gate task-graph \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 33333333-3333-4333-8333-333333333333
+harness-agents operator approve --gate candidate \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 44444444-4444-4444-8444-444444444444
+harness-agents operator submit --config /absolute/path/operator.json \
+  --state-file /absolute/path/run-state.json \
+  --idempotency-key 55555555-5555-4555-8555-555555555555
+```
+
+Specification approval submits the already stored, operator-derived one-task
+graph but does not approve it. Each later command performs exactly one approval
+or publication action. Use `operator status RUN_ID --config ...` for current
+state and `operator export RUN_ID --config ... --output /absolute/support.json`
+for an atomic redacted bundle.
+
 Generation uses `grpcio-tools==1.75.1` from `uv.lock` and installs
 `protoc-gen-go@v1.36.10` into the ignored `.tools/bin` directory. It does not
 use an unpinned system `protoc`.

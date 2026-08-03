@@ -80,3 +80,8 @@ Production repository readiness is checked without mutation with
 `make beta-preflight BETA_CONFIG=/absolute/path/to/beta-preflight.json`. The
 same immutable `beta_policy` is consumed by both services. The beta supports
 exactly one dependency-free task per run.
+
+After trusted Python bootstrap, `harness-agents operator` drives run creation,
+the three explicit approval gates, separate draft submission, status reads,
+and redacted support export against a configured loopback control API. See the
+development guide for the strict configuration and command sequence.
