@@ -7,10 +7,10 @@ import (
 )
 
 func TestRejectionFieldsDropsFreeFormMessagesAndUnsafeFields(t *testing.T) {
-	const secret = "RAW_PROVIDER_SECRET_SENTINEL"
+	const rawValue = "UNTRUSTED_RESPONSE_VALUE_123"
 	fields, err := rejectionFields([]byte(`[
-		{"field":"provider_response","message":"` + secret + `"},
-		{"field":"unsafe field","message":"also secret"},
+		{"field":"provider_response","message":"` + rawValue + `"},
+		{"field":"unsafe field","message":"untrusted value"},
 		{"field":"provider_response","message":"duplicate"}
 	]`))
 	if err != nil {
@@ -23,7 +23,7 @@ func TestRejectionFieldsDropsFreeFormMessagesAndUnsafeFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(encoded) != `{"code":1,"category":"schema_invalid","fields":["provider_response"],"retryable":false}` ||
-		strings.Contains(string(encoded), secret) {
+		strings.Contains(string(encoded), rawValue) {
 		t.Fatalf("diagnostic=%s", encoded)
 	}
 }
