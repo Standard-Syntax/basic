@@ -280,11 +280,16 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
 `If-Match: "<revision>"`. Mutation routes accept only `POST`; read routes accept
-only `GET`, and method failures return `405` with `Allow`. `make beta-live-e2e` is the full two-process MiniMax
+only `GET`, and method failures return `405` with `Allow`. Final human approval
+is `POST /v1/runs/{run_id}/approval` and records no Git or GitHub effect.
+An operator separately invokes `POST /v1/runs/{run_id}/submit` with the new
+`MERGE_READY` revision to publish the exact approval-bound candidate as a draft.
+Both operations have independent idempotency keys and exact replay responses.
+`make beta-live-e2e` is the full two-process MiniMax
 gate: it builds both service binaries and worker images, starts disposable
 PostgreSQL, uses a disposable Git repository and loopback GitHub publication,
 and exercises implementation, execution, verification, review, restart,
-human approval, draft publication, and exact approval replay. Keep
+human approval, separate draft submission, and exact replay of both operations. Keep
 `make provider-smoke` separate: it uses the generic Anthropic endpoint and is
 not MiniMax runtime-E2E evidence.
 

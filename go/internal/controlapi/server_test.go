@@ -54,8 +54,11 @@ func (f *fakeWorkflow) GetTask(context.Context, string, string) (workflow.Task, 
 	}
 	return workflow.Task{}, workflow.ErrNotFound
 }
-func (*fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error) {
-	return nil, nil
+func (f *fakeWorkflow) ListTasks(context.Context, string) ([]workflow.Task, error) {
+	if f.task == nil {
+		return nil, nil
+	}
+	return []workflow.Task{*f.task}, nil
 }
 func (*fakeWorkflow) ListEvents(context.Context, string, string) ([]workflow.Event, error) {
 	return nil, nil
@@ -147,6 +150,7 @@ func (fakeArtifacts) Get(_ context.Context, ref workflow.ArtifactRef) ([]byte, e
 
 type fakeBindings struct {
 	runs []runtime.RunBinding
+	run  *runtime.RunBinding
 	err  error
 }
 
@@ -157,7 +161,10 @@ func (f *fakeBindings) CreateRun(_ context.Context, binding runtime.RunBinding) 
 	f.runs = append(f.runs, binding)
 	return nil
 }
-func (*fakeBindings) GetRun(context.Context, string) (runtime.RunBinding, error) {
+func (f *fakeBindings) GetRun(context.Context, string) (runtime.RunBinding, error) {
+	if f.run != nil {
+		return *f.run, nil
+	}
 	return runtime.RunBinding{}, runtime.ErrNotFound
 }
 func (*fakeBindings) GetTask(context.Context, string, string) (runtime.TaskBinding, error) {
@@ -200,6 +207,59 @@ func (fakePublication) Publish(
 	context.Context, publication.Request,
 ) (publication.Result, error) {
 	return publication.Result{}, nil
+}
+
+type capturingPublication struct{ request publication.Request }
+
+func (f *capturingPublication) Publish(
+	_ context.Context, request publication.Request,
+) (publication.Result, error) {
+	f.request = request
+	return publication.Result{CandidateCommit: request.CandidateCommit}, nil
+}
+
+func TestSubmitPublishesOnlyPreviouslyApprovedEvidence(t *testing.T) {
+	server, workflowStore, _, _ := testServer(t, RoleOperator)
+	ref := func(letter byte) workflow.ArtifactRef {
+		digest := strings.Repeat(string(letter), 64)
+		return workflow.ArtifactRef{URI: "artifact://sha256/" + digest, Digest: digest}
+	}
+	approvalRef, specificationRef := ref('a'), ref('b')
+	run := workflow.Run{
+		ID: uuid.NewString(), State: workflow.RunStateMergeReady, Revision: 9,
+		Approval: &approvalRef,
+	}
+	task := workflow.Task{
+		RunID: run.ID, ID: uuid.NewString(), State: workflow.TaskStateAccepted,
+		CandidateCommit: strings.Repeat("c", 40),
+	}
+	proposal, executionRef, verificationRef, reviewRef := ref('d'), ref('e'), ref('f'), ref('1')
+	task.Proposal, task.Execution = &proposal, &executionRef
+	task.Verification, task.Review = &verificationRef, &reviewRef
+	workflowStore.run, workflowStore.task = &run, &task
+	server.bindings = &fakeBindings{run: &runtime.RunBinding{
+		RunID: run.ID, BaseCommit: strings.Repeat("2", 40),
+		ApprovedSpecification: &specificationRef, CompositeApproval: &approvalRef,
+	}}
+	publisher := &capturingPublication{}
+	server.publication = publisher
+
+	result, err := server.submitRun(t.Context(), uuid.NewString(), time.Now(), run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CandidateCommit != task.CandidateCommit ||
+		publisher.request.Approval != approvalRef ||
+		publisher.request.ExpectedRunRevision != run.Revision {
+		t.Fatalf("result=%+v request=%+v", result, publisher.request)
+	}
+
+	run.Approval = nil
+	if _, err := server.submitRun(t.Context(), uuid.NewString(), time.Now(), run); !errors.Is(
+		err, workflow.ErrInvalidTransition,
+	) {
+		t.Fatalf("unapproved submit error=%v", err)
+	}
 }
 
 func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRuntime, string) {

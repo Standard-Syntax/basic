@@ -525,7 +525,8 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	}
 	var operationParent context.Context
 	var operationCancel context.CancelFunc
-	if _, suffix, ok := parseRunPath(request.URL.Path); ok && suffix == "/approval" {
+	if _, suffix, ok := parseRunPath(request.URL.Path); ok &&
+		(suffix == "/approval" || suffix == "/submit") {
 		operationParent, operationCancel = context.WithTimeout(
 			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
 		)
@@ -863,18 +864,14 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 		if !hasApprovalRole(principal, false) {
 			return 0, nil, workflow.ErrUnauthorized
 		}
-		result, publicationResult, err := s.compositeApprove(
-			ctx, principal, key, body.DecisionTime, run,
-		)
-		response := map[string]any{"result": result}
-		if publicationResult == nil {
-			response["publication"] = map[string]string{
-				"status": "configuration_blocked", "reason": "publication is not configured",
-			}
-		} else {
-			response["publication"] = publicationResult
+		result, err := s.approveRun(ctx, principal, key, body.DecisionTime, run)
+		return http.StatusOK, map[string]any{"result": result}, err
+	case "/submit":
+		if !hasRole(principal, RoleOperator) {
+			return 0, nil, workflow.ErrUnauthorized
 		}
-		return http.StatusOK, response, err
+		result, err := s.submitRun(ctx, key, body.DecisionTime, run)
+		return http.StatusOK, result, err
 	case "/reject":
 		if !hasApprovalRole(principal, false) || run.Review == nil {
 			return 0, nil, workflow.ErrUnauthorized
@@ -900,37 +897,37 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 	}
 }
 
-func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered approval checkpoints
+func (s *Server) approveRun( // skipcq: GO-R1005 -- restart-safe ordered approval checkpoints
 	ctx context.Context, principal Principal, key string, at time.Time, run workflow.Run,
-) (approval.Result, *publication.Result, error) {
+) (approval.Result, error) {
 	tasks, err := s.workflow.ListTasks(ctx, run.ID)
 	if err != nil || len(tasks) != 1 {
-		return approval.Result{}, nil, workflow.ErrInvalid
+		return approval.Result{}, workflow.ErrInvalid
 	}
 	task := tasks[0]
 	if task.Execution == nil || task.Verification == nil || task.Review == nil ||
 		task.Proposal == nil || task.CandidateCommit == "" ||
 		run.Specification == nil || run.TaskGraph == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	runBinding, err := s.bindings.GetRun(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	if runBinding.ApprovedSpecification == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	taskBinding, err := s.bindings.GetTask(ctx, run.ID, task.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	executionBody, err := s.artifacts.Get(ctx, *task.Execution)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	var executionReport execution.ExecutionReport
 	if err := json.Unmarshal(executionBody, &executionReport); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	changedPaths := make([]string, 0, len(executionReport.ActualDiff))
 	for _, entry := range executionReport.ActualDiff {
@@ -938,11 +935,11 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 	}
 	taskBody, err := s.artifacts.Get(ctx, taskBinding.ApprovedTask)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	var plannedTask reasoningv1.PlannedTask
 	if err := proto.Unmarshal(taskBody, &plannedTask); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	roles := make([]approval.Role, 0, len(principal.Roles))
 	if hasRole(principal, RoleApprover) {
@@ -964,16 +961,16 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		ExpectedTaskRevision: task.Revision,
 	})
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	if err := s.bindings.CheckpointApproval(
 		ctx, run.ID, approvalResult.ApprovalArtifact,
 	); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	run, err = s.workflow.GetRun(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	steps := []struct {
 		state workflow.RunState
@@ -1005,16 +1002,16 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		if run.State == step.state {
 			_, err = s.workflow.ExecuteRun(ctx, step.make(run))
 			if err != nil {
-				return approval.Result{}, nil, err
+				return approval.Result{}, err
 			}
 			run, err = s.workflow.GetRun(ctx, run.ID)
 			if err != nil {
-				return approval.Result{}, nil, err
+				return approval.Result{}, err
 			}
 		}
 	}
 	if run.State != workflow.RunStateAwaitingApproval || run.Review == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	_, err = s.workflow.ExecuteRun(ctx, workflow.ApproveRun{
 		Meta: s.envelope(stableStepID(key, "approve-run"), principal.ID,
@@ -1023,28 +1020,41 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		Review: *run.Review, Approval: approvalResult.ApprovalArtifact,
 	})
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
-	if s.publication == nil {
-		return approvalResult, nil, nil
+	return approvalResult, nil
+}
+
+func (s *Server) submitRun(
+	ctx context.Context, key string, at time.Time, run workflow.Run,
+) (publication.Result, error) {
+	if s.publication == nil || run.State != workflow.RunStateMergeReady || run.Approval == nil {
+		return publication.Result{}, workflow.ErrInvalidTransition
 	}
-	run, err = s.workflow.GetRun(ctx, run.ID)
+	tasks, err := s.workflow.ListTasks(ctx, run.ID)
+	if err != nil || len(tasks) != 1 {
+		return publication.Result{}, workflow.ErrInvalid
+	}
+	task := tasks[0]
+	if task.State != workflow.TaskStateAccepted || task.Proposal == nil || task.Execution == nil ||
+		task.Verification == nil || task.Review == nil || task.CandidateCommit == "" {
+		return publication.Result{}, workflow.ErrInvalidTransition
+	}
+	binding, err := s.bindings.GetRun(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return publication.Result{}, err
 	}
-	publicationResult, err := s.publication.Publish(ctx, publication.Request{
+	if binding.ApprovedSpecification == nil || binding.CompositeApproval == nil ||
+		!binding.CompositeApproval.Equal(*run.Approval) {
+		return publication.Result{}, workflow.ErrInvalidTransition
+	}
+	return s.publication.Publish(ctx, publication.Request{
 		PublicationID: stableStepID(key, "publish"), PublicationTimestamp: at,
-		RunID: run.ID, BaseCommit: runBinding.BaseCommit,
-		CandidateCommit: task.CandidateCommit,
-		Specification:   *runBinding.ApprovedSpecification,
-		Implementation:  *task.Proposal, Execution: *task.Execution,
-		Verification: *task.Verification, Review: *task.Review,
-		Approval: approvalResult.ApprovalArtifact, ExpectedRunRevision: run.Revision,
+		RunID: run.ID, BaseCommit: binding.BaseCommit, CandidateCommit: task.CandidateCommit,
+		Specification: *binding.ApprovedSpecification, Implementation: *task.Proposal,
+		Execution: *task.Execution, Verification: *task.Verification, Review: *task.Review,
+		Approval: *binding.CompositeApproval, ExpectedRunRevision: run.Revision,
 	})
-	if err != nil {
-		return approval.Result{}, nil, err
-	}
-	return approvalResult, &publicationResult, nil
 }
 
 func (*Server) envelope(

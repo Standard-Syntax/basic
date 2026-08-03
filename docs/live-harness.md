@@ -82,14 +82,14 @@ MiniMax.
 The gate builds both host services and both isolated worker images, starts
 disposable PostgreSQL, and runs one task against MiniMax-M2.7 through
 implementation, execution, independent verification, review, process restart,
-human approval, and draft publication. The Git repository and publication
+human approval, a separate operator submission, and draft publication. The Git repository and publication
 remote are disposable; GitHub REST remains loopback-only in Slice 2.
 
 Acceptance requires one implementation request and one distinct review
 request, one provider request per stage, immutable proposal/raw-response
 evidence with request IDs and token usage, an independently passing `add.go`
-candidate, one approval and publication, and exact replay after API restart
-without another provider request, push, approval, or PR. The fixture scans
+candidate, one approval and one submission, and exact replay after API restart
+without another provider request, push, approval, submission, or PR. The fixture scans
 configuration, prompts, process logs, CAS, PostgreSQL, and reachable Git
 objects for the provider secret.
 

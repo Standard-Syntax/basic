@@ -772,6 +772,39 @@ logs and rejections expose structural metadata only.
 ### Date
 2026-08-03
 
+## DEC-033: Separate human approval from draft submission
+
+### Decision
+Make `/approval` record only the immutable human decision and run aggregation.
+Add an operator-only `/submit` mutation that reloads that checkpointed approval
+and publishes the exact accepted candidate.
+
+### Options considered
+Keep approval and publication combined; remove CLI publication; split approval
+and submission into independent idempotent operations.
+
+### Pros
+Reviewers can approve without causing an external write, operators can inspect
+the `MERGE_READY` evidence before submission, and retries cannot repeat approval
+or publication effects.
+
+### Cons
+Existing beta clients must make a second request and use the post-approval
+revision. This is an intentional pre-release API behavior change.
+
+### Why this option
+Approval authority and publication authority are distinct security boundaries.
+Combining them made an approval command unexpectedly push a branch and create a
+pull request.
+
+### Consequences
+Both mutations require UUID idempotency keys and exact `If-Match` revisions.
+Submission fails closed when publication is unconfigured, the run is not
+`MERGE_READY`, the task is not accepted, or the approval binding differs.
+
+### Date
+2026-08-03
+
 ## DEC-032: Bootstrap Python projects from operator-owned checks
 
 ### Decision

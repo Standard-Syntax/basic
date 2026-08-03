@@ -125,6 +125,10 @@ the ref is absent. A successful-but-uncheckpointed push is recovered only when
 the remote ref exactly equals the approved candidate. Checkpointed branch/PR
 facts and completed rows are protected by PostgreSQL triggers.
 
+Human approval performs no publication side effect. Draft submission requires
+the separate operator role, a `MERGE_READY` run, the exact checkpointed
+composite approval, a fresh revision precondition, and its own idempotency key.
+
 ## Phase 10 provider boundary
 
 - The shipped beta accepts only MiniMax's Anthropic-compatible HTTPS endpoint,

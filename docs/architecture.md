@@ -125,6 +125,12 @@ the idempotent `RecordDraftPullRequest` command. Migration `0014` extends only
 the closed workflow actor constraint for `PUBLICATION_SERVICE`. The run remains
 `MERGE_READY`.
 
+The control API keeps human approval and publication as separate idempotent
+mutations. Approval checkpoints the human decision and advances the run to
+`MERGE_READY` without Git or GitHub access. A later operator-only submission
+reloads the immutable approval binding and exact task evidence before invoking
+the publication boundary.
+
 Phase 10 adds constructor-selected Anthropic Messages adapters behind the
 existing implementation and review gateway seams. The official Go SDK is
 pinned at `v1.61.0` with SDK retries disabled. Trusted capability

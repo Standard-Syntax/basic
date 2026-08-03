@@ -422,8 +422,17 @@ func runBetaProcesses(t *testing.T) {
 	approvalResponse := client.mutateWithKey(
 		t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
 	)
-	publicationValue, ok := approvalResponse["publication"].(map[string]any)
-	if !ok || publicationValue["candidate_commit"] == "" ||
+	if approvalResponse["publication"] != nil || approvalResponse["result"] == nil {
+		t.Fatalf("approval response = %#v", approvalResponse)
+	}
+	submitPath := "/v1/runs/" + runID + "/submit"
+	submitRevision := client.revision(t, runID)
+	submitKey := uuid.NewString()
+	submitRequest := map[string]any{"decision_timestamp": now.Add(11 * time.Minute)}
+	publicationValue := client.mutateWithKey(
+		t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
+	)
+	if publicationValue["candidate_commit"] == "" ||
 		publicationValue["pull_request_number"].(float64) <= 0 {
 		t.Fatalf("publication = %#v", publicationValue)
 	}
@@ -477,6 +486,13 @@ func runBetaProcesses(t *testing.T) {
 	if !reflect.DeepEqual(replayedApproval, approvalResponse) {
 		t.Fatalf("approval replay changed response: first=%#v replay=%#v",
 			approvalResponse, replayedApproval)
+	}
+	replayedPublication := client.mutateWithKey(
+		t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
+	)
+	if !reflect.DeepEqual(replayedPublication, publicationValue) {
+		t.Fatalf("publication replay changed response: first=%#v replay=%#v",
+			publicationValue, replayedPublication)
 	}
 	afterReplay := snapshotSideEffects(
 		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
