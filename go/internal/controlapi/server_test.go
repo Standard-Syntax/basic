@@ -253,6 +253,21 @@ func TestSubmitPublishesOnlyPreviouslyApprovedEvidence(t *testing.T) {
 		publisher.request.ExpectedRunRevision != run.Revision {
 		t.Fatalf("result=%+v request=%+v", result, publisher.request)
 	}
+	unauthorized, unauthorizedWorkflow, _, token := testServer(t, RoleApprover)
+	unauthorizedWorkflow.run = &run
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/runs/"+run.ID+"/submit",
+		strings.NewReader(`{"decision_timestamp":"2026-08-03T12:00:00Z"}`),
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Idempotency-Key", uuid.NewString())
+	request.Header.Set("If-Match", `"9"`)
+	response := httptest.NewRecorder()
+	unauthorized.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("non-operator submit status=%d body=%s", response.Code, response.Body)
+	}
 
 	run.Approval = nil
 	if _, err := server.submitRun(t.Context(), uuid.NewString(), time.Now(), run); !errors.Is(

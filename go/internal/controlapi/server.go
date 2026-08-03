@@ -1028,33 +1028,43 @@ func (s *Server) approveRun( // skipcq: GO-R1005 -- restart-safe ordered approva
 func (s *Server) submitRun(
 	ctx context.Context, key string, at time.Time, run workflow.Run,
 ) (publication.Result, error) {
+	request, err := s.publicationRequest(ctx, key, at, run)
+	if err != nil {
+		return publication.Result{}, err
+	}
+	return s.publication.Publish(ctx, request)
+}
+
+func (s *Server) publicationRequest(
+	ctx context.Context, key string, at time.Time, run workflow.Run,
+) (publication.Request, error) {
 	if s.publication == nil || run.State != workflow.RunStateMergeReady || run.Approval == nil {
-		return publication.Result{}, workflow.ErrInvalidTransition
+		return publication.Request{}, workflow.ErrInvalidTransition
 	}
 	tasks, err := s.workflow.ListTasks(ctx, run.ID)
 	if err != nil || len(tasks) != 1 {
-		return publication.Result{}, workflow.ErrInvalid
+		return publication.Request{}, workflow.ErrInvalid
 	}
 	task := tasks[0]
 	if task.State != workflow.TaskStateAccepted || task.Proposal == nil || task.Execution == nil ||
 		task.Verification == nil || task.Review == nil || task.CandidateCommit == "" {
-		return publication.Result{}, workflow.ErrInvalidTransition
+		return publication.Request{}, workflow.ErrInvalidTransition
 	}
 	binding, err := s.bindings.GetRun(ctx, run.ID)
 	if err != nil {
-		return publication.Result{}, err
+		return publication.Request{}, err
 	}
 	if binding.ApprovedSpecification == nil || binding.CompositeApproval == nil ||
 		!binding.CompositeApproval.Equal(*run.Approval) {
-		return publication.Result{}, workflow.ErrInvalidTransition
+		return publication.Request{}, workflow.ErrInvalidTransition
 	}
-	return s.publication.Publish(ctx, publication.Request{
+	return publication.Request{
 		PublicationID: stableStepID(key, "publish"), PublicationTimestamp: at,
 		RunID: run.ID, BaseCommit: binding.BaseCommit, CandidateCommit: task.CandidateCommit,
 		Specification: *binding.ApprovedSpecification, Implementation: *task.Proposal,
 		Execution: *task.Execution, Verification: *task.Verification, Review: *task.Review,
 		Approval: *binding.CompositeApproval, ExpectedRunRevision: run.Revision,
-	})
+	}, nil
 }
 
 func (*Server) envelope(
