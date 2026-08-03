@@ -536,11 +536,11 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	if err != nil {
 		status, response = s.domainError(err)
 		if status >= http.StatusInternalServerError {
-			s.abandonMutation(w, request.Context(), key, reservation.FencingToken, status, response)
+			s.abandonMutation(request.Context(), w, key, reservation.FencingToken, status, response)
 			return
 		}
 	}
-	s.completeMutation(w, request.Context(), key, reservation.FencingToken, status, response)
+	s.completeMutation(request.Context(), w, key, reservation.FencingToken, status, response)
 }
 
 func mutationOperationParent(request *http.Request) (context.Context, context.CancelFunc) {
@@ -554,7 +554,7 @@ func mutationOperationParent(request *http.Request) (context.Context, context.Ca
 }
 
 func (s *Server) abandonMutation(
-	w http.ResponseWriter, ctx context.Context, key string, fence uint64,
+	ctx context.Context, w http.ResponseWriter, key string, fence uint64,
 	status int, response any,
 ) {
 	cleanupCtx, cleanupCancel := detachedIdempotencyContext(ctx)
@@ -567,7 +567,7 @@ func (s *Server) abandonMutation(
 }
 
 func (s *Server) completeMutation(
-	w http.ResponseWriter, ctx context.Context, key string, fence uint64,
+	ctx context.Context, w http.ResponseWriter, key string, fence uint64,
 	status int, response any,
 ) {
 	encoded, err := json.Marshal(response)
