@@ -5,7 +5,7 @@ PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 REPORT_OUTPUT ?= $(CURDIR)/.tools/evidence/python-project-report.json
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-python-project-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check buildx-check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-python-project-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -56,9 +56,12 @@ test:
 
 check: generate-check no-fake-provider-adapters lint type-check test build
 
-integration-test:
-	docker build -f Dockerfile.execution-worker -t basic-execution-worker:integration .
-	docker build -f Dockerfile.verification-worker -t basic-verification-worker:integration .
+buildx-check:
+	./scripts/require-buildx.sh
+
+integration-test: buildx-check
+	./scripts/build-image.sh basic-execution-worker:integration -f Dockerfile.execution-worker
+	./scripts/build-image.sh basic-verification-worker:integration -f Dockerfile.verification-worker
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
@@ -84,14 +87,14 @@ beta-preflight:
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-preflight -config "$(BETA_CONFIG)"
 
-beta-images:
+beta-images: buildx-check
 	$(eval SOURCE_REVISION := $(shell git rev-parse HEAD))
-	docker build -f Dockerfile.execution-worker -t basic-execution-worker:beta .
-	docker build -f Dockerfile.verification-worker -t basic-verification-worker:beta .
-	docker build --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
-		-f Dockerfile.api-service -t basic-api-service:beta .
-	docker build --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
-		-f Dockerfile.workflow-service -t basic-workflow-service:beta .
+	./scripts/build-image.sh basic-execution-worker:beta -f Dockerfile.execution-worker
+	./scripts/build-image.sh basic-verification-worker:beta -f Dockerfile.verification-worker
+	./scripts/build-image.sh basic-api-service:beta --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
+		-f Dockerfile.api-service
+	./scripts/build-image.sh basic-workflow-service:beta --build-arg SOURCE_REVISION="$(SOURCE_REVISION)" \
+		-f Dockerfile.workflow-service
 	SOURCE_REVISION="$(SOURCE_REVISION)" ./scripts/inspect-beta-images.sh
 
 beta-deploy-smoke: beta-images
@@ -114,7 +117,7 @@ beta-deploy-smoke: beta-images
 		fi; \
 		exit $$status
 
-beta-live-e2e:
+beta-live-e2e: buildx-check
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 
 ifneq ($(strip $(BETA_CONFIG)),)
@@ -140,8 +143,8 @@ ifneq ($(strip $(BETA_CONFIG)),)
 		docker compose down --volumes; exit $$status
 else
 	docker compose down --volumes
-	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
-	docker build -f Dockerfile.verification-worker -t basic-verification-worker:runtime .
+	./scripts/build-image.sh basic-execution-worker:runtime -f Dockerfile.execution-worker
+	./scripts/build-image.sh basic-verification-worker:runtime -f Dockerfile.verification-worker
 	mkdir -p .tools/runtime
 	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
 	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
@@ -158,15 +161,15 @@ else
 	exit $$status
 endif
 
-beta-python-project-e2e:
+beta-python-project-e2e: buildx-check
 	@mkdir -p "$(CURDIR)/.tools/evidence"
 	@PROJECT_SPEC="$(PROJECT_SPEC)" CHECKS="$(CHECKS)" \
 		REPORT_OUTPUT="$(REPORT_OUTPUT)" PRESERVE_PROJECT="$(PRESERVE_PROJECT)" \
 		uv run --frozen python -m harness_agents.project_inputs
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	docker compose down --volumes
-	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
-	docker build -f Dockerfile.verification-worker -t basic-verification-worker:runtime .
+	./scripts/build-image.sh basic-execution-worker:runtime -f Dockerfile.execution-worker
+	./scripts/build-image.sh basic-verification-worker:runtime -f Dockerfile.verification-worker
 	mkdir -p .tools/runtime
 	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
 	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
@@ -184,7 +187,7 @@ beta-python-project-e2e:
 	docker compose down --volumes; \
 	exit $$status
 
-beta-canary-e2e:
+beta-canary-e2e: buildx-check
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }
 	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
 	cd go && go run ./cmd/beta-preflight -canary -config "$(BETA_CONFIG)"

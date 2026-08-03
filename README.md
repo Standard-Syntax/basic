@@ -59,8 +59,10 @@ checkpoints branch and PR identity so replay performs no Git or network write.
 
 ## Quick start
 
-Prerequisites: Go 1.26, Python 3.14, `uv` 0.11 or newer, GNU Make, Git 2.38 or newer, and
-Docker for PostgreSQL and isolated-worker integration tests.
+Prerequisites: Go 1.26, Python 3.14, `uv` 0.11 or newer, GNU Make, Git 2.38 or newer,
+Docker for PostgreSQL and isolated-worker integration tests, and Docker Buildx
+exactly v0.36.0. Image targets fail before building when that pinned plugin is
+missing or mismatched.
 
 ```bash
 uv sync --frozen
@@ -87,3 +89,9 @@ and redacted support export against a configured loopback control API. See the
 development guide for the strict configuration and command sequence.
 `make beta-python-project-e2e` is the credentialed acceptance gate for a newly
 generated Python target and uses only disposable Git and publication endpoints.
+With no parameters it runs the reproducible golden project. Operators may instead
+provide both `PROJECT_SPEC=/clean/absolute/spec.json` and
+`CHECKS=/clean/absolute/checks`. The target writes a redacted mode-`0600` report
+to `.tools/evidence/python-project-report.json` by default; `REPORT_OUTPUT` selects
+another clean absolute destination, and `PRESERVE_PROJECT` selects a clean,
+initially nonexistent destination for the scanned generated repository.

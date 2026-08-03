@@ -7,6 +7,7 @@
 - uv 0.11.x
 - GNU Make
 - Docker with Compose (integration tests only)
+- Docker Buildx exactly v0.36.0
 
 Install locked Python dependencies, then run the aggregate gate:
 
@@ -68,6 +69,30 @@ The objective-specific `beta-python-project-e2e` target first bootstraps a new
 repository from operator-owned checks, then requires live implementation and
 review, offline verification, separate approval/submission, replay safety, and
 disposable draft publication.
+
+With no custom inputs the target runs the fixed golden project. A different
+operator-owned project uses a complete pair of clean absolute paths:
+
+```bash
+make beta-python-project-e2e \
+  PROJECT_SPEC=/absolute/project-spec.json \
+  CHECKS=/absolute/checks \
+  REPORT_OUTPUT=/absolute/python-project-report.json \
+  PRESERVE_PROJECT=/absolute/nonexistent-preserved-project
+```
+
+Partial pairs, missing or symlinked inputs, unsafe report paths, and existing
+preservation destinations fail before Docker, PostgreSQL, or provider work.
+The report is the closed `harness_python_project_e2e_report.v1` contract, is
+atomically replaced as a regular mode-`0600` file, and contains only bounded
+redacted lifecycle evidence and artifact digests. Preservation copies only the
+generated repository after a complete credential and file-type scan.
+
+The gate builds and installs the current harness wheel in a disposable
+environment and invokes that exact `harness-agents` executable for `operator
+run`, the three distinct approvals, `submit`, `status`, and `export`, including
+replay across an API restart. Its approvals are automated acceptance-fixture
+evidence; they do not claim that a human reviewed or approved the candidate.
 
 ## Installed manifest compiler
 
@@ -215,11 +240,11 @@ store, workflow store, and execution ledger. Call `Execute` with the existing
 v1 request/proposal transports, exact proposal artifact, active lease, expected
 task revision, execution UUID, and stable execution timestamp.
 
-Build the private worker directly with:
+Build the private worker directly with the pinned BuildKit wrapper:
 
 ```bash
-docker build -f Dockerfile.execution-worker \
-  -t basic-execution-worker:integration .
+./scripts/build-image.sh basic-execution-worker:integration \
+  -f Dockerfile.execution-worker
 ```
 
 The worker is not a network service. Interrupted runs may be inspected with
@@ -241,8 +266,8 @@ criterion-to-check mappings.
 Build the dedicated image directly with:
 
 ```bash
-docker build -f Dockerfile.verification-worker \
-  -t basic-verification-worker:integration .
+./scripts/build-image.sh basic-verification-worker:integration \
+  -f Dockerfile.verification-worker
 docker image inspect --format '{{.Id}}' \
   basic-verification-worker:integration
 ```

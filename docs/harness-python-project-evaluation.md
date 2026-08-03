@@ -132,7 +132,11 @@ error message. This is a real template defect not covered by the live gate.
 
 ## Errors, gaps, and improvements
 
-### P0 - A passing project can still have a failing generated console command
+The findings below originated in the `b22b888` evaluation. Their status after
+the hardening stack is recorded inline; live claims remain pending until the
+corresponding credentialed command has actually run.
+
+### Resolved P0 - Generated console command returned a failure status
 
 The template emits:
 
@@ -141,37 +145,41 @@ The template emits:
 harness-generated-demo = "harness_generated_demo:main"
 ```
 
-The accepted objective requires `main()` to return `"ready"`. Consequently,
-all trusted checks pass while the installed command exits `1`. Generate a
-separate `cli() -> None` wrapper that prints or otherwise consumes the domain
-return value, and point `[project.scripts]` at that wrapper. Add an acceptance
-test that installs the wheel and asserts the console command's stdout and exit
-status.
+The accepted objective requires `main()` to return `"ready"`. In the evaluated
+revision, all trusted checks passed while the installed command exited `1`.
+The generator now emits a separate `cli() -> None` wrapper, points
+`[project.scripts]` at that wrapper, installs the generated wheel into an
+isolated environment, and asserts stdout `ready` with exit status `0`.
 
-### P1 - Successful live evidence is ephemeral and minimally reported
+### Implemented; credentialed acceptance pending - Durable redacted evidence
 
 The passing target prints only the Go test name and duration. Its temporary
 repository, run ID, candidate commit, artifact digests, stage timings, and
 redacted lifecycle summary disappear with the test directory. Emit a
-machine-readable redacted report to a caller-selected output path on both pass
-and failure. Optionally preserve the generated target when explicitly
-requested for diagnosis.
+The gate now atomically writes a mode-`0600`
+`harness_python_project_e2e_report.v1` report on pass or in-process failure and
+can preserve only a fully scanned generated repository at an explicitly safe,
+nonexistent destination. Deterministic shape, redaction, replacement, failure,
+and preservation tests pass; a credentialed report is recorded only after the
+live gate runs.
 
-### P1 - The dedicated gate is objective-specific, not project-generic
+### Implemented; credentialed acceptance pending - Operator project inputs
 
 The target hard-codes the `live-demo` specification, acceptance test, objective,
 and expected changed file. It proves the supported generated-project profile,
 but it does not run the preserved project or accept an operator-provided
-specification/check directory. Add bounded `PROJECT_SPEC`, `CHECKS`, and report
-output parameters while retaining the fixed profile as a reproducible golden
-case.
+specification/check directory. The target now accepts a validated paired
+`PROJECT_SPEC` and `CHECKS`, commits them through the installed package, and
+derives the bounded lifecycle from `.harness/project.json`; the fixed profile
+remains the reproducible golden case.
 
-### P1 - The installed operator CLI is not the path exercised by this gate
+### Implemented; credentialed acceptance pending - Installed operator CLI
 
 The test drives the control API from Go. It does not prove that an operator can
-use the installed `harness-agents operator` commands to run, approve, submit,
-inspect, and export this project. Add a process-level acceptance profile that
-uses only the installed CLI and its documented state file across an API restart.
+The process test now builds and installs the current wheel, then routes run,
+three approvals, submit, status, and export through that exact executable and
+its mode-`0600` state/configuration files across an API restart. PostgreSQL is
+read only for waits and immutable-evidence assertions.
 
 ### P1 - Some lifecycle authority remains test-fixture supplied
 
@@ -188,11 +196,12 @@ appropriate for repeatable project acceptance, but it cannot establish GitHub
 credential, permission, draft-PR, or cleanup behavior. Only the separate
 operator-provisioned `beta-canary-e2e` can provide that evidence.
 
-### P2 - Docker uses the deprecated legacy builder
+### Resolved P2 - Docker used the deprecated legacy builder
 
-Both worker builds succeeded, but Docker warned that the legacy builder is
-deprecated. Migrate the targets to BuildKit/buildx and keep immutable image-ID
-recording so this warning does not become a future hard failure.
+Every repository image build now requires Docker Buildx exactly `v0.36.0` and
+uses `docker buildx build --load --iidfile`. The wrapper compares the emitted
+IID with the post-load inspected image ID. Missing/mismatched version tests and
+`make beta-images` passed with the pinned builder.
 
 ## Acceptance status
 
@@ -205,6 +214,9 @@ recording so this warning does not become a future hard failure.
 | Verify and build exact candidate | Pass | Gate reran offline `make check`; exactly one source file changed |
 | Approve and publish exact candidate | Pass, disposable | Separate approval/submission and loopback draft publication asserted |
 | Preserve replay and credential safety | Pass | Restart, idempotency, side-effect, and secret-absence assertions passed |
-| Run generated console command successfully | Fail | Command prints `ready` but exits `1` |
-| Exercise installed operator CLI end to end | Not run | Gate uses its Go runtime client directly |
+| Run generated console command successfully | Pass | Installed generated wheel prints `ready` and exits `0` |
+| Accept operator-provided project inputs | Implemented; live pending | Paired-input/path/scope tests pass; credentialed alternate project not yet recorded |
+| Persist redacted lifecycle evidence | Implemented; live pending | Deterministic report/redaction/failure/preservation tests pass |
+| Exercise installed operator CLI end to end | Implemented; live pending | Process lifecycle uses installed wheel; credentialed completion not yet recorded |
+| Build repository images with pinned Buildx | Pass | Missing/version/IID tests and `make beta-images` passed with v0.36.0 |
 | Publish a real GitHub draft | Not run | Requires the separate credentialed canary profile |

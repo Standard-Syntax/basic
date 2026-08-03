@@ -941,3 +941,42 @@ secret persistence.
 
 ### Date
 2026-08-03
+
+## DEC-037: Pin Buildx and persist redacted Python lifecycle evidence
+
+### Decision
+Require Docker Buildx exactly v0.36.0 for every repository image build, load
+each result through `docker buildx build --load`, and accept the image only when
+its `--iidfile` value equals the loaded Docker image ID. Persist the generated
+Python lifecycle result as the closed `harness_python_project_e2e_report.v1`
+contract and optionally preserve only its scanned generated repository.
+
+### Options considered
+Continue relying on the legacy builder; allow arbitrary Buildx versions; trust
+the requested image tag after loading; print ephemeral test diagnostics only;
+export provider/database payloads for debugging.
+
+### Pros
+Local and CI builds use one pinned BuildKit frontend, immutable image binding
+continues to use the daemon's actual loaded ID, and pass/failure evidence
+survives the disposable test without persisting sensitive bodies or paths.
+
+### Cons
+Developers must install the exact plugin, report and preservation destinations
+must pass strict path validation, and the report intentionally cannot diagnose
+raw provider content.
+
+### Why this option
+The legacy builder warning is a forward-compatibility failure signal. A tag is
+not immutable evidence, while the Buildx IID and post-load daemon ID can be
+compared directly. Durable redacted metadata is sufficient for release audit;
+raw provider and database exports would cross the credential/evidence boundary.
+
+### Consequences
+CI provisions Buildx v0.36.0 from a commit-pinned setup action. Missing or
+mismatched local Buildx fails before a build. Generated-project approval calls
+remain automated fixture evidence; real human approval, live planning, and the
+real GitHub canary remain separate operator claims.
+
+### Date
+2026-08-03
