@@ -187,6 +187,13 @@ blob entries, and exact base-commit binding, then performs the existing run and
 task lease transitions. Nullable repository-map columns remain migration-only
 compatibility: an incomplete legacy binding fails closed.
 
+Task-graph approval uses a second narrow application coordinator. The task
+artifact is staged in CAS first, then one retryable serializable transaction
+applies `ApproveTaskGraph`, checkpoints the immutable graph and task bindings,
+and inserts the deterministic start job before committing once. Any unbound
+artifact left by rollback is collectible; exact command replay converges on
+the same single binding and job.
+
 ### Immutable beta repository policy
 
 Slice 4 adds one canonical `beta_policy` shared by API intake, workflow
@@ -196,6 +203,11 @@ Stage start compares the complete bound policy and image identities with active
 configuration before starting a run or acquiring a lease. Task-planning
 authority must match the bound policy; proposals may narrow it but cannot widen
 paths, checks, limits, concurrency, or the one dependency-free task boundary.
+
+The Docker Engine boundary receives CPU, memory, and PID limits explicitly for
+every worker. Execution uses its fixed one-CPU, 512 MiB, 64-PID profile;
+verification derives the exact container limits from each trusted catalog
+definition, bounded by the two-GiB memory and 256-PID ceilings.
 
 ## Beta Slice 7 release evidence
 

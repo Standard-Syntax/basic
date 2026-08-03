@@ -8,11 +8,31 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/beta"
 	"github.com/Standard-Syntax/basic/go/internal/controlapi"
 	"github.com/google/uuid"
 )
+
+func TestOptionalPublicationIsNilInterface(t *testing.T) {
+	service, err := buildPublication(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service != nil {
+		t.Fatalf("omitted publication returned non-nil interface: %#v", service)
+	}
+}
+
+func TestHTTPWriteTimeoutExceedsDetachedOperationBudget(t *testing.T) {
+	server := newHTTPServer("127.0.0.1:0", nil)
+	if server.WriteTimeout != 3*time.Minute ||
+		server.WriteTimeout <= controlapi.MaximumDetachedOperationTimeout {
+		t.Fatalf("write timeout %s must exceed detached operation budget %s",
+			server.WriteTimeout, controlapi.MaximumDetachedOperationTimeout)
+	}
+}
 
 func TestLoadConfigRequiresCleanAbsoluteRepositoryRoot(t *testing.T) {
 	root := t.TempDir()

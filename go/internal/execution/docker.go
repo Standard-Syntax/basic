@@ -42,8 +42,8 @@ func (d DockerApplicator) Apply(
 			{Source: worktree, Target: "/workspace"},
 			{Source: worktree + "/.git", Target: "/workspace/.git", ReadOnly: true},
 		},
-		Tmpfs:  map[string]string{"/tmp": "rw,noexec,nosuid,nodev,size=16m"},
-		Memory: 512 << 20, Pids: 64,
+		Tmpfs:    map[string]string{"/tmp": "rw,noexec,nosuid,nodev,size=16m"},
+		NanoCPUs: 1_000_000_000, Memory: 512 << 20, Pids: 64,
 	}, bytes.NewReader(payload), output)
 	if err != nil {
 		if ctx.Err() != nil {

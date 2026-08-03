@@ -44,7 +44,8 @@ func TestDockerApplicatorRemovesNamedContainerOnCancellation(t *testing.T) {
 		t.Fatalf("removed %q; want %q", removed, request.Name)
 	}
 	if request.Image != "worker" || request.User == "" || len(request.Mounts) != 2 ||
-		request.Mounts[0].ReadOnly || !request.Mounts[1].ReadOnly || request.Memory != 512<<20 {
+		request.Mounts[0].ReadOnly || !request.Mounts[1].ReadOnly ||
+		request.NanoCPUs != 1_000_000_000 || request.Memory != 512<<20 || request.Pids != 64 {
 		t.Fatalf("worker request = %#v", request)
 	}
 }

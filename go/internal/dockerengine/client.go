@@ -32,6 +32,7 @@ type RunRequest struct {
 	Env        []string
 	Mounts     []Mount
 	Tmpfs      map[string]string
+	NanoCPUs   int64
 	Memory     int64
 	Pids       int64
 }
@@ -131,7 +132,7 @@ func containerCreateOptions(request RunRequest) client.ContainerCreateOptions {
 			CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges"},
 			Tmpfs: request.Tmpfs, Mounts: mounts,
 			Resources: container.Resources{
-				NanoCPUs: 1_000_000_000, Memory: request.Memory, PidsLimit: &pids,
+				NanoCPUs: request.NanoCPUs, Memory: request.Memory, PidsLimit: &pids,
 			},
 		},
 	}

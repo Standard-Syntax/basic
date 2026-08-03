@@ -16,6 +16,34 @@ type staticCredential string
 
 func (s staticCredential) Token(context.Context) (string, error) { return string(s), nil }
 
+type expectedGitHubRequest struct {
+	method   string
+	path     string
+	rawQuery string
+	response []byte
+}
+
+type orderedGitHubRequestHandler struct {
+	t        *testing.T
+	calls    atomic.Int32
+	expected []expectedGitHubRequest
+}
+
+func (h *orderedGitHubRequestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	call := int(h.calls.Add(1)) - 1
+	if call >= len(h.expected) {
+		h.t.Errorf("unexpected call %d", call+1)
+		return
+	}
+	want := h.expected[call]
+	if request.Method != want.method || request.URL.Path != want.path ||
+		request.URL.RawQuery != want.rawQuery {
+		h.t.Errorf("call %d method=%s path=%q query=%q want=%+v",
+			call+1, request.Method, request.URL.Path, request.URL.RawQuery, want)
+	}
+	_, _ = writer.Write(want.response)
+}
+
 func TestGitHubClientListsBeforeCreatingDraftWithRequiredHeaders(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -63,6 +91,35 @@ func TestGitHubClientListsBeforeCreatingDraftWithRequiredHeaders(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("calls = %d", calls.Load())
+	}
+}
+
+func TestGitHubClientPreservesEnterpriseEndpointPrefix(t *testing.T) {
+	input := prInput()
+	pullRequest, err := json.Marshal(testPullRequest(input.Head, input.Base, input.Body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := &orderedGitHubRequestHandler{t: t, expected: []expectedGitHubRequest{
+		{method: http.MethodGet, path: "/api/v3/repos/owner/repo/pulls",
+			rawQuery: "base=main&head=owner%3Aharness%2Frun&per_page=10&state=all", response: []byte("[]")},
+		{method: http.MethodPost, path: "/api/v3/repos/owner/repo/pulls", response: pullRequest},
+		{method: http.MethodGet, path: "/api/v3/repos/owner/repo/pulls/17", response: pullRequest},
+	}}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	client := githubClient(t, server.URL+"/api/v3", DefaultMaxBodyBytes)
+	if _, found, err := client.FindDraft(t.Context(), input); err != nil || found {
+		t.Fatalf("find found=%v err=%v", found, err)
+	}
+	if _, err := client.CreateDraft(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.InspectPullRequest(t.Context(), input.Owner, input.Repo, 17); err != nil {
+		t.Fatal(err)
+	}
+	if handler.calls.Load() != 3 {
+		t.Fatalf("calls=%d", handler.calls.Load())
 	}
 }
 

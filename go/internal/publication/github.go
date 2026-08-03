@@ -222,39 +222,9 @@ func exactPullPath(owner, repo string, number int64) (string, error) {
 func (c *GitHubRESTClient) do(
 	ctx context.Context, method, path string, requestBody, responseBody any,
 ) error {
-	var body io.Reader
-	if requestBody != nil {
-		encoded, err := json.Marshal(requestBody)
-		if err != nil {
-			return fmt.Errorf("encode GitHub request: %w", err)
-		}
-		if int64(len(encoded)) > c.maxBodyBytes {
-			return ErrResponseLimit
-		}
-		body = bytes.NewReader(encoded)
-	}
-	target := c.endpoint.ResolveReference(&url.URL{Path: path})
-	if strings.Contains(path, "?") {
-		parts := strings.SplitN(path, "?", 2)
-		target = c.endpoint.ResolveReference(&url.URL{Path: parts[0], RawQuery: parts[1]})
-	}
-	request, err := http.NewRequestWithContext(ctx, method, target.String(), body)
+	request, err := c.newRequest(ctx, method, path, requestBody)
 	if err != nil {
-		return fmt.Errorf("construct GitHub request: %w", err)
-	}
-	token, err := c.credentials.Token(ctx)
-	if err != nil {
-		return fmt.Errorf("load GitHub credential: %w", err)
-	}
-	if strings.TrimSpace(token) == "" {
-		return errors.New("GitHub credential is empty")
-	}
-	request.Header.Set("Accept", githubAccept)
-	request.Header.Set("X-GitHub-Api-Version", c.apiVersion)
-	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("User-Agent", "harness-publication/1")
-	if requestBody != nil {
-		request.Header.Set("Content-Type", "application/json")
+		return err
 	}
 	response, err := c.client.Do(request)
 	if err != nil {
@@ -272,6 +242,51 @@ func (c *GitHubRESTClient) do(
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("GitHub API status %s", strconv.Itoa(response.StatusCode))
 	}
+	return decodeGitHubResponse(encoded, responseBody)
+}
+
+func (c *GitHubRESTClient) newRequest(
+	ctx context.Context, method, path string, requestBody any,
+) (*http.Request, error) {
+	var body io.Reader
+	if requestBody != nil {
+		encoded, err := json.Marshal(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("encode GitHub request: %w", err)
+		}
+		if int64(len(encoded)) > c.maxBodyBytes {
+			return nil, ErrResponseLimit
+		}
+		body = bytes.NewReader(encoded)
+	}
+	relative, err := url.Parse(path)
+	if err != nil || relative.IsAbs() || relative.Host != "" {
+		return nil, fmt.Errorf("construct GitHub request path: %w", ErrInvalidRequest)
+	}
+	target := c.endpoint.JoinPath(strings.TrimPrefix(relative.Path, "/"))
+	target.RawQuery = relative.RawQuery
+	request, err := http.NewRequestWithContext(ctx, method, target.String(), body)
+	if err != nil {
+		return nil, fmt.Errorf("construct GitHub request: %w", err)
+	}
+	token, err := c.credentials.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load GitHub credential: %w", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		return nil, errors.New("GitHub credential is empty")
+	}
+	request.Header.Set("Accept", githubAccept)
+	request.Header.Set("X-GitHub-Api-Version", c.apiVersion)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("User-Agent", "harness-publication/1")
+	if requestBody != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	return request, nil
+}
+
+func decodeGitHubResponse(encoded []byte, responseBody any) error {
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	if err := decoder.Decode(responseBody); err != nil {
 		return fmt.Errorf("decode GitHub response: %w", err)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Standard-Syntax/basic/go/internal/reasoning/contracts"
 )
@@ -66,6 +67,28 @@ func TestCatalogBoundsCombinedOutput(t *testing.T) {
 	definition.Limits.OutputBytes++
 	if _, err := NewCatalog([]CheckDefinition{definition}); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("over-maximum output limit error = %v", err)
+	}
+}
+
+func TestCatalogUsesTwoGiBDefaultAndHonorsLowerMemory(t *testing.T) {
+	defaults := DefaultCatalog().definitions[0].Limits
+	if defaults.MemoryBytes != DefaultMemoryBytes {
+		t.Fatalf("default memory=%d", defaults.MemoryBytes)
+	}
+	if DefaultMemoryBytes != 2<<30 || MaximumMemoryBytes != 2<<30 {
+		t.Fatalf("memory default=%d ceiling=%d", DefaultMemoryBytes, MaximumMemoryBytes)
+	}
+	definition := CheckDefinition{
+		ID: "lower-v1", CommandReference: "lower-v1", Argv: []string{"true"},
+		Timeout: time.Minute,
+		Limits:  ResourceLimits{CPUs: 1, MemoryBytes: 256 << 20, PIDs: 32, OutputBytes: 1024},
+	}
+	if _, err := NewCatalog([]CheckDefinition{definition}); err != nil {
+		t.Fatalf("lower resource limits rejected: %v", err)
+	}
+	definition.Limits.MemoryBytes = MaximumMemoryBytes + 1
+	if _, err := NewCatalog([]CheckDefinition{definition}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("over-ceiling memory error=%v", err)
 	}
 }
 

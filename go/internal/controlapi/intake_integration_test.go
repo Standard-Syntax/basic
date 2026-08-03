@@ -268,7 +268,8 @@ func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {
 		}},
 		TrustedChecks: []string{"make-check-v1"}, Policy: fixture.coordinator.policy,
 	}, workflowStore, runtime.NewLedger(fixture.pool), fixture.coordinator,
-		fixture.artifacts, runtime.NewBindingRepository(fixture.pool), fakeApproval{}, nil, nil)
+		fixture.artifacts, runtime.NewBindingRepository(fixture.pool), fakeApproval{},
+		mustTaskGraphApproval(t, fixture.pool, workflowStore), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,6 +308,17 @@ func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {
 		t.Fatalf("changed status=%d body=%s puts=%d/%d",
 			conflict.Code, conflict.Body, fixture.artifacts.count(), puts)
 	}
+}
+
+func mustTaskGraphApproval(
+	t *testing.T, pool *pgxpool.Pool, store *workflow.Store,
+) *TaskGraphApprovalCoordinator {
+	t.Helper()
+	service, err := NewTaskGraphApprovalCoordinator(pool, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
 func TestAtomicRunIntakeConcurrentDuplicateAndRunIdentityConflict(t *testing.T) {

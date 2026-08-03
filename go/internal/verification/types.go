@@ -24,6 +24,8 @@ const (
 	DefaultMaxConcurrent  = 2
 	DefaultMaxWorkspaces  = 4
 	DefaultMaxOutputBytes = 1 << 20
+	DefaultMemoryBytes    = int64(2 << 30)
+	MaximumMemoryBytes    = int64(2 << 30)
 )
 
 type Request struct {

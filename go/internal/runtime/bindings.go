@@ -183,6 +183,25 @@ func (r *BindingRepository) CheckpointSpecification(
 func (r *BindingRepository) CheckpointTaskGraph(
 	ctx context.Context, runID string, graph workflow.ArtifactRef, task TaskBinding,
 ) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := CheckpointTaskGraphTx(ctx, tx, runID, graph, task); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CheckpointTaskGraphTx records the immutable graph and task bindings inside a
+// caller-owned transaction.
+func CheckpointTaskGraphTx(
+	ctx context.Context, tx pgx.Tx, runID string, graph workflow.ArtifactRef, task TaskBinding,
+) error {
+	if tx == nil {
+		return ErrConflict
+	}
 	if err := graph.Validate(); err != nil {
 		return err
 	}
@@ -192,11 +211,6 @@ func (r *BindingRepository) CheckpointTaskGraph(
 		}
 		return ErrConflict
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 	if err := checkpointRunTx(
 		ctx, tx, runID, "approved_task_graph_uri", "approved_task_graph_digest", graph,
 	); err != nil {
@@ -223,7 +237,7 @@ func (r *BindingRepository) CheckpointTaskGraph(
 			return ErrConflict
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (r *BindingRepository) CheckpointApproval(

@@ -183,6 +183,17 @@ func (fakeApproval) ApproveTask(context.Context, approval.Request) (approval.Res
 	return approval.Result{}, nil
 }
 
+type fakeTaskGraphApproval struct {
+	result workflow.CommandResult
+	err    error
+}
+
+func (f fakeTaskGraphApproval) ApproveTaskGraph(
+	context.Context, TaskGraphApprovalRequest,
+) (workflow.CommandResult, error) {
+	return f.result, f.err
+}
+
 type fakePublication struct{}
 
 func (fakePublication) Publish(
@@ -208,11 +219,97 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 	}, workflowStore, runtimeLedger, &fakeRunIntake{
 		workflow: workflowStore, runtime: runtimeLedger,
 	}, fakeArtifacts{}, &fakeBindings{},
-		fakeApproval{}, nil, nil)
+		fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return server, workflowStore, runtimeLedger, token
+}
+
+func TestNewRejectsEachRequiredNilDependency(t *testing.T) {
+	token := sha256.Sum256([]byte("test-secret"))
+	config := Config{
+		ServiceActorID: uuid.NewString(),
+		Principals: []Principal{{
+			ID: uuid.NewString(), TokenSHA256: hex.EncodeToString(token[:]),
+			Roles: []Role{RoleOperator},
+		}},
+		TrustedChecks: []string{"make-check-v1"},
+		Policy: testPolicy("/tmp/repository", strings.Repeat("a", 40),
+			"https://example.invalid/repository.git"),
+	}
+	workflowStore := &fakeWorkflow{}
+	runtimeLedger := &fakeRuntime{}
+	intake := &fakeRunIntake{workflow: workflowStore, runtime: runtimeLedger}
+	tests := []struct {
+		name string
+		want string
+		call func() error
+	}{
+		{name: "workflow", want: "workflow store is required", call: func() error {
+			_, err := New(config, nil, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "runtime", want: "runtime ledger is required", call: func() error {
+			_, err := New(config, workflowStore, nil, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "intake", want: "run intake is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, nil, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "artifacts", want: "artifact store is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, nil, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "bindings", want: "binding store is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, nil, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "approval", want: "approval service is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, nil, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "task graph approval", want: "task graph approval service is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, nil, nil, nil)
+			return err
+		}},
+		{name: "typed nil workflow", want: "workflow store is required", call: func() error {
+			_, err := New(config, (*fakeWorkflow)(nil), runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil runtime", want: "runtime ledger is required", call: func() error {
+			_, err := New(config, workflowStore, (*fakeRuntime)(nil), intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil intake", want: "run intake is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, (*fakeRunIntake)(nil), fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil artifacts", want: "artifact store is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, (*fakeArtifacts)(nil), &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil bindings", want: "binding store is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, (*fakeBindings)(nil), fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil approval", want: "approval service is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, (*fakeApproval)(nil), fakeTaskGraphApproval{}, nil, nil)
+			return err
+		}},
+		{name: "typed nil task graph approval", want: "task graph approval service is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, (*fakeTaskGraphApproval)(nil), nil, nil)
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); err == nil || err.Error() != test.want {
+				t.Fatalf("error=%v want=%q", err, test.want)
+			}
+		})
+	}
 }
 
 func TestNormalizeServerConfigCanonicalizesTrustedCheckOrder(t *testing.T) {

@@ -260,11 +260,28 @@ func (l *Ledger) AbandonIdempotency(
 }
 
 func (l *Ledger) Enqueue(ctx context.Context, job Job) error {
+	tx, err := l.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := EnqueueTx(ctx, tx, job); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// EnqueueTx inserts one deterministic stage job inside a caller-owned
+// transaction and rejects an identity collision with different content.
+func EnqueueTx(ctx context.Context, tx pgx.Tx, job Job) error {
+	if tx == nil {
+		return ErrConflict
+	}
 	var task any
 	if job.TaskID != nil {
 		task = *job.TaskID
 	}
-	tag, err := l.pool.Exec(ctx, `INSERT INTO runtime_stage_jobs
+	tag, err := tx.Exec(ctx, `INSERT INTO runtime_stage_jobs
 		(job_id,run_id,task_id,attempt,stage,state,available_at,created_at,updated_at)
 		VALUES ($1,$2,$3,$4,$5,'READY',$6,$6,$6) ON CONFLICT DO NOTHING`,
 		job.ID, job.RunID, task, job.Attempt, job.Stage, job.AvailableAt.UTC())
@@ -275,7 +292,7 @@ func (l *Ledger) Enqueue(ctx context.Context, job Job) error {
 		return nil
 	}
 	var id string
-	err = l.pool.QueryRow(ctx, `SELECT job_id::text FROM runtime_stage_jobs
+	err = tx.QueryRow(ctx, `SELECT job_id::text FROM runtime_stage_jobs
 		WHERE run_id=$1 AND task_id IS NOT DISTINCT FROM $2 AND attempt=$3 AND stage=$4`,
 		job.RunID, task, job.Attempt, job.Stage).Scan(&id)
 	if err != nil {
@@ -446,7 +463,7 @@ func (l *Ledger) CompleteAndEnqueue(
 		return classifyJobUpdate(ctx, tx, jobID)
 	}
 	if next != nil {
-		if err := enqueueTx(ctx, tx, *next); err != nil {
+		if err := enqueueSuccessorTx(ctx, tx, *next); err != nil {
 			return err
 		}
 	}
@@ -539,7 +556,7 @@ func classifyJobUpdate(ctx context.Context, queryer queryRower, jobID string) er
 	}
 }
 
-func enqueueTx(ctx context.Context, tx pgx.Tx, job Job) error {
+func enqueueSuccessorTx(ctx context.Context, tx pgx.Tx, job Job) error {
 	var task any
 	if job.TaskID != nil {
 		task = *job.TaskID

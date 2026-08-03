@@ -76,6 +76,9 @@
   UID/GID with no network, capabilities, privilege escalation, inherited
   secrets, Git credentials, or writable root. It is limited to one CPU, 2 GiB,
   256 PIDs, 2 GiB tmpfs, ten minutes, and 1 MiB combined output per check.
+- Lower memory and PID limits in a trusted check definition are passed through
+  to Docker exactly; the executor never replaces them with broader hard-coded
+  container resources.
 - Verification resolves and records the immutable Docker image ID before
   execution. Every log, report, coverage row, and workflow command binds the
   exact candidate commit and Phase 6 report.
@@ -187,6 +190,10 @@ facts and completed rows are protected by PostgreSQL triggers.
 - Pre-commit failures leave no workflow run, binding, completed response, job,
   or provider invocation. A crash after commit replays the stored bytes and
   performs no Git, CAS, workflow, job, or provider operation.
+- Task-graph approval applies its workflow transition, immutable graph/task
+  binding, and deterministic start-job enqueue in one serializable transaction.
+  Cancellation uses bounded detached rollback, so no approved task or runnable
+  job can escape a failed approval boundary.
 - New beta bindings also contain the canonical policy artifact and immutable
   execution and verification image IDs. Missing, mutable, or configuration-
   mismatched bindings fail before a lease, provider call, candidate, or

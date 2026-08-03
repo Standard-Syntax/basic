@@ -2,6 +2,7 @@ package verification
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -20,6 +21,18 @@ func (inspectEngine) Run(context.Context, dockerengine.RunRequest, io.Reader, io
 func (inspectEngine) Remove(context.Context, string) error { return nil }
 
 type deadlineEngine struct{ removed chan string }
+
+type resourceEngine struct{ request dockerengine.RunRequest }
+
+func (*resourceEngine) ImageID(context.Context, string) (string, error) { return "", nil }
+func (e *resourceEngine) Run(
+	_ context.Context, request dockerengine.RunRequest, _ io.Reader, output io.Writer,
+) error {
+	e.request = request
+	started := time.Now().UTC()
+	return json.NewEncoder(output).Encode(WorkerResponse{StartedAt: started, FinishedAt: started})
+}
+func (*resourceEngine) Remove(context.Context, string) error { return nil }
 
 func (deadlineEngine) ImageID(context.Context, string) (string, error) { return "", nil }
 func (deadlineEngine) Run(ctx context.Context, _ dockerengine.RunRequest, _ io.Reader, _ io.Writer) error {
@@ -68,5 +81,27 @@ func TestDockerExecutorRemovesContainerAfterOuterDeadline(t *testing.T) {
 		}
 	default:
 		t.Fatal("outer deadline did not remove the verification container")
+	}
+}
+
+func TestDockerExecutorPropagatesCatalogResourceLimits(t *testing.T) {
+	engine := &resourceEngine{}
+	definition := CheckDefinition{
+		CommandReference: "make-check-v1", Argv: []string{"make", "check"},
+		Timeout: time.Minute,
+		Limits: ResourceLimits{
+			CPUs: 1, MemoryBytes: 256 << 20, PIDs: 32, OutputBytes: 1024,
+		},
+	}
+	executor := DockerCheckExecutor{UID: 1000, GID: 1000, Engine: engine}
+	if _, err := executor.Run(
+		t.Context(), t.TempDir(), "sha256:"+strings.Repeat("a", 64), definition,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if engine.request.NanoCPUs != 1_000_000_000 ||
+		engine.request.Memory != definition.Limits.MemoryBytes ||
+		engine.request.Pids != int64(definition.Limits.PIDs) {
+		t.Fatalf("worker resources=%+v limits=%+v", engine.request, definition.Limits)
 	}
 }
