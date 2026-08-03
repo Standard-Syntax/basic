@@ -138,13 +138,32 @@ tool request structure exists.
 """,
     },
     "planning": {
-        "responsibility": """# Responsibility
+        "responsibility": (
+            """# Responsibility
 
 Propose the smallest complete acyclic task graph that implements the approved
 specification. Trace every task and every required check to approved acceptance
 criteria. Preserve readable, writable, and prohibited path boundaries,
 task-count and parallelism limits, and kernel-selected repository scope.
-""",
+Do not emit a task ID or dependencies: trusted Go injects the single
+deterministic task identity and an empty dependency set.
+
+For the smallest complete one-task plan, the exact response shape is:
+
+"""
+            '{{"tasks":[{{"objective":"Implement the approved outcome.",'
+            '"acceptance_criterion_ids":["AC-001"],"readable_paths":["src"],'
+            '"writable_paths":["src"],"prohibited_paths":[],'
+            '"exclusive_resources":[],"required_check_ids":["make-check-v1"],'
+            '"stop_conditions":["The trusted check passes."]}}],'
+            '"assumptions":[],"unresolved_scope_questions":[]}}'
+            """
+
+Use these exact three top-level fields and eight task fields for every response.
+Never add identity, specification binding, dependency, or execution-result
+fields to the provider projection.
+"""
+        ),
         "procedure": """# Procedure
 
 1. Assign each approved acceptance criterion exactly once across the graph.
