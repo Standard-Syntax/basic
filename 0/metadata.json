@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4M8C71191BSBW7AHJ3B470",
+  "session_id": "019fc928-74ed-72a1-8e79-1d165f28a97e",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T20:15:18.53587154Z",
+  "branch": "harness/buildx-images",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/check.yml",
+    "Makefile",
+    "README.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/harness-python-project-evaluation.md",
+    "docs/live-harness.md",
+    "python/tests/test_build_images.py",
+    "scripts/build-image.sh",
+    "scripts/require-buildx.sh"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "5a3739cfe98d",
+  "checkpoint_transcript_start": 431,
+  "transcript_lines_at_start": 431,
+  "compact_transcript_start": 93,
+  "token_usage": {
+    "input_tokens": 96891,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6930944,
+    "output_tokens": 12645,
+    "api_call_count": 43
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T20:15:18.447196018Z",
+    "agent_lines": 307,
+    "agent_removed": 62,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 307,
+    "total_lines_changed": 369,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
