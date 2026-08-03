@@ -3,22 +3,9 @@
   "checkpoint_id": "01KZ2AGWZG64P1EMGG5GSYE4YQ",
   "strategy": "manual-commit",
   "branch": "beta/worker-policy-enforcement",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
-    "docs/architecture.md",
-    "docs/resource-analysis.md",
-    "docs/security.md",
-    "go/internal/dockerengine/client.go",
-    "go/internal/dockerengine/client_test.go",
-    "go/internal/execution/docker.go",
-    "go/internal/execution/docker_test.go",
-    "go/internal/execution/service.go",
-    "go/internal/execution/service_test.go",
-    "go/internal/verification/catalog.go",
-    "go/internal/verification/catalog_test.go",
-    "go/internal/verification/docker.go",
-    "go/internal/verification/docker_test.go",
-    "go/internal/verification/types.go"
+    "go/internal/execution/service.go"
   ],
   "sessions": [
     {
@@ -30,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 52386,
+    "input_tokens": 20619,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 2962176,
-    "output_tokens": 7321,
-    "api_call_count": 21
+    "cache_read_tokens": 2074880,
+    "output_tokens": 4094,
+    "api_call_count": 15
   }
 }
