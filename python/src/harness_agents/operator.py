@@ -215,7 +215,8 @@ def _request(
         headers["If-Match"] = f'"{revision}"'
     request = urllib.request.Request(_service_url(config, target), payload, headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        # _service_url rejects non-HTTP and non-loopback targets immediately above.
+        with urllib.request.urlopen(request, timeout=30) as response:  # skipcq: BAN-B310
             raw = response.read(MAXIMUM_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         raw = error.read(MAXIMUM_RESPONSE_BYTES + 1)
