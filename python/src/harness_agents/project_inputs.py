@@ -26,6 +26,8 @@ def _validate_path(value: str, name: str, expected: Callable[[int], bool]) -> No
         mode = path.lstat().st_mode
     except FileNotFoundError as error:
         raise ValueError(f"{name} does not exist") from error
+    except OSError as error:
+        raise ValueError(f"{name} could not be inspected") from error
     if not expected(mode):
         kind = "regular file" if name == "PROJECT_SPEC" else "directory"
         raise ValueError(f"{name} must be a non-symlinked {kind}")

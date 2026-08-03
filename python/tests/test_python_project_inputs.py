@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
-from harness_agents.project_inputs import validate
+from harness_agents import project_inputs
+
+validate = project_inputs.validate
 
 
 def test_project_inputs_allow_golden_defaults_and_valid_pair(tmp_path: Path) -> None:
@@ -38,6 +40,27 @@ def test_project_inputs_reject_relative_or_unclean_paths(unclean: str) -> None:
 def test_project_inputs_reject_missing_paths(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="PROJECT_SPEC does not exist"):
         validate(str(tmp_path / "missing.json"), str(tmp_path / "checks"))
+
+
+def test_project_inputs_report_stat_failures_without_tracebacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    specification = tmp_path / "project.json"
+    checks = tmp_path / "checks"
+    specification.write_text("{}")
+    checks.mkdir()
+    monkeypatch.setenv("PROJECT_SPEC", str(specification))
+    monkeypatch.setenv("CHECKS", str(checks))
+
+    def denied(_path: Path) -> object:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "lstat", denied)
+
+    assert project_inputs.main() == 2
+    assert capsys.readouterr().err == (
+        "beta-python-project-e2e: PROJECT_SPEC could not be inspected\n"
+    )
 
 
 @pytest.mark.parametrize("unsafe", ["symlink", "directory"])
