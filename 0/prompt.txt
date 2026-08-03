@@ -1,6 +1,1 @@
-run gh stack init
-Read docs/harness-python-project-evaluation.md  and files in docs. Research the codebase and create an implementation plan in vertical slices. create stacked pull requests
-
----
-
 continue implementing plan
