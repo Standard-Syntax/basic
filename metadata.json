@@ -5,24 +5,7 @@
   "branch": "harness/live-planning-e2e",
   "checkpoints_count": 1,
   "files_touched": [
-    "README.md",
-    "docs/architecture.md",
-    "docs/beta-release.md",
-    "docs/decision-log.md",
-    "docs/development.md",
-    "docs/harness-python-project-evaluation.md",
-    "docs/live-harness.md",
-    "docs/resource-analysis.md",
-    "docs/security.md",
-    "go/internal/controlapi/specification_integration_test.go",
-    "go/internal/release/verifier.go",
-    "go/internal/release/verifier_test.go",
-    "go/internal/runtime/ledger_integration_test.go",
-    "go/internal/runtime/process_e2e_test.go",
-    "go/internal/runtime/python_report_test.go",
-    "go/internal/stage/live_planning.go",
-    "python/src/harness_agents/operator.py",
-    "python/tests/test_operator.py"
+    "go/internal/runtime/process_e2e_test.go"
   ],
   "sessions": [
     {
@@ -34,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 154119,
+    "input_tokens": 599876,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 18492160,
-    "output_tokens": 23629,
-    "api_call_count": 121
+    "cache_read_tokens": 40984064,
+    "output_tokens": 95368,
+    "api_call_count": 299
   }
 }
