@@ -5,9 +5,7 @@
   "branch": "harness/operator-cli-e2e",
   "checkpoints_count": 1,
   "files_touched": [
-    "go/internal/runtime/process_e2e_test.go",
-    "python/src/harness_agents/operator.py",
-    "python/tests/test_operator.py"
+    "go/internal/runtime/process_e2e_test.go"
   ],
   "sessions": [
     {
@@ -19,10 +17,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 186434,
+    "input_tokens": 42862,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 6578688,
-    "output_tokens": 29130,
-    "api_call_count": 66
+    "cache_read_tokens": 1003776,
+    "output_tokens": 2743,
+    "api_call_count": 19
   }
 }
