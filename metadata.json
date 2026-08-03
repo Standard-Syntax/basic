@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3SC4KPFBPBJN9GA4QEK2N4",
+  "strategy": "manual-commit",
+  "branch": "harness/operator-lifecycle-cli",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md",
+    "docs/architecture.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/security.md",
+    "python/src/harness_agents/cli.py",
+    "python/src/harness_agents/operator.py",
+    "python/tests/test_cli.py",
+    "python/tests/test_operator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60346,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3721216,
+    "output_tokens": 17405,
+    "api_call_count": 32
+  }
+}
