@@ -18,6 +18,72 @@ submission, idempotent replay, and disposable draft publication. It does not
 prove a real GitHub canary, a human-made approval decision, or generic
 operator-CLI execution against the preserved project.
 
+## Independent rerun on the current branch
+
+The full evaluation was rerun at source commit `7a53c95` on 2026-08-03. This
+was a new execution, not an inference from the earlier reports in this file.
+
+The current wheel built and installed successfully as `harness-agents==0.2.0`:
+
+```text
+wheel:  dist/harness_agents-0.2.0-py3-none-any.whl
+sha256: 3452c301946c3b86c22de9cd53e4f42f397b029dde12737fe4caa48d7cfb5baa
+CLI:    compile, init, operator
+```
+
+The installed `init` command created a fresh committed repository at
+`.tools/harness-evaluation/generated-python-project-rerun-20260803`, with
+trusted-base commit `64c75dff5eb3f8454ddacee9ced4fb22709e11c0`. Its initial
+`make check` reached the operator-owned acceptance test and exited `2` because
+`main()` raised `NotImplementedError: implementation pending`. That is the
+expected pre-implementation scaffold state; install, generation, Ruff, and ty
+all succeeded before pytest exposed the missing implementation.
+
+The strongest available credentialed path then ran:
+
+```bash
+make beta-python-project-e2e \
+  REPORT_OUTPUT=/home/dscv/Repo/basic/.tools/evidence/python-project-rerun-20260803.json \
+  PRESERVE_PROJECT=/home/dscv/Repo/basic/.tools/harness-evaluation/live-generated-python-project-rerun-20260803
+```
+
+Result: pass in 24.43 seconds. The mode-`0600` report records installed harness
+version `0.2.0`, run state `MERGE_READY`, task state `ACCEPTED`, successful
+trusted checks and console execution, and one replay each for the run,
+approval, and publication. Docker Compose cleanup also succeeded and left no
+services or network running.
+
+The accepted candidate is
+`efe219689b9ae0155a3fae94a514f8ff5377d1ca`. It changes only
+`src/live_demo/__init__.py`. An independently materialized worktree at
+`.tools/harness-evaluation/accepted-python-project-rerun-20260803` passed Ruff,
+ty, pytest, sdist and wheel builds; `uv run --frozen live-demo` printed `ready`
+and exited `0`.
+
+### Rerun errors, gaps, and improvements
+
+- **P1 - Preserved-project default checkout is not the accepted project.** The
+  preservation destination is clean and contains the candidate ref, but its
+  checked-out `main` remains at trusted base
+  `961f548f6519c20277f5bf9f958a4fdb2553a889`. Running `make check` there still
+  fails with `NotImplementedError`, even though the report says the candidate
+  passed. Improve the preservation contract by either checking out the exact
+  accepted candidate in detached-HEAD state, creating an explicit local
+  `accepted-candidate` branch, or printing a post-run command that materializes
+  the reported candidate ref. The report should also state which revision the
+  preserved working tree has checked out.
+- **P2 - Generated command discovery is metadata-dependent.** The runnable
+  command is the project specification's distribution name (`live-demo` in the
+  golden profile), not a stable generic command. Surface the generated command
+  explicitly in `init` output and in the redacted report so operators do not
+  have to inspect `pyproject.toml` before validating the result.
+- **P1 - Lifecycle authority is still partly fixture-supplied.** Specification
+  and task-graph proposals and all three approvals are test-fixture actions;
+  this run does not prove live planning or a human approval decision.
+- **P2 - Publication is still loopback-only.** The successful draft publication
+  uses the disposable local remote and loopback endpoint. It is not evidence of
+  GitHub authentication, permissions, draft-PR behavior, or cleanup.
+
 ## Hardening acceptance
 
 The five-layer hardening stack was exercised at source commit `08f4a92` on
@@ -184,10 +250,10 @@ isolated environment, and asserts stdout `ready` with exit status `0`.
 
 ### Resolved P1 - Durable redacted evidence
 
-The passing target prints only the Go test name and duration. Its temporary
+The earlier target printed only the Go test name and duration, so its temporary
 repository, run ID, candidate commit, artifact digests, stage timings, and
-redacted lifecycle summary disappear with the test directory. Emit a
-The gate now atomically writes a mode-`0600`
+redacted lifecycle summary disappeared with the test directory. The gate now
+atomically writes a mode-`0600`
 `harness_python_project_e2e_report.v1` report on pass or in-process failure and
 can preserve only a fully scanned generated repository at an explicitly safe,
 nonexistent destination. Deterministic shape, redaction, replacement, failure,
@@ -207,8 +273,9 @@ remains the reproducible golden case. Both the golden profile and the distinct
 
 ### Resolved P1 - Installed operator CLI
 
-The test drives the control API from Go. It does not prove that an operator can
-The process test now builds and installs the current wheel, then routes run,
+The earlier test drove the control API from Go and did not prove that an
+operator could complete the lifecycle through the installed package. The
+process test now builds and installs the current wheel, then routes run,
 three approvals, submit, status, and export through that exact executable and
 its mode-`0600` state/configuration files across an API restart. PostgreSQL is
 read only for waits and immutable-evidence assertions. Both credentialed
