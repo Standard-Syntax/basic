@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast
 
@@ -186,6 +187,14 @@ def _metadata(spec: ProjectSpec) -> bytes:
     return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).encode() + b"\n"
 
 
+def _lockfile(spec: ProjectSpec) -> str:
+    template = files("harness_agents.templates").joinpath("uv.lock").read_text(encoding="utf-8")
+    marker = 'name = "harness-bootstrap-template"'
+    if template.count(marker) != 1:
+        raise ManifestError("packaged bootstrap lockfile is invalid")
+    return template.replace(marker, f'name = "{spec.name}"', 1)
+
+
 def _run(arguments: list[str], root: Path) -> None:
     environment = {
         "PATH": os.environ.get("PATH", ""),
@@ -240,7 +249,7 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(body)
         (temporary / ".harness" / "project.json").write_bytes(_metadata(spec))
-        _run(["uv", "lock"], temporary)
+        (temporary / "uv.lock").write_text(_lockfile(spec), encoding="utf-8")
         _run(["git", "init", "--quiet", "--initial-branch=main"], temporary)
         _run(["git", "-c", "core.hooksPath=/dev/null", "add", "--all"], temporary)
         _run(
