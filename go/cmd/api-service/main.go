@@ -232,6 +232,10 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 	if err != nil {
 		return err
 	}
+	supportReader, err := controlapi.NewPostgresSupportReader(pool)
+	if err != nil {
+		return err
+	}
 	handler, err := controlapi.New(controlapi.Config{
 		Principals: value.Principals, ServiceActorID: value.ServiceActorID,
 		MaxBodyBytes:    value.MaxBodyBytes,
@@ -256,7 +260,7 @@ func run( // skipcq: GO-R1005 -- explicit fail-closed startup composition
 		},
 	}, workflowStore, runtime.NewLedger(pool), runIntake, artifacts,
 		runtime.NewBindingRepository(pool), approvalService, taskGraphApproval,
-		publicationService, slog.Default())
+		publicationService, supportReader, slog.Default())
 	if err != nil {
 		return err
 	}

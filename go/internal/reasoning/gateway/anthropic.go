@@ -41,6 +41,7 @@ var (
 	secretAssignment = regexp.MustCompile(
 		`(?i)(api[_-]?key|bearer|password|private[_-]?key|secret|token)\s*[:=]\s*([^\s,;]+)`,
 	)
+	safeProviderField = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$`)
 )
 
 type ProviderErrorKind string
@@ -724,22 +725,46 @@ func decodeImplementationMessage(
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
-		return implementationProjection{}, &MalformedOutput{
-			Message: "provider response is not valid implementation JSON",
-		}
+		return implementationProjection{}, malformedJSON("implementation", err)
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return implementationProjection{}, &MalformedOutput{
-			Message: "provider response contains trailing JSON",
+	trailingOffset := nextJSONOffset(text, decoder.InputOffset())
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return implementationProjection{}, &MalformedOutput{
+				Message:    "provider response contains a trailing JSON value; kind=trailing_json_value; offset=" + strconv.FormatInt(trailingOffset, 10),
+				Kind:       "trailing_json_value",
+				JSONOffset: trailingOffset,
+			}
 		}
+		malformed := malformedJSON("implementation", err)
+		malformed.Message = "provider response contains invalid trailing JSON; kind=trailing_json_syntax"
+		malformed.Kind = "trailing_json_syntax"
+		if malformed.JSONOffset > 0 {
+			malformed.Message += "; offset=" + strconv.FormatInt(malformed.JSONOffset, 10)
+		}
+		return implementationProjection{}, malformed
 	}
 	return projection, nil
+}
+
+func nextJSONOffset(text string, decoded int64) int64 {
+	for decoded < int64(len(text)) {
+		switch text[decoded] {
+		case ' ', '\t', '\r', '\n':
+			decoded++
+		default:
+			return decoded + 1
+		}
+	}
+	return decoded + 1
 }
 
 func providerText(message *anthropic.Message) (string, *MalformedOutput) {
 	if message == nil || message.StopReason != anthropic.StopReasonEndTurn {
 		return "", &MalformedOutput{
-			Message: "provider response must contain one complete text block",
+			Message: "provider response must contain one complete text block; kind=content_shape",
+			Kind:    "content_shape", ContentBlockTypes: providerBlockTypes(message),
 		}
 	}
 	var text string
@@ -750,7 +775,8 @@ func providerText(message *anthropic.Message) (string, *MalformedOutput) {
 		case "thinking":
 			if thinkingSeen || text != "" {
 				return "", &MalformedOutput{
-					Message: "provider response must contain one optional thinking block before one text block",
+					Message: "provider response must contain one optional thinking block before one text block; kind=content_shape",
+					Kind:    "content_shape", ContentBlockTypes: providerBlockTypes(message),
 				}
 			}
 			thinkingSeen = true
@@ -760,22 +786,69 @@ func providerText(message *anthropic.Message) (string, *MalformedOutput) {
 		case "text":
 			if text != "" || strings.TrimSpace(block.Text) == "" {
 				return "", &MalformedOutput{
-					Message: "provider response must contain one complete text block",
+					Message: "provider response must contain one complete text block; kind=content_shape",
+					Kind:    "content_shape", ContentBlockTypes: providerBlockTypes(message),
 				}
 			}
 			text = block.Text
 		default:
 			return "", &MalformedOutput{
-				Message: "provider response contains an unsupported content block",
+				Message: "provider response contains an unsupported content block; kind=content_shape",
+				Kind:    "content_shape", ContentBlockTypes: providerBlockTypes(message),
 			}
 		}
 	}
 	if text == "" {
 		return "", &MalformedOutput{
-			Message: "provider response must contain one complete text block",
+			Message: "provider response must contain one complete text block; kind=content_shape",
+			Kind:    "content_shape", ContentBlockTypes: providerBlockTypes(message),
 		}
 	}
 	return text, nil
+}
+
+func malformedJSON(stage string, err error) *MalformedOutput {
+	value := &MalformedOutput{
+		Message: "provider response is not valid " + stage + " JSON", Kind: "invalid_json",
+	}
+	var syntax *json.SyntaxError
+	var fieldType *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syntax):
+		value.Kind, value.JSONOffset = "json_syntax", syntax.Offset
+	case errors.As(err, &fieldType):
+		value.Kind, value.JSONOffset = "json_type", fieldType.Offset
+	case strings.HasPrefix(err.Error(), "json: unknown field "):
+		value.Kind = "unknown_field"
+		field := strings.Trim(err.Error()[len("json: unknown field "):], `"`)
+		if safeProviderField.MatchString(field) {
+			value.UnknownFields = []string{field}
+		}
+	}
+	value.Message += "; kind=" + value.Kind
+	if value.JSONOffset > 0 {
+		value.Message += "; offset=" + strconv.FormatInt(value.JSONOffset, 10)
+	}
+	if len(value.UnknownFields) == 1 {
+		value.Message += "; unknown_field=" + value.UnknownFields[0]
+	}
+	return value
+}
+
+func providerBlockTypes(message *anthropic.Message) []string {
+	if message == nil {
+		return nil
+	}
+	result := make([]string, 0, len(message.Content))
+	for index := range message.Content {
+		switch message.Content[index].Type {
+		case "thinking", "text":
+			result = append(result, message.Content[index].Type)
+		default:
+			result = append(result, "other")
+		}
+	}
+	return result
 }
 
 func implementationProposalFromProjection(

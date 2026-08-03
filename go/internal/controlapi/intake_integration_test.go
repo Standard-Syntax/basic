@@ -269,7 +269,7 @@ func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {
 		TrustedChecks: []string{"make-check-v1"}, Policy: fixture.coordinator.policy,
 	}, workflowStore, runtime.NewLedger(fixture.pool), fixture.coordinator,
 		fixture.artifacts, runtime.NewBindingRepository(fixture.pool), fakeApproval{},
-		mustTaskGraphApproval(t, fixture.pool, workflowStore), nil, nil)
+		mustTaskGraphApproval(t, fixture.pool, workflowStore), nil, fakeSupport{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

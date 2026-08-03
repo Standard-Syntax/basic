@@ -259,8 +259,13 @@ func (s *ReviewService) finalizeReview(
 			message = "provider output does not match the closed review schema"
 		}
 		failure := &contracts.ValidationFailure{
-			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			Field: "provider_response", Message: message,
+			Code:              reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field:             "provider_response",
+			Message:           message,
+			Kind:              result.MalformedOutput.Kind,
+			JSONOffset:        result.MalformedOutput.JSONOffset,
+			UnknownFields:     append([]string(nil), result.MalformedOutput.UnknownFields...),
+			ContentBlockTypes: append([]string(nil), result.MalformedOutput.ContentBlockTypes...),
 		}
 		completion.Status = StatusRejected
 		completion.Rejection = reviewRejection(request, failure, completed)
@@ -406,9 +411,7 @@ func reviewRejection(
 	rejection.Attempt = envelope.GetAttempt()
 	var failure *contracts.ValidationFailure
 	if errors.As(err, &failure) {
-		rejection.Details = []*reasoningv1.RejectionDetail{{
-			Field: failure.Field, Message: failure.Message,
-		}}
+		rejection.Details = validationFailureDetails(failure)
 	}
 	return rejection
 }

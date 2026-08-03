@@ -55,6 +55,7 @@ make build
 make integration-test
 make runtime-e2e      # credential-free PostgreSQL/CAS/reconciler recovery
 make beta-live-e2e    # requires ANTHROPIC_API_KEY; complete live process gate
+make beta-python-project-e2e # live generated-Python-project acceptance gate
 make provider-smoke     # requires ANTHROPIC_API_KEY and ANTHROPIC_MODEL
 ```
 
@@ -63,6 +64,10 @@ an expired PostgreSQL stage claim through the reconciler, consumes a
 pre-existing integrity-checked CAS artifact, and makes no reasoning-provider
 request. It is not beta lifecycle completion. See
 [Run the agent harness live](live-harness.md) for the credentialed gate.
+The objective-specific `beta-python-project-e2e` target first bootstraps a new
+repository from operator-owned checks, then requires live implementation and
+review, offline verification, separate approval/submission, replay safety, and
+disposable draft publication.
 
 ## Installed manifest compiler
 
@@ -70,7 +75,7 @@ Build and install the SDK wheel, then invoke the CLI from any directory:
 
 ```bash
 uv build --wheel
-uv tool install --force dist/harness_agents-0.1.0-py3-none-any.whl
+uv tool install --force dist/harness_agents-0.2.0-py3-none-any.whl
 cd /tmp/agent-authoring
 harness-agents compile ./implementation.json \
   --output ./implementation.manifest.json \
@@ -87,6 +92,62 @@ and local writes of the two requested outputs. It makes no provider, network,
 database, Git, shell, registration, or workflow call. Authoring and I/O errors
 print to stderr and return exit code `2`; neither output is attempted until
 validation succeeds.
+
+The same installed wheel can establish a new trusted Python base:
+
+```bash
+harness-agents init /absolute/path/to/new-project \
+  --project-spec /absolute/path/to/project-spec.json \
+  --checks /absolute/path/to/operator-checks
+```
+
+The strict `harness_python_project.v1` specification contains `name`,
+`package_name`, `objective`, and one or more unique `AC-NNN` acceptance
+criteria. The checks directory contains only bounded regular UTF-8 `.py`
+files. Bootstrap writes a fixed Python 3.13/3.14 package, exact dependency
+pins, `make check`, immutable path metadata, and a packaged lockfile; creates a
+fresh `main` repository with hooks and global Git configuration disabled; and
+commits the trusted base. The destination must not already exist.
+
+The operator client uses a strict absolute configuration:
+
+```json
+{
+  "schema_version": "harness_operator_config.v1",
+  "endpoint": "http://127.0.0.1:8080",
+  "token_file": "/absolute/path/operator.token",
+  "project_root": "/absolute/path/to/new-project"
+}
+```
+
+The token file must be a regular owner-owned `0600` file. The endpoint must be
+a loopback HTTP origin. Start the lifecycle from a clean trusted base and keep
+the generated `0600` state file for idempotent recovery:
+
+```bash
+harness-agents operator run --config /absolute/path/operator.json \
+  --project /absolute/path/to/new-project \
+  --state-file /absolute/path/run-state.json \
+  --idempotency-key 11111111-1111-4111-8111-111111111111
+harness-agents operator approve --gate specification \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 22222222-2222-4222-8222-222222222222
+harness-agents operator approve --gate task-graph \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 33333333-3333-4333-8333-333333333333
+harness-agents operator approve --gate candidate \
+  --config /absolute/path/operator.json --state-file /absolute/path/run-state.json \
+  --idempotency-key 44444444-4444-4444-8444-444444444444
+harness-agents operator submit --config /absolute/path/operator.json \
+  --state-file /absolute/path/run-state.json \
+  --idempotency-key 55555555-5555-4555-8555-555555555555
+```
+
+Specification approval submits the already stored, operator-derived one-task
+graph but does not approve it. Each later command performs exactly one approval
+or publication action. Use `operator status RUN_ID --config ...` for current
+state and `operator export RUN_ID --config ... --output /absolute/support.json`
+for an atomic redacted bundle.
 
 Generation uses `grpcio-tools==1.75.1` from `uv.lock` and installs
 `protoc-gen-go@v1.36.10` into the ignored `.tools/bin` directory. It does not
@@ -128,6 +189,10 @@ put API keys in manifests, artifacts, command arguments, logs, or database
 configuration. `make check` also runs `scripts/no-fake-provider-adapters.sh`,
 which rejects removed fake symbols, proposal-path loaders, and alternate
 production provider branches.
+
+The review `1.2.0` prompt contains one exact minimal advisory-accept object.
+Malformed responses expose only structural diagnostics; inspect their class,
+safe field name, or byte offset without copying raw provider text into logs.
 
 The local suite uses loopback HTTP and no provider credential. Run the explicit
 live smoke separately:
@@ -260,11 +325,21 @@ go run ./cmd/workflow-service -config /absolute/path/workflow.json
 Every mutation supplies `Authorization: Bearer ...`, a UUID
 `Idempotency-Key`, and a `decision_timestamp`. Existing resources also require
 `If-Match: "<revision>"`. Mutation routes accept only `POST`; read routes accept
-only `GET`, and method failures return `405` with `Allow`. `make beta-live-e2e` is the full two-process MiniMax
+only `GET`, and method failures return `405` with `Allow`. Final human approval
+is `POST /v1/runs/{run_id}/approval` and records no Git or GitHub effect.
+An operator separately invokes `POST /v1/runs/{run_id}/submit` with the new
+`MERGE_READY` revision to publish the exact approval-bound candidate as a draft.
+Both operations have independent idempotency keys and exact replay responses.
+`GET /v1/runs/{run_id}/support-bundle` returns `support_bundle.v1` for an
+authenticated operator. It is safe to retain with an incident because it
+contains workflow evidence references and structural reasoning diagnostics,
+never raw provider request or response content. Treat referenced CAS artifacts
+as separately controlled evidence; the bundle does not retrieve them.
+`make beta-live-e2e` is the full two-process MiniMax
 gate: it builds both service binaries and worker images, starts disposable
 PostgreSQL, uses a disposable Git repository and loopback GitHub publication,
 and exercises implementation, execution, verification, review, restart,
-human approval, draft publication, and exact approval replay. Keep
+human approval, separate draft submission, and exact replay of both operations. Keep
 `make provider-smoke` separate: it uses the generic Anthropic endpoint and is
 not MiniMax runtime-E2E evidence.
 

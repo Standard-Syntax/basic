@@ -207,3 +207,105 @@ def test_installed_wheel_compiles_outside_repository(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert output.is_file()
     assert len(digest.read_text().strip()) == 64
+
+
+def test_cli_init_bootstraps_project_from_installed_wheel(tmp_path: Path) -> None:
+    wheel_dir = tmp_path / "wheel"
+    environment = tmp_path / "venv"
+    checks = tmp_path / "checks"
+    destination = tmp_path / "project"
+    wheel_dir.mkdir()
+    checks.mkdir()
+    spec = tmp_path / "project-spec.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "schema_version": "harness_python_project.v1",
+                "name": "installed-demo",
+                "package_name": "installed_demo",
+                "objective": "Implement the installed demo.",
+                "acceptance_criteria": [
+                    {"id": "AC-001", "description": "the installed demo exports main"}
+                ],
+            }
+        )
+    )
+    (checks / "test_acceptance.py").write_text(
+        "from installed_demo import main\n\n\n"
+        "def test_main_exists() -> None:\n"
+        "    assert callable(main)\n"
+    )
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(wheel_dir)],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(environment)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(wheel_dir.glob("*.whl"))
+    assert len(wheels) == 1
+    wheel = wheels[0]
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(environment / "bin/python"), str(wheel)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    help_result = subprocess.run(
+        [str(environment / "bin/harness-agents"), "operator", "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert help_result.returncode == 0, help_result.stderr
+
+    result = subprocess.run(
+        [
+            str(environment / "bin/harness-agents"),
+            "init",
+            str(destination),
+            "--project-spec",
+            str(spec.resolve()),
+            "--checks",
+            str(checks.resolve()),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (destination / ".harness/project.json").is_file()
+
+
+def test_cli_init_reports_malformed_project_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec = tmp_path / "project-spec.json"
+    checks = tmp_path / "checks"
+    destination = tmp_path / "project"
+    spec.write_text("{")
+    checks.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "harness-agents",
+            "init",
+            str(destination),
+            "--project-spec",
+            str(spec.resolve()),
+            "--checks",
+            str(checks.resolve()),
+        ],
+    )
+
+    assert main() == 2
+    assert "project spec must be valid JSON" in capsys.readouterr().err
+    assert not destination.exists()

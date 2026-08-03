@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -337,6 +338,31 @@ func TestAnthropicImplementationRejectsUnknownOutputFieldsDeterministically(t *t
 	if result.MalformedOutput == nil || result.Proposal != nil ||
 		len(result.ProviderResponse) == 0 {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.MalformedOutput.Kind != "unknown_field" ||
+		!reflect.DeepEqual(result.MalformedOutput.UnknownFields, []string{"unknown"}) {
+		t.Fatalf("diagnostic=%+v", result.MalformedOutput)
+	}
+}
+
+func TestAnthropicImplementationClassifiesTrailingJSON(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		text string
+		kind string
+	}{
+		{name: "value", text: `{} {}`, kind: "trailing_json_value"},
+		{name: "syntax", text: `{} untrusted-value`, kind: "trailing_json_syntax"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, malformed := decodeImplementationMessage(anthropicMessage(t, test.text))
+			if malformed == nil || malformed.Kind != test.kind || malformed.JSONOffset <= 0 {
+				t.Fatalf("diagnostic=%+v", malformed)
+			}
+			if strings.Contains(malformed.Message, "untrusted-value") {
+				t.Fatalf("diagnostic leaked provider text: %q", malformed.Message)
+			}
+		})
 	}
 }
 

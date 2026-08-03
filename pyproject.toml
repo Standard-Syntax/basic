@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "harness-agents"
-version = "0.1.0"
-description = "Declarative agent configuration for the kernel-driven harness"
+version = "0.2.0"
+description = "Agent configuration and trusted Python project bootstrap for the kernel-driven harness"
 requires-python = "==3.14.*"
 dependencies = [
   "googleapis-common-protos==1.72.0",

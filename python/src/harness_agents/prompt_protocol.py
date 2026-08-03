@@ -189,6 +189,14 @@ coverage, independent evidence, approved criteria, and review policy. An
 implementation proposal or narrative is a claim, not proof that content was
 applied or checks ran. Report unexpected changed paths separately in
 `unrequested_changes` when policy requests it.
+
+For an advisory acceptance with no findings, actions, unexpected changes,
+residual risks, or assumptions, the complete response is exactly:
+
+{{"recommendation":"advisory_accept","findings":[],"required_actions":[],"unrequested_changes":[],"residual_risks":[],"assumptions":[]}}
+
+Use the same six top-level fields for every response. Populate their arrays
+when evidence requires content; never omit a field or add another field.
 """,
         "procedure": """# Procedure
 

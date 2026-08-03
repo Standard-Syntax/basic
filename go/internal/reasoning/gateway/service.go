@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	reasoningv1 "github.com/Standard-Syntax/basic/go/gen/harness/reasoning/v1"
@@ -76,7 +77,11 @@ type AdapterResult struct {
 // projected into the closed stage schema. Adapters return transport and
 // provider failures as errors instead.
 type MalformedOutput struct {
-	Message string
+	Message           string
+	Kind              string
+	JSONOffset        int64
+	UnknownFields     []string
+	ContentBlockTypes []string
 }
 
 type InvocationMetadata struct {
@@ -319,8 +324,13 @@ func (s *Service) finalizeProposal(
 			message = "provider output does not match the closed implementation schema"
 		}
 		failure := &contracts.ValidationFailure{
-			Code:  reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
-			Field: "provider_response", Message: message,
+			Code:              reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID,
+			Field:             "provider_response",
+			Message:           message,
+			Kind:              result.MalformedOutput.Kind,
+			JSONOffset:        result.MalformedOutput.JSONOffset,
+			UnknownFields:     append([]string(nil), result.MalformedOutput.UnknownFields...),
+			ContentBlockTypes: append([]string(nil), result.MalformedOutput.ContentBlockTypes...),
 		}
 		completion.Status = StatusRejected
 		completion.Rejection = proposalRejection(request, failure, completed)
@@ -510,11 +520,31 @@ func proposalRejection(
 	rejection.Attempt = envelope.GetAttempt()
 	var failure *contracts.ValidationFailure
 	if errors.As(err, &failure) {
-		rejection.Details = []*reasoningv1.RejectionDetail{{
-			Field: failure.Field, Message: failure.Message,
-		}}
+		rejection.Details = validationFailureDetails(failure)
 	}
 	return rejection
+}
+
+func validationFailureDetails(
+	failure *contracts.ValidationFailure,
+) []*reasoningv1.RejectionDetail {
+	details := []*reasoningv1.RejectionDetail{{
+		Field: failure.Field, Message: failure.Message,
+	}}
+	appendDiagnostic := func(name, value string) {
+		if value != "" {
+			details = append(details, &reasoningv1.RejectionDetail{
+				Field: failure.Field + "." + name, Message: value,
+			})
+		}
+	}
+	appendDiagnostic("kind", failure.Kind)
+	if failure.JSONOffset > 0 {
+		appendDiagnostic("json_offset", fmt.Sprintf("%d", failure.JSONOffset))
+	}
+	appendDiagnostic("unknown_fields", strings.Join(failure.UnknownFields, ","))
+	appendDiagnostic("content_block_types", strings.Join(failure.ContentBlockTypes, ","))
+	return details
 }
 
 type systemClock struct{}

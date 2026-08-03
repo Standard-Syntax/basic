@@ -738,3 +738,206 @@ and deadlock conflicts retry the complete transaction.
 
 ### Date
 2026-08-02
+
+## DEC-031: Review prompts include one exact minimal closed response
+
+### Decision
+Version the independent-review agent as `1.2.0`, include the exact six-field
+advisory-accept object in its prompt, and retain only structural diagnostics for
+malformed provider output.
+
+### Options considered
+Rely only on the provider JSON schema; retain malformed provider text in
+operator diagnostics; add a minimal valid example plus redacted structure.
+
+### Pros
+The live provider receives an unambiguous successful shape. Failures identify
+content shape, JSON class, byte offset, or a bounded safe unknown field without
+copying provider values into errors or logs.
+
+### Cons
+The prompt digest and immutable review-agent version change, and structural
+diagnostics cannot explain semantic provider reasoning.
+
+### Why this option
+The Python-project evaluation exhausted live review retries despite trusted
+verification passing. A concrete example addresses the observed ambiguity
+without weakening the closed schema or retaining sensitive response text.
+
+### Consequences
+Existing `1.1.0` registrations remain immutable. The raw provider response
+continues to exist only in its bounded content-addressed evidence artifact;
+logs and rejections expose structural metadata only.
+
+### Date
+2026-08-03
+
+## DEC-034: Export structural support bundles without provider content
+
+### Decision
+Add an authenticated `support_bundle.v1` read endpoint that composes workflow,
+stage, event, and bounded reasoning status. Project reasoning failures into a
+closed structural diagnostic and never load or export raw provider artifacts.
+
+### Options considered
+Export all linked artifacts; export workflow state only; export workflow state
+plus a redacted reasoning projection.
+
+### Pros
+Operators can diagnose lifecycle and schema failures from one durable document
+without copying prompts, responses, credentials, provider request identifiers,
+or free-form legacy messages into routine support channels.
+
+### Cons
+The bundle cannot explain semantic provider reasoning and referenced evidence
+still requires separately authorized CAS inspection.
+
+### Why this option
+Raw provider output is immutable evidence, not routine diagnostic material.
+Structural status is sufficient to distinguish lifecycle, retry, and closed-
+schema failures while preserving that authority boundary.
+
+### Consequences
+The endpoint fails closed on malformed stored diagnostics or more than 1,000
+reasoning rows. Rejection details retain only sorted safe field names and stable
+categories; stored summaries and messages are intentionally ignored.
+
+### Date
+2026-08-03
+
+## DEC-033: Separate human approval from draft submission
+
+### Decision
+Make `/approval` record only the immutable human decision and run aggregation.
+Add an operator-only `/submit` mutation that reloads that checkpointed approval
+and publishes the exact accepted candidate.
+
+### Options considered
+Keep approval and publication combined; remove CLI publication; split approval
+and submission into independent idempotent operations.
+
+### Pros
+Reviewers can approve without causing an external write, operators can inspect
+the `MERGE_READY` evidence before submission, and retries cannot repeat approval
+or publication effects.
+
+### Cons
+Existing beta clients must make a second request and use the post-approval
+revision. This is an intentional pre-release API behavior change.
+
+### Why this option
+Approval authority and publication authority are distinct security boundaries.
+Combining them made an approval command unexpectedly push a branch and create a
+pull request.
+
+### Consequences
+Both mutations require UUID idempotency keys and exact `If-Match` revisions.
+Submission fails closed when publication is unconfigured, the run is not
+`MERGE_READY`, the task is not accepted, or the approval binding differs.
+
+### Date
+2026-08-03
+
+## DEC-032: Bootstrap Python projects from operator-owned checks
+
+### Decision
+Add `harness-agents init` for a new non-existent destination. Build one fixed
+Python package around a strict project specification and bounded
+operator-supplied Python acceptance checks, then copy a packaged deterministic
+lockfile and commit the trusted base before runtime use.
+
+### Options considered
+Support prepared repositories only; ship one canonical demo objective; accept
+arbitrary objectives with generic quality checks; require operator-owned
+objective-specific checks.
+
+### Pros
+The installed harness creates the project while trusted evidence still comes
+from a human-owned source. Model-writable `src` never overlaps tests, lockfiles,
+build configuration, policy metadata, or `make check`.
+
+### Cons
+Operators must author acceptance tests and provision a remote and beta service
+configuration separately. Bootstrap requires installed Git and targets Python
+3.13 or 3.14 only.
+
+### Why this option
+Generic lint and build health cannot prove an arbitrary natural-language goal,
+and allowing the model to create its own checks would collapse the independent
+verification boundary.
+
+### Consequences
+`harness-agents` becomes version `0.2.0`. Bootstrap performs no dependency
+resolution while constructing the project and fails if the destination
+exists or if trusted checks are unsafe, and it does not call a provider,
+control-plane API, publication endpoint, merge operation, or deployment.
+
+### Date
+2026-08-03
+
+## DEC-035: Keep the Python operator as a thin explicit-gate client
+
+### Decision
+Ship a strict `harness-agents operator` client that drives the existing service
+API, stores exact proposal transports for recovery, and exposes specification,
+task-graph, candidate, and submission actions as separate commands.
+
+### Options considered
+Embed a local runtime; automate every gate; provide raw HTTP examples only;
+ship a configured service client with explicit gates.
+
+### Pros
+Operators get one installed entrypoint and durable idempotent recovery without
+duplicating kernel state, worker orchestration, evidence storage, approval, or
+publication logic in Python.
+
+### Cons
+The client requires a running beta service and an operator must supply a fresh
+idempotency root for every explicit action.
+
+### Why this option
+The control plane already owns lifecycle and authority transitions. A second
+runtime would split those security boundaries, while fully automatic approval
+would erase the human gates required by the evaluation.
+
+### Consequences
+Configuration is closed-schema, absolute, loopback-only, and uses an owner-only
+token file. Run creation requires a clean exact Git base. State and exports are
+atomic mode-`0600` files and contain no credential.
+
+### Date
+2026-08-03
+
+## DEC-036: Require a credentialed generated-Python-project gate
+
+### Decision
+Add `make beta-python-project-e2e` as a distinct acceptance target that creates
+a new trusted Python repository and runs its exact objective through the live
+MiniMax lifecycle and disposable publication boundary.
+
+### Options considered
+Treat SDK/wheel tests as sufficient; reuse only the Go fixture; add a
+deterministic Python fixture; require a generated project with live reasoning.
+
+### Pros
+The gate proves project generation, closed planning scope, live implementation,
+offline operator checks, independent review, approval, submission, replay, and
+publication as one observable capability.
+
+### Cons
+It requires a provider credential, Docker, PostgreSQL, image builds, and is
+subject to bounded provider structured-output variability.
+
+### Why this option
+Successful manifest compilation or a generic runtime cannot demonstrate that a
+fresh Python target is importable and verifiable inside the production offline
+worker. The first live run exposed exactly that missing `src/` import boundary.
+
+### Consequences
+Bootstrap test execution sets `PYTHONPATH=src`; the lockfile and all other
+trusted inputs remain immutable. The gate fails on provider rejection, any
+unrequested path, failed offline check, review failure, replayed effect, or
+secret persistence.
+
+### Date
+2026-08-03

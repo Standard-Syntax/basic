@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 PROTO_FILES := $(shell find proto -name '*.proto' -type f | sort)
 GO_PACKAGES := ./...
 
-.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
+.PHONY: build tools generate generate-check no-fake-provider-adapters format-check lint type-check test check integration-test runtime-e2e beta-preflight beta-images beta-deploy-smoke beta-live-e2e beta-python-project-e2e beta-canary-e2e beta-canary-cleanup beta-readiness provider-smoke clean
 
 build:
 	cd go && go build ./...
@@ -156,6 +156,26 @@ else
 	docker compose down --volumes; \
 	exit $$status
 endif
+
+beta-python-project-e2e:
+	@test -n "$$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY is required" >&2; exit 2; }
+	docker compose down --volumes
+	docker build -f Dockerfile.execution-worker -t basic-execution-worker:runtime .
+	docker build -f Dockerfile.verification-worker -t basic-verification-worker:runtime .
+	mkdir -p .tools/runtime
+	cd go && go build -o ../.tools/runtime/api-service ./cmd/api-service
+	cd go && go build -o ../.tools/runtime/workflow-service ./cmd/workflow-service
+	docker compose up -d --wait postgres
+	@status=0; \
+	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
+		BETA_LIVE_E2E=1 BETA_PYTHON_PROJECT=1 RUNTIME_SOURCE_ROOT="$(CURDIR)" \
+		RUNTIME_API_BINARY="$(CURDIR)/.tools/runtime/api-service" \
+		RUNTIME_WORKFLOW_BINARY="$(CURDIR)/.tools/runtime/workflow-service" \
+		go test -v -tags=integration -count=1 \
+			-run '^TestBetaLiveProcessesCompleteGeneratedPythonProject$$' \
+			./internal/runtime || status=$$?; \
+	docker compose down --volumes; \
+	exit $$status
 
 beta-canary-e2e:
 	@test -n "$(BETA_CONFIG)" || { echo "BETA_CONFIG is required" >&2; exit 2; }

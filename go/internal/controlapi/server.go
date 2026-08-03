@@ -124,6 +124,7 @@ type Server struct {
 	taskGraphs  TaskGraphApproval
 	approval    ApprovalService
 	publication PublicationService
+	support     SupportReader
 	principals  []principalDigest
 	checks      map[string]struct{}
 	logger      *slog.Logger
@@ -135,6 +136,17 @@ type Server struct {
 type principalDigest struct {
 	principal Principal
 	digest    [sha256.Size]byte
+}
+
+type namedDependency struct {
+	name  string
+	value any
+}
+
+type preparedServerConfig struct {
+	config     Config
+	principals []principalDigest
+	checks     map[string]struct{}
 }
 
 func isNilDependency(value any) bool {
@@ -150,61 +162,72 @@ func isNilDependency(value any) bool {
 	}
 }
 
-func New(
-	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
-	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
-	taskGraphApproval TaskGraphApproval, publicationService PublicationService, logger *slog.Logger,
-) (*Server, error) {
+func validateServerDependencies(dependencies ...namedDependency) error {
+	for _, dependency := range dependencies {
+		if isNilDependency(dependency.value) {
+			return fmt.Errorf("%s is required", dependency.name)
+		}
+	}
+	return nil
+}
+
+func prepareServerConfig(config Config) (preparedServerConfig, error) {
 	normalized, err := normalizeServerConfig(config)
 	if err != nil {
-		return nil, err
+		return preparedServerConfig{}, err
 	}
 	principals, err := compilePrincipals(normalized.Principals)
 	if err != nil {
-		return nil, err
+		return preparedServerConfig{}, err
 	}
 	if len(principals) == 0 {
-		return nil, errors.New("at least one principal is required")
-	}
-	if isNilDependency(workflowStore) {
-		return nil, errors.New("workflow store is required")
-	}
-	if isNilDependency(runtimeLedger) {
-		return nil, errors.New("runtime ledger is required")
-	}
-	if isNilDependency(runIntake) {
-		return nil, errors.New("run intake is required")
-	}
-	if isNilDependency(artifacts) {
-		return nil, errors.New("artifact store is required")
-	}
-	if isNilDependency(bindings) {
-		return nil, errors.New("binding store is required")
-	}
-	if isNilDependency(approvalService) {
-		return nil, errors.New("approval service is required")
-	}
-	if isNilDependency(taskGraphApproval) {
-		return nil, errors.New("task graph approval service is required")
+		return preparedServerConfig{}, errors.New("at least one principal is required")
 	}
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
-		return nil, err
+		return preparedServerConfig{}, err
 	}
 	if err := normalized.Policy.Validate(); err != nil {
-		return nil, err
+		return preparedServerConfig{}, err
 	}
 	if !slices.Equal(normalized.TrustedChecks, normalized.Policy.TrustedChecks) {
-		return nil, errors.New("trusted checks do not match beta policy")
+		return preparedServerConfig{}, errors.New("trusted checks do not match beta policy")
+	}
+	return preparedServerConfig{
+		config: normalized, principals: principals, checks: checks,
+	}, nil
+}
+
+func New(
+	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
+	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
+	taskGraphApproval TaskGraphApproval, publicationService PublicationService, support SupportReader,
+	logger *slog.Logger,
+) (*Server, error) {
+	prepared, err := prepareServerConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateServerDependencies(
+		namedDependency{"workflow store", workflowStore},
+		namedDependency{"runtime ledger", runtimeLedger},
+		namedDependency{"run intake", runIntake},
+		namedDependency{"artifact store", artifacts},
+		namedDependency{"binding store", bindings},
+		namedDependency{"approval service", approvalService},
+		namedDependency{"task graph approval service", taskGraphApproval},
+		namedDependency{"support reader", support},
+	); err != nil {
+		return nil, err
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Server{
-		config: normalized, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
+		config: prepared.config, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
 		artifacts: artifacts, bindings: bindings, taskGraphs: taskGraphApproval, approval: approvalService,
-		publication: publicationService, principals: principals,
-		checks: checks, logger: logger,
+		publication: publicationService, support: support, principals: prepared.principals,
+		checks: prepared.checks, logger: logger,
 	}, nil
 }
 
@@ -398,7 +421,7 @@ func isMutationRoute(path string) bool {
 		return suffix == "/retry"
 	}
 	_, suffix, ok := parseRunPath(path)
-	return ok && suffix != "" && suffix != "/events"
+	return ok && suffix != "" && suffix != "/events" && suffix != "/support-bundle"
 }
 
 type statusWriter struct {
@@ -477,7 +500,45 @@ func (s *Server) handleGet(w http.ResponseWriter, request *http.Request, princip
 		writeJSON(w, http.StatusOK, map[string]any{"events": events})
 		return
 	}
+	if suffix == "/support-bundle" {
+		s.writeSupportBundle(w, request, runID)
+		return
+	}
 	writeError(w, http.StatusNotFound, "not_found", "route not found")
+}
+
+func (s *Server) writeSupportBundle(
+	w http.ResponseWriter, request *http.Request, runID string,
+) {
+	run, err := s.workflow.GetRun(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	tasks, err := s.workflow.ListTasks(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	stages, err := s.runtime.RunStages(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	events, err := s.workflow.ListEvents(request.Context(), "RUN", runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	diagnostics, err := s.support.ReasoningDiagnostics(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"schema_version": "support_bundle.v1", "run": run, "tasks": tasks,
+		"stages": stages, "events": events, "reasoning_diagnostics": diagnostics,
+	})
 }
 
 type mutationBody struct {
@@ -523,15 +584,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeRawJSON(w, reservation.StatusCode, reservation.Response)
 		return
 	}
-	var operationParent context.Context
-	var operationCancel context.CancelFunc
-	if _, suffix, ok := parseRunPath(request.URL.Path); ok && suffix == "/approval" {
-		operationParent, operationCancel = context.WithTimeout(
-			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
-		)
-	} else {
-		operationParent, operationCancel = context.WithCancel(request.Context())
-	}
+	operationParent, operationCancel := mutationOperationParent(request)
 	operationCtx, stopRenewal := s.startReservationRenewal(
 		operationParent, key, reservation.FencingToken, idem.ReservationTTL,
 	)
@@ -544,42 +597,49 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	if err != nil {
 		status, response = s.domainError(err)
 		if status >= http.StatusInternalServerError {
-			cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
-			defer cleanupCancel()
-			if abandonErr := s.runtime.AbandonIdempotency(
-				cleanupCtx, key, reservation.FencingToken,
-			); abandonErr != nil {
-				s.writeDomainError(w, abandonErr)
-				return
-			}
-			writeJSON(w, status, response)
+			s.abandonMutation(request.Context(), w, key, reservation.FencingToken, status, response)
 			return
 		}
-		encoded, marshalErr := json.Marshal(response)
-		if marshalErr != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "encode response")
-			return
-		}
-		cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
-		defer cleanupCancel()
-		if completeErr := s.runtime.CompleteIdempotency(
-			cleanupCtx, key, reservation.FencingToken, status, encoded,
-		); completeErr != nil {
-			s.writeDomainError(w, completeErr)
-			return
-		}
-		writeRawJSON(w, status, encoded)
+	}
+	s.completeMutation(request.Context(), w, key, reservation.FencingToken, status, response)
+}
+
+func mutationOperationParent(request *http.Request) (context.Context, context.CancelFunc) {
+	if _, suffix, ok := parseRunPath(request.URL.Path); ok &&
+		(suffix == "/approval" || suffix == "/submit") {
+		return context.WithTimeout(
+			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
+		)
+	}
+	return context.WithCancel(request.Context())
+}
+
+func (s *Server) abandonMutation(
+	ctx context.Context, w http.ResponseWriter, key string, fence uint64,
+	status int, response any,
+) {
+	cleanupCtx, cleanupCancel := detachedIdempotencyContext(ctx)
+	defer cleanupCancel()
+	if err := s.runtime.AbandonIdempotency(cleanupCtx, key, fence); err != nil {
+		s.writeDomainError(w, err)
 		return
 	}
+	writeJSON(w, status, response)
+}
+
+func (s *Server) completeMutation(
+	ctx context.Context, w http.ResponseWriter, key string, fence uint64,
+	status int, response any,
+) {
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "encode response")
 		return
 	}
-	cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
+	cleanupCtx, cleanupCancel := detachedIdempotencyContext(ctx)
 	defer cleanupCancel()
 	if err := s.runtime.CompleteIdempotency(
-		cleanupCtx, key, reservation.FencingToken, status, encoded,
+		cleanupCtx, key, fence, status, encoded,
 	); err != nil {
 		s.writeDomainError(w, err)
 		return
@@ -863,18 +923,14 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 		if !hasApprovalRole(principal, false) {
 			return 0, nil, workflow.ErrUnauthorized
 		}
-		result, publicationResult, err := s.compositeApprove(
-			ctx, principal, key, body.DecisionTime, run,
-		)
-		response := map[string]any{"result": result}
-		if publicationResult == nil {
-			response["publication"] = map[string]string{
-				"status": "configuration_blocked", "reason": "publication is not configured",
-			}
-		} else {
-			response["publication"] = publicationResult
+		result, err := s.approveRun(ctx, principal, key, body.DecisionTime, run)
+		return http.StatusOK, map[string]any{"result": result}, err
+	case "/submit":
+		if !hasRole(principal, RoleOperator) {
+			return 0, nil, workflow.ErrUnauthorized
 		}
-		return http.StatusOK, response, err
+		result, err := s.submitRun(ctx, key, body.DecisionTime, run)
+		return http.StatusOK, result, err
 	case "/reject":
 		if !hasApprovalRole(principal, false) || run.Review == nil {
 			return 0, nil, workflow.ErrUnauthorized
@@ -900,37 +956,37 @@ func (s *Server) applyRunMutation( // skipcq: GO-R1005 -- explicit route-to-comm
 	}
 }
 
-func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered approval checkpoints
+func (s *Server) approveRun( // skipcq: GO-R1005 -- restart-safe ordered approval checkpoints
 	ctx context.Context, principal Principal, key string, at time.Time, run workflow.Run,
-) (approval.Result, *publication.Result, error) {
+) (approval.Result, error) {
 	tasks, err := s.workflow.ListTasks(ctx, run.ID)
 	if err != nil || len(tasks) != 1 {
-		return approval.Result{}, nil, workflow.ErrInvalid
+		return approval.Result{}, workflow.ErrInvalid
 	}
 	task := tasks[0]
 	if task.Execution == nil || task.Verification == nil || task.Review == nil ||
 		task.Proposal == nil || task.CandidateCommit == "" ||
 		run.Specification == nil || run.TaskGraph == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	runBinding, err := s.bindings.GetRun(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	if runBinding.ApprovedSpecification == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	taskBinding, err := s.bindings.GetTask(ctx, run.ID, task.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	executionBody, err := s.artifacts.Get(ctx, *task.Execution)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	var executionReport execution.ExecutionReport
 	if err := json.Unmarshal(executionBody, &executionReport); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	changedPaths := make([]string, 0, len(executionReport.ActualDiff))
 	for _, entry := range executionReport.ActualDiff {
@@ -938,11 +994,11 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 	}
 	taskBody, err := s.artifacts.Get(ctx, taskBinding.ApprovedTask)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	var plannedTask reasoningv1.PlannedTask
 	if err := proto.Unmarshal(taskBody, &plannedTask); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	roles := make([]approval.Role, 0, len(principal.Roles))
 	if hasRole(principal, RoleApprover) {
@@ -964,16 +1020,16 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		ExpectedTaskRevision: task.Revision,
 	})
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	if err := s.bindings.CheckpointApproval(
 		ctx, run.ID, approvalResult.ApprovalArtifact,
 	); err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	run, err = s.workflow.GetRun(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
 	steps := []struct {
 		state workflow.RunState
@@ -1005,16 +1061,16 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		if run.State == step.state {
 			_, err = s.workflow.ExecuteRun(ctx, step.make(run))
 			if err != nil {
-				return approval.Result{}, nil, err
+				return approval.Result{}, err
 			}
 			run, err = s.workflow.GetRun(ctx, run.ID)
 			if err != nil {
-				return approval.Result{}, nil, err
+				return approval.Result{}, err
 			}
 		}
 	}
 	if run.State != workflow.RunStateAwaitingApproval || run.Review == nil {
-		return approval.Result{}, nil, workflow.ErrInvalidTransition
+		return approval.Result{}, workflow.ErrInvalidTransition
 	}
 	_, err = s.workflow.ExecuteRun(ctx, workflow.ApproveRun{
 		Meta: s.envelope(stableStepID(key, "approve-run"), principal.ID,
@@ -1023,28 +1079,76 @@ func (s *Server) compositeApprove( // skipcq: GO-R1005 -- restart-safe ordered a
 		Review: *run.Review, Approval: approvalResult.ApprovalArtifact,
 	})
 	if err != nil {
-		return approval.Result{}, nil, err
+		return approval.Result{}, err
 	}
+	return approvalResult, nil
+}
+
+func (s *Server) submitRun(
+	ctx context.Context, key string, at time.Time, run workflow.Run,
+) (publication.Result, error) {
+	request, err := s.publicationRequest(ctx, key, at, run)
+	if err != nil {
+		return publication.Result{}, err
+	}
+	return s.publication.Publish(ctx, request)
+}
+
+func (s *Server) publicationRequest(
+	ctx context.Context, key string, at time.Time, run workflow.Run,
+) (publication.Request, error) {
 	if s.publication == nil {
-		return approvalResult, nil, nil
+		return publication.Request{}, workflow.ErrInvalidTransition
 	}
-	run, err = s.workflow.GetRun(ctx, run.ID)
+	if run.State != workflow.RunStateMergeReady || run.Approval == nil {
+		return publication.Request{}, workflow.ErrInvalidTransition
+	}
+	tasks, err := s.workflow.ListTasks(ctx, run.ID)
 	if err != nil {
-		return approval.Result{}, nil, err
+		return publication.Request{}, workflow.ErrInvalid
 	}
-	publicationResult, err := s.publication.Publish(ctx, publication.Request{
+	task, err := publicationTask(tasks)
+	if err != nil {
+		return publication.Request{}, err
+	}
+	binding, err := s.bindings.GetRun(ctx, run.ID)
+	if err != nil {
+		return publication.Request{}, err
+	}
+	if !publicationBindingMatches(binding, *run.Approval) {
+		return publication.Request{}, workflow.ErrInvalidTransition
+	}
+	return publication.Request{
 		PublicationID: stableStepID(key, "publish"), PublicationTimestamp: at,
-		RunID: run.ID, BaseCommit: runBinding.BaseCommit,
-		CandidateCommit: task.CandidateCommit,
-		Specification:   *runBinding.ApprovedSpecification,
-		Implementation:  *task.Proposal, Execution: *task.Execution,
-		Verification: *task.Verification, Review: *task.Review,
-		Approval: approvalResult.ApprovalArtifact, ExpectedRunRevision: run.Revision,
-	})
-	if err != nil {
-		return approval.Result{}, nil, err
+		RunID: run.ID, BaseCommit: binding.BaseCommit, CandidateCommit: task.CandidateCommit,
+		Specification: *binding.ApprovedSpecification, Implementation: *task.Proposal,
+		Execution: *task.Execution, Verification: *task.Verification, Review: *task.Review,
+		Approval: *binding.CompositeApproval, ExpectedRunRevision: run.Revision,
+	}, nil
+}
+
+func publicationTask(tasks []workflow.Task) (workflow.Task, error) {
+	if len(tasks) != 1 {
+		return workflow.Task{}, workflow.ErrInvalid
 	}
-	return approvalResult, &publicationResult, nil
+	task := tasks[0]
+	if !taskReadyForPublication(task) {
+		return workflow.Task{}, workflow.ErrInvalidTransition
+	}
+	return task, nil
+}
+
+func taskReadyForPublication(task workflow.Task) bool {
+	return task.State == workflow.TaskStateAccepted && task.Proposal != nil &&
+		task.Execution != nil && task.Verification != nil && task.Review != nil &&
+		task.CandidateCommit != ""
+}
+
+func publicationBindingMatches(
+	binding runtime.RunBinding, approval workflow.ArtifactRef,
+) bool {
+	return binding.ApprovedSpecification != nil && binding.CompositeApproval != nil &&
+		binding.CompositeApproval.Equal(approval)
 }
 
 func (*Server) envelope(

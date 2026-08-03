@@ -5,6 +5,13 @@
 - Reasoning authority is proposal-only and fails closed.
 - Python configuration has no database, Git, shell, network, write, credential,
   workflow-transition, approval, publication, or task-scope capability.
+- The separately invoked Python bootstrap may write only a new destination and
+  execute fixed Git initialization arguments. It renders `uv.lock` from a
+  packaged deterministic template without executing `uv` or resolving
+  dependencies. It rejects existing destinations, symlinks, non-Python check
+  inputs, unknown project-spec fields, and unbounded check trees; trusted checks
+  and policy metadata are committed before any model call and are outside
+  model-writable `src` scope.
 - Manifests are schema-validated, canonicalized, immutable, and SHA-256
   addressed.
 - Registry versions and manifest digests are unique. Exact replay is
@@ -118,6 +125,10 @@ the ref is absent. A successful-but-uncheckpointed push is recovered only when
 the remote ref exactly equals the approved candidate. Checkpointed branch/PR
 facts and completed rows are protected by PostgreSQL triggers.
 
+Human approval performs no publication side effect. Draft submission requires
+the separate operator role, a `MERGE_READY` run, the exact checkpointed
+composite approval, a fresh revision precondition, and its own idempotency key.
+
 ## Phase 10 provider boundary
 
 - The shipped beta accepts only MiniMax's Anthropic-compatible HTTPS endpoint,
@@ -155,6 +166,12 @@ facts and completed rows are protected by PostgreSQL triggers.
   persist as exact, deterministic `SCHEMA_INVALID` outcomes.
 - Exact replay verifies the stored provider response and performs no credential
   lookup or provider request.
+- Malformed structured-output diagnostics contain only a closed failure class,
+  bounded byte offset, normalized content-block classes, and safe identifier-
+  shaped unknown field names. They never include provider text or field values.
+- Support bundles never load provider evidence artifacts. Their reasoning view
+  excludes prompt and response content, provider request IDs, artifact paths,
+  and legacy free-form rejection summaries or messages.
 
 ## Phase 11 runtime boundary
 
@@ -171,6 +188,10 @@ facts and completed rows are protected by PostgreSQL triggers.
   regular, owner-only `0600` file.
 - Phase 11 adds no automatic merge, deployment, arbitrary shell, unrestricted
   network, provider fallback, or cross-repository authority.
+- The operator CLI accepts only a loopback HTTP origin and an owner-owned,
+  owner-only token file. It writes no token to state, derives independent UUID
+  keys per mutation, refuses a dirty bootstrap repository, and keeps lifecycle
+  state and support exports at mode `0600`.
 
 ## Beta Slice 3 intake boundary
 
