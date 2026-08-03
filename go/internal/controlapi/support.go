@@ -74,15 +74,9 @@ func (r *PostgresSupportReader) ReasoningDiagnostics(
 		); err != nil {
 			return nil, fmt.Errorf("scan support diagnostic: %w", err)
 		}
-		if code != nil && retryable != nil {
-			fields, err := rejectionFields(details)
-			if err != nil {
-				return nil, err
-			}
-			value.Rejection = &RejectionDiagnostic{
-				Code: *code, Category: rejectionCategory(*code), Fields: fields,
-				Retryable: *retryable,
-			}
+		value.Rejection, err = storedRejectionDiagnostic(code, details, retryable)
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, value)
 	}
@@ -93,6 +87,25 @@ func (r *PostgresSupportReader) ReasoningDiagnostics(
 		return nil, errors.New("support diagnostics exceed row limit")
 	}
 	return result, nil
+}
+
+func storedRejectionDiagnostic(
+	code *int32, details []byte, retryable *bool,
+) (*RejectionDiagnostic, error) {
+	if code == nil && retryable == nil {
+		return nil, nil
+	}
+	if code == nil || retryable == nil {
+		return nil, errors.New("stored rejection state is incomplete")
+	}
+	fields, err := rejectionFields(details)
+	if err != nil {
+		return nil, err
+	}
+	return &RejectionDiagnostic{
+		Code: *code, Category: rejectionCategory(*code), Fields: fields,
+		Retryable: *retryable,
+	}, nil
 }
 
 func rejectionFields(body []byte) ([]string, error) {

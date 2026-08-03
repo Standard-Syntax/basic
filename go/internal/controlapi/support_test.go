@@ -27,3 +27,29 @@ func TestRejectionFieldsDropsFreeFormMessagesAndUnsafeFields(t *testing.T) {
 		t.Fatalf("diagnostic=%s", encoded)
 	}
 }
+
+func TestStoredRejectionDiagnosticRejectsPartialState(t *testing.T) {
+	code, retryable := int32(1), false
+	if value, err := storedRejectionDiagnostic(nil, nil, nil); err != nil || value != nil {
+		t.Fatalf("absent rejection=%+v err=%v", value, err)
+	}
+	value, err := storedRejectionDiagnostic(&code, []byte(`[{"field":"proposal"}]`), &retryable)
+	if err != nil || value == nil || value.Code != code || len(value.Fields) != 1 {
+		t.Fatalf("complete rejection=%+v err=%v", value, err)
+	}
+	for _, test := range []struct {
+		name      string
+		code      *int32
+		retryable *bool
+	}{
+		{name: "missing retryable", code: &code},
+		{name: "missing code", retryable: &retryable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := storedRejectionDiagnostic(test.code, nil, test.retryable)
+			if err == nil || err.Error() != "stored rejection state is incomplete" {
+				t.Fatalf("partial rejection state error=%v", err)
+			}
+		})
+	}
+}
