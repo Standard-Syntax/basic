@@ -72,14 +72,23 @@ make beta-live-e2e
 make beta-python-project-e2e
 ```
 
-The second target is objective-specific: it invokes the installed bootstrap
-path for a fresh `src/`-layout Python repository and immutable acceptance test,
-then exercises the same credentialed runtime against that generated target.
-Acceptance requires exactly one source-file change, offline lint/type/test/build
-success, independent live review, distinct approval and submission, replay
-safety, secret scanning, and disposable draft publication. It is stronger
-evidence for Python-project support than SDK compilation, wheel installation,
-or the generic Go fixture.
+The second target defaults to an exact golden profile and also accepts a paired
+`PROJECT_SPEC=/clean/absolute/spec.json` and `CHECKS=/clean/absolute/checks`.
+It invokes the installed bootstrap path for a fresh `src/`-layout Python
+repository and committed operator checks, then derives objective, criteria,
+package identity, path policy, and the one-task graph from committed
+`.harness/project.json`. A custom candidate must be nonempty, remain entirely
+inside committed writable roots, and pass trusted `make check`; the golden
+profile additionally requires its exact source file and `ready` console output.
+
+`REPORT_OUTPUT` defaults to the ignored absolute
+`.tools/evidence/python-project-report.json`. Pass/failure reports use
+`harness_python_project_e2e_report.v1`, are atomically replaced at mode `0600`,
+and exclude credentials, prompts, provider bodies and diagnostics, database
+exports, and filesystem artifact locations. Optional `PRESERVE_PROJECT` must be
+a clean absolute nonexistent destination and receives only the generated
+repository after scanning every file and Git object for credentials and unsafe
+types.
 
 The disposable API configuration supplies its fixture repository as the
 required top-level `repository_root`. `POST /v1/runs` resolves and binds the
@@ -89,19 +98,30 @@ After the API restart, replay of the original run request must return the stored
 CAS objects, create another workflow run or binding, enqueue work, or invoke
 MiniMax.
 
+The gate builds the current harness wheel, installs it into a disposable
+environment, and routes lifecycle actions through that exact executable's
+documented `operator` commands across an API restart. The three approvals are
+automated test-fixture acceptance evidence, not real human decisions.
+
 The gate builds both host services and both isolated worker images, starts
 disposable PostgreSQL, and runs one task against MiniMax-M2.7 through
 implementation, execution, independent verification, review, process restart,
-human approval, a separate operator submission, and draft publication. The Git repository and publication
+automated acceptance-fixture approval, a separate operator submission, and
+draft publication. The Git repository and publication
 remote are disposable; GitHub REST remains loopback-only in Slice 2.
 
 Acceptance requires one implementation request and one distinct review
 request, one provider request per stage, immutable proposal/raw-response
-evidence with request IDs and token usage, an independently passing `add.go`
-candidate, one approval and one submission, and exact replay after API restart
+evidence with request IDs and token usage, an independently passing nonempty
+candidate confined to committed writable paths, one approval and one
+submission, and exact replay after API restart
 without another provider request, push, approval, submission, or PR. The fixture scans
 configuration, prompts, process logs, CAS, PostgreSQL, and reachable Git
-objects for the provider secret.
+objects for provider and operator credentials.
+
+Every repository image build requires Docker Buildx exactly v0.36.0 and uses
+`docker buildx build --load --iidfile`; the wrapper rejects the build unless the
+IID file equals the post-load `docker image inspect` ID.
 
 `make runtime-e2e` remains credential-free and intentionally narrower. It
 proves PostgreSQL claim takeover, fencing, CAS integrity, and reconciler

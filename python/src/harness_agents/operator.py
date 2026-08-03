@@ -568,6 +568,10 @@ def run_lifecycle(
         _write_state(state_path, state)
     run_id = cast(str, state["run_id"])
     now = _operation_timestamp(state_path, state, "run", idempotency_key)
+    specification_request = cast(dict[str, Any], state["specification_request"])
+    objective = specification_request.get("desired_outcome")
+    if not isinstance(objective, str) or not objective:
+        raise OperatorError("operator state contains an invalid project objective")
     created = _request(
         config,
         "POST",
@@ -575,7 +579,7 @@ def run_lifecycle(
         body={
             "run_id": run_id,
             "base_commit": state["base_commit"],
-            "content": {"objective": "trusted Python project lifecycle"},
+            "content": {"objective": objective},
             "decision_timestamp": now,
         },
         idempotency_key=_key(idempotency_key, "create-run"),

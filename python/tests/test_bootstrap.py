@@ -183,6 +183,22 @@ def test_bootstrap_candidate_passes_operator_checks_offline(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
+    environment = tmp_path / "installed"
+    subprocess.run(["uv", "venv", str(environment)], check=True, capture_output=True, text=True)
+    wheels = list((destination / "dist").glob("*.whl"))
+    assert len(wheels) == 1
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(environment / "bin/python"), str(wheels[0])],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    command = subprocess.run(
+        [str(environment / "bin/trusted-demo")], check=False, capture_output=True, text=True
+    )
+    assert command.returncode == 0, command.stdout + command.stderr
+    assert command.stdout == "ready\n"
+
 
 def test_bootstrap_rejects_symlinked_checks_before_creating_destination(tmp_path: Path) -> None:
     spec = tmp_path / "spec.json"

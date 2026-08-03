@@ -136,6 +136,11 @@ def test_operator_runs_explicit_gates_submits_and_exports_redacted_bundle(
     encoded_calls = json.dumps(LifecycleHandler.calls)
     assert "operator-secret" in encoded_calls
     assert "raw_provider_response" not in output.read_text()
+    create_calls = [call for call in LifecycleHandler.calls if call[1] == "/v1/runs"]
+    assert len(create_calls) == 2
+    assert all(
+        call[3]["content"]["objective"] == "Implement the operator demo." for call in create_calls
+    )
 
 
 def test_operator_rejects_token_file_readable_by_group(

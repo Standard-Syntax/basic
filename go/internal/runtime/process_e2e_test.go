@@ -39,6 +39,29 @@ import (
 
 const packagedHelperImage = "alpine:3.23.3@sha256:59855d3dceb3ae53991193bd03301e082b2a7faa56a514b03527ae0ec2ce3a95"
 
+type pythonProjectMetadata struct {
+	SchemaVersion      string                      `json:"schema_version"`
+	Name               string                      `json:"name"`
+	PackageName        string                      `json:"package_name"`
+	Objective          string                      `json:"objective"`
+	AcceptanceCriteria []pythonAcceptanceCriterion `json:"acceptance_criteria"`
+	Paths              pythonProjectPaths          `json:"paths"`
+	TrustedChecks      []string                    `json:"trusted_checks"`
+	MaximumTasks       int                         `json:"maximum_tasks"`
+	Golden             bool                        `json:"-"`
+}
+
+type pythonAcceptanceCriterion struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+}
+
+type pythonProjectPaths struct {
+	Readable   []string `json:"readable"`
+	Writable   []string `json:"writable"`
+	Prohibited []string `json:"prohibited"`
+}
+
 func TestBetaLiveProcessesCompleteDisposableFixture(t *testing.T) {
 	if os.Getenv("BETA_LIVE_E2E") != "1" {
 		t.Skip("BETA_LIVE_E2E=1 is required")
@@ -61,6 +84,59 @@ func TestBetaCanaryProcessesPublishRealDraft(t *testing.T) {
 		t.Skip("BETA_CANARY=1 is required")
 	}
 	runBetaProcesses(t)
+}
+
+func TestPythonProjectMetadataDrivesLifecycleScope(t *testing.T) {
+	project := &pythonProjectMetadata{
+		Name: "operator-demo", PackageName: "operator_demo", Objective: "Return the operator value.",
+		AcceptanceCriteria: []pythonAcceptanceCriterion{
+			{ID: "AC-001", Description: "returns the value"},
+			{ID: "AC-002", Description: "passes the trusted checks"},
+		},
+		Paths: pythonProjectPaths{
+			Readable: []string{"src", "tests"}, Writable: []string{"src/operator_demo"},
+			Prohibited: []string{"tests"},
+		},
+		TrustedChecks: []string{"make-check-v1"}, MaximumTasks: 1,
+	}
+	now := time.Now().UTC()
+	request, proposal := specificationPair(uuid.NewString(), now, project)
+	if request.DesiredOutcome != project.Objective || proposal.Goal != project.Objective ||
+		len(proposal.AcceptanceCriteria) != 2 ||
+		proposal.AcceptanceCriteria[1].CriterionId != "AC-002" {
+		t.Fatalf("metadata-derived specification = %#v %#v", request, proposal)
+	}
+	planning, graph := planningPair(uuid.NewString(), uuid.NewString(), now, "", RepositorySnapshot{},
+		strings.Repeat("a", 64), project)
+	if !slices.Equal(planning.WritablePaths, project.Paths.Writable) ||
+		graph.Tasks[0].Objective != project.Objective ||
+		!slices.Equal(graph.Tasks[0].AcceptanceCriterionIds, []string{"AC-001", "AC-002"}) {
+		t.Fatalf("metadata-derived task graph = %#v %#v", planning, graph)
+	}
+	prompts, _ := runtimeManifests(t, t.TempDir(), project)
+	promptBody, err := os.ReadFile(prompts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := string(promptBody)
+	for _, expected := range []string{project.Name, project.PackageName, project.Objective} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("implementation prompt does not contain %q: %s", expected, prompt)
+		}
+	}
+}
+
+func TestPythonCandidatePathsMustRemainWithinCommittedWritableRoots(t *testing.T) {
+	for _, path := range []string{"src", "src/package/__init__.py"} {
+		if !pathWithinPolicy(path, []string{"src"}) {
+			t.Fatalf("expected path %q to be writable", path)
+		}
+	}
+	for _, path := range []string{"tests/test_app.py", "../src/app.py", "/src/app.py", "src/../tests"} {
+		if pathWithinPolicy(path, []string{"src"}) {
+			t.Fatalf("unsafe path %q was writable", path)
+		}
+	}
 }
 
 func TestPackagedProcessMountsAreExplicitAndCredentialFilesAreReadOnly(t *testing.T) {
@@ -119,6 +195,21 @@ func runBetaProcesses(t *testing.T) {
 		databaseURL = requireEnvironment(t, "TEST_DATABASE_URL")
 	}
 	root := t.TempDir()
+	var pythonReport *pythonProjectReport
+	if pythonProject {
+		sourceRoot := requireEnvironment(t, "RUNTIME_SOURCE_ROOT")
+		pythonReport = newPythonProjectReport(
+			requireEnvironment(t, "REPORT_OUTPUT"), databaseURL, filepath.Join(root, "repository"),
+			os.Getenv("PRESERVE_PROJECT"),
+		)
+		pythonReport.SourceCommit = strings.TrimSpace(runGitOutput(t, sourceRoot, "rev-parse", "HEAD"))
+		pythonReport.credentialValues = []string{apiKey, "runtime-operator-token"}
+		defer func() {
+			if err := pythonReport.finish(); err != nil {
+				t.Errorf("persist Python project evidence: %v", err)
+			}
+		}()
+	}
 	credentialRoot := ""
 	if packaged {
 		makeTreeAccessible(t, root)
@@ -128,6 +219,7 @@ func runBetaProcesses(t *testing.T) {
 		}
 	}
 	repository, remote, remoteURL, baseCommit := "", "", "", ""
+	var project *pythonProjectMetadata
 	repositoryOwner, repositoryName, branchPrefix := "local", "fixture", "harness/"
 	tokenFile, pushCredential, apiEndpoint := "", "", ""
 	artifactRoot, worktrees, verificationRoot := "", "", ""
@@ -146,7 +238,8 @@ func runBetaProcesses(t *testing.T) {
 		policy = canaryConfig.Policy
 	} else {
 		if pythonProject {
-			repository, remote, baseCommit = fixturePythonRepository(
+			pythonReport.setStage("bootstrap")
+			repository, remote, baseCommit, project = fixturePythonRepository(
 				t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
 			)
 		} else {
@@ -162,15 +255,22 @@ func runBetaProcesses(t *testing.T) {
 			executionImage = requireEnvironment(t, "RUNTIME_EXECUTION_IMAGE")
 			verificationImage = requireEnvironment(t, "RUNTIME_VERIFICATION_IMAGE")
 		} else {
+			if pythonReport != nil {
+				pythonReport.setStage("image-resolution")
+			}
 			executionImage = dockerImageID(t, "basic-execution-worker:runtime")
 			verificationImage = dockerImageID(t, "basic-verification-worker:runtime")
 		}
+		if pythonReport != nil {
+			pythonReport.BaseCommit = baseCommit
+			pythonReport.WorkerImageIDs["execution"] = executionImage
+			pythonReport.WorkerImageIDs["verification"] = verificationImage
+		}
 		paths := map[string]any{"readable": []string{"add.go", "add_test.go"}, "writable": []string{"add.go"}, "prohibited": []string{"Makefile", "add_test.go", "go.mod"}}
-		if pythonProject {
+		if project != nil {
 			paths = map[string]any{
-				"readable":   []string{"Makefile", "pyproject.toml", "src", "tests", "uv.lock"},
-				"writable":   []string{"src"},
-				"prohibited": []string{".harness", "Makefile", "pyproject.toml", "tests", "uv.lock"},
+				"readable": project.Paths.Readable, "writable": project.Paths.Writable,
+				"prohibited": project.Paths.Prohibited,
 			}
 		}
 		policy = map[string]any{
@@ -193,7 +293,7 @@ func runBetaProcesses(t *testing.T) {
 			}
 		}
 	}
-	promptPaths, manifestPaths := runtimeManifests(t, root)
+	promptPaths, manifestPaths := runtimeManifests(t, root, project)
 	token := "runtime-operator-token"
 	tokenDigest := sha256.Sum256([]byte(token))
 	var prServer *httptest.Server
@@ -279,6 +379,23 @@ func runBetaProcesses(t *testing.T) {
 			"api_key_file": minimaxCredential}
 	}
 	writeJSONFile(t, workflowConfig, workflowValues)
+	operatorExecutable, operatorConfig, operatorState, operatorExport := "", "", "", ""
+	if project != nil {
+		pythonReport.setStage("operator-installation")
+		operatorExecutable, pythonReport.HarnessVersion = installHarnessCLI(
+			t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
+		)
+		operatorTokenFile := filepath.Join(root, "operator-token")
+		writeFile(t, operatorTokenFile, token)
+		operatorConfig = filepath.Join(root, "operator.json")
+		operatorState = filepath.Join(root, "operator-state.json")
+		operatorExport = filepath.Join(root, "operator-export.json")
+		writeJSONFile(t, operatorConfig, map[string]any{
+			"schema_version": "harness_operator_config.v1", "endpoint": "http://" + apiAddress,
+			"token_file": operatorTokenFile, "project_root": repository,
+		})
+		assertFileMode(t, operatorConfig, 0o600)
+	}
 	planningSnapshot, err := SnapshotRepository(t.Context(), repository, baseCommit)
 	if err != nil {
 		t.Fatal(err)
@@ -317,34 +434,55 @@ func runBetaProcesses(t *testing.T) {
 	runID, taskID := uuid.NewString(), uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Second)
 	runKey := uuid.NewString()
-	objective := "correct Add without changing tests"
-	if pythonProject {
-		objective = "implement the trusted Python project without changing tests or configuration"
+	var firstRun mutationResponse
+	var firstOperatorRun []byte
+	operatorApprovalKeys := [3]string{uuid.NewString(), uuid.NewString(), uuid.NewString()}
+	if project != nil {
+		pythonReport.setStage("operator-intake")
+		_, firstOperatorRun = runOperatorCLI(t, operatorExecutable,
+			"operator", "run", "--config", operatorConfig, "--project", repository,
+			"--state-file", operatorState, "--idempotency-key", runKey)
+		assertFileMode(t, operatorState, 0o600)
+		state := readJSONObject(t, operatorState)
+		runID = requireJSONString(t, state, "run_id")
+		taskID = requireJSONString(t, state, "task_id")
+		pythonReport.RunID, pythonReport.TaskID = runID, taskID
+		if requireJSONString(t, state, "base_commit") != baseCommit {
+			t.Fatalf("operator state base commit = %#v", state["base_commit"])
+		}
+		runOperatorCLI(t, operatorExecutable,
+			"operator", "approve", "--gate", "specification", "--config", operatorConfig,
+			"--state-file", operatorState, "--idempotency-key", operatorApprovalKeys[0])
+		runOperatorCLI(t, operatorExecutable,
+			"operator", "approve", "--gate", "task-graph", "--config", operatorConfig,
+			"--state-file", operatorState, "--idempotency-key", operatorApprovalKeys[1])
+		t.Log("operator CLI approvals are automated test-fixture acceptance evidence, not human decisions")
+	} else {
+		runRequest := map[string]any{
+			"run_id": runID, "base_commit": baseCommit,
+			"content":            map[string]any{"objective": "correct Add without changing tests"},
+			"decision_timestamp": now,
+		}
+		firstRun = client.mutateResponseWithKey(
+			t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
+		)
+		if firstRun.replay {
+			t.Fatal("initial run intake was marked as a replay")
+		}
+		specRequest, specProposal := specificationPair(runID, now, nil)
+		client.mutate(t, "/v1/runs/"+runID+"/specification", client.revision(t, runID),
+			protoPair(t, specRequest, specProposal, now.Add(time.Second)), http.StatusOK)
+		client.mutate(t, "/v1/runs/"+runID+"/specification/approve", client.revision(t, runID),
+			map[string]any{"decision_timestamp": now.Add(2 * time.Second)}, http.StatusOK)
+		specBody, _ := proto.MarshalOptions{Deterministic: true}.Marshal(specProposal)
+		planningRequest, graph := planningPair(
+			runID, taskID, now, repository, planningSnapshot, Digest(specBody), nil,
+		)
+		client.mutate(t, "/v1/runs/"+runID+"/task-graph", client.revision(t, runID),
+			protoPair(t, planningRequest, graph, now.Add(3*time.Second)), http.StatusOK)
+		client.mutate(t, "/v1/runs/"+runID+"/task-graph/approve", client.revision(t, runID),
+			map[string]any{"decision_timestamp": now.Add(4 * time.Second)}, http.StatusOK)
 	}
-	runRequest := map[string]any{
-		"run_id": runID, "base_commit": baseCommit,
-		"content":            map[string]any{"objective": objective},
-		"decision_timestamp": now,
-	}
-	firstRun := client.mutateResponseWithKey(
-		t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
-	)
-	if firstRun.replay {
-		t.Fatal("initial run intake was marked as a replay")
-	}
-	specRequest, specProposal := specificationPair(runID, now)
-	client.mutate(t, "/v1/runs/"+runID+"/specification", client.revision(t, runID),
-		protoPair(t, specRequest, specProposal, now.Add(time.Second)), http.StatusOK)
-	client.mutate(t, "/v1/runs/"+runID+"/specification/approve", client.revision(t, runID),
-		map[string]any{"decision_timestamp": now.Add(2 * time.Second)}, http.StatusOK)
-	specBody, _ := proto.MarshalOptions{Deterministic: true}.Marshal(specProposal)
-	planningRequest, graph := planningPair(
-		runID, taskID, now, repository, planningSnapshot, Digest(specBody),
-	)
-	client.mutate(t, "/v1/runs/"+runID+"/task-graph", client.revision(t, runID),
-		protoPair(t, planningRequest, graph, now.Add(3*time.Second)), http.StatusOK)
-	client.mutate(t, "/v1/runs/"+runID+"/task-graph/approve", client.revision(t, runID),
-		map[string]any{"decision_timestamp": now.Add(4 * time.Second)}, http.StatusOK)
 	api.stop(t)
 	api = startProcess(t, ctx, apiBinary, apiConfig)
 	processes = append(processes, api)
@@ -359,6 +497,7 @@ func runBetaProcesses(t *testing.T) {
 	}
 	beforeRunReplay := snapshotRunIntakeSideEffects(t, pool, artifactRoot, runID)
 	var replayedRun mutationResponse
+	var replayedOperatorRun []byte
 	func() {
 		gitPath := filepath.Join(repository, ".git")
 		hiddenGitPath := filepath.Join(repository, ".git-hidden")
@@ -370,11 +509,30 @@ func runBetaProcesses(t *testing.T) {
 				t.Fatal(err)
 			}
 		}()
-		replayedRun = client.mutateResponseWithKey(
-			t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
-		)
+		if project != nil {
+			_, replayedOperatorRun = runOperatorCLI(t, operatorExecutable,
+				"operator", "run", "--config", operatorConfig, "--project", repository,
+				"--state-file", operatorState, "--idempotency-key", runKey)
+		} else {
+			runRequest := map[string]any{
+				"run_id": runID, "base_commit": baseCommit,
+				"content":            map[string]any{"objective": "correct Add without changing tests"},
+				"decision_timestamp": now,
+			}
+			replayedRun = client.mutateResponseWithKey(
+				t, "/v1/runs", "", runKey, runRequest, http.StatusCreated,
+			)
+		}
 	}()
-	if !replayedRun.replay || !bytes.Equal(replayedRun.body, firstRun.body) {
+	if project != nil && !bytes.Equal(replayedOperatorRun, firstOperatorRun) {
+		t.Fatalf("operator run replay changed bytes: first=%s replay=%s",
+			firstOperatorRun, replayedOperatorRun)
+	}
+	if project != nil {
+		pythonReport.ReplayCounts["run"] = 1
+		pythonReport.setStage("implementation")
+	}
+	if project == nil && (!replayedRun.replay || !bytes.Equal(replayedRun.body, firstRun.body)) {
 		t.Fatalf("run replay header=%v first=%s replay=%s",
 			replayedRun.replay, firstRun.body, replayedRun.body)
 	}
@@ -453,30 +611,75 @@ func runBetaProcesses(t *testing.T) {
 			completedBeforeRestart, completedAfterRestart)
 	}
 	workflowProcess.stop(t)
-	approvalPath := "/v1/runs/" + runID + "/approval"
-	approvalRevision := client.revision(t, runID)
 	approvalKey := uuid.NewString()
-	approvalRequest := map[string]any{
-		"decision_timestamp": now.Add(10 * time.Minute),
+	var approvalResponse map[string]any
+	var firstOperatorApproval []byte
+	approvalPath, approvalRevision := "", ""
+	var approvalRequest map[string]any
+	if project != nil {
+		pythonReport.setStage("candidate-approval")
+		operatorApprovalKeys[2] = approvalKey
+		approvalResponse, firstOperatorApproval = runOperatorCLI(t, operatorExecutable,
+			"operator", "approve", "--gate", "candidate", "--config", operatorConfig,
+			"--state-file", operatorState, "--idempotency-key", approvalKey)
+	} else {
+		approvalPath = "/v1/runs/" + runID + "/approval"
+		approvalRevision = client.revision(t, runID)
+		approvalRequest = map[string]any{"decision_timestamp": now.Add(10 * time.Minute)}
+		approvalResponse = client.mutateWithKey(
+			t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
+		)
 	}
-	approvalResponse := client.mutateWithKey(
-		t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
-	)
 	if approvalResponse["publication"] != nil || approvalResponse["result"] == nil {
 		t.Fatalf("approval response = %#v", approvalResponse)
 	}
-	submitPath := "/v1/runs/" + runID + "/submit"
-	submitRevision := client.revision(t, runID)
 	submitKey := uuid.NewString()
-	submitRequest := map[string]any{"decision_timestamp": now.Add(11 * time.Minute)}
-	publicationValue := client.mutateWithKey(
-		t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
-	)
+	var publicationValue map[string]any
+	var firstOperatorPublication []byte
+	submitPath, submitRevision := "", ""
+	var submitRequest map[string]any
+	if project != nil {
+		pythonReport.setStage("publication")
+		publicationValue, firstOperatorPublication = runOperatorCLI(t, operatorExecutable,
+			"operator", "submit", "--config", operatorConfig, "--state-file", operatorState,
+			"--idempotency-key", submitKey)
+		statusValue, statusBody := runOperatorCLI(t, operatorExecutable,
+			"operator", "status", runID, "--config", operatorConfig)
+		run, ok := statusValue["run"].(map[string]any)
+		if !ok || run["state"] != string(workflow.RunStateMergeReady) {
+			t.Fatalf("operator status = %s", statusBody)
+		}
+		exportValue, exportBody := runOperatorCLI(t, operatorExecutable,
+			"operator", "export", runID, "--config", operatorConfig, "--output", operatorExport)
+		if exportValue["schema_version"] != "support_bundle.v1" {
+			t.Fatalf("operator export = %s", exportBody)
+		}
+		assertFileMode(t, operatorConfig, 0o600)
+		assertFileMode(t, operatorState, 0o600)
+		assertFileMode(t, operatorExport, 0o600)
+		exported, err := os.ReadFile(operatorExport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(exported, exportBody) {
+			t.Fatalf("operator export bytes differ from CLI response: file=%s stdout=%s", exported, exportBody)
+		}
+	} else {
+		submitPath = "/v1/runs/" + runID + "/submit"
+		submitRevision = client.revision(t, runID)
+		submitRequest = map[string]any{"decision_timestamp": now.Add(11 * time.Minute)}
+		publicationValue = client.mutateWithKey(
+			t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
+		)
+	}
 	if publicationValue["candidate_commit"] == "" ||
 		publicationValue["pull_request_number"].(float64) <= 0 {
 		t.Fatalf("publication = %#v", publicationValue)
 	}
 	candidate := publicationValue["candidate_commit"].(string)
+	if pythonReport != nil {
+		pythonReport.CandidateCommit = candidate
+	}
 	if candidate == baseCommit {
 		t.Fatal("candidate equals base")
 	}
@@ -485,12 +688,21 @@ func runBetaProcesses(t *testing.T) {
 		t.Fatalf("publication branch = %#v", publicationValue["branch"])
 	}
 	changed := strings.Fields(runGitOutput(t, repository, "diff", "--name-only", baseCommit, candidate))
-	expectedChanged := "add.go"
-	if pythonProject {
-		expectedChanged = "src/live_demo/__init__.py"
-	}
-	if len(changed) != 1 || changed[0] != expectedChanged {
+	if project == nil && (len(changed) != 1 || changed[0] != "add.go") {
 		t.Fatalf("changed paths = %v", changed)
+	}
+	if project != nil {
+		if len(changed) == 0 {
+			t.Fatal("candidate did not change any files")
+		}
+		for _, path := range changed {
+			if !pathWithinPolicy(path, project.Paths.Writable) {
+				t.Fatalf("candidate path %q is outside committed writable paths %v", path, project.Paths.Writable)
+			}
+		}
+		if project.Golden && (len(changed) != 1 || changed[0] != "src/live_demo/__init__.py") {
+			t.Fatalf("golden changed paths = %v", changed)
+		}
 	}
 	candidatePath := filepath.Join(root, "candidate")
 	runGitE2E(t, repository, "worktree", "add", "--detach", candidatePath, candidate)
@@ -499,10 +711,27 @@ func runBetaProcesses(t *testing.T) {
 		command.Dir = repository
 		_ = command.Run()
 	})
+	if pythonReport != nil {
+		pythonReport.setStage("trusted-check")
+	}
 	command := exec.Command("make", "check")
 	command.Dir = candidatePath
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("candidate verification: %v: %s", err, output)
+	output, checkErr := command.CombinedOutput()
+	if pythonReport != nil {
+		pythonReport.CheckResult = commandResult(output, checkErr)
+	}
+	if checkErr != nil {
+		t.Fatalf("candidate verification: %v: %s", checkErr, output)
+	}
+	if project != nil && project.Golden {
+		pythonReport.setStage("console-check")
+		console := exec.Command("uv", "run", "--frozen", project.Name)
+		console.Dir = candidatePath
+		output, err := console.CombinedOutput()
+		pythonReport.ConsoleResult = commandResult(output, err)
+		if err != nil || string(output) != "ready\n" {
+			t.Fatalf("golden console result: err=%v output=%q", err, output)
+		}
 	}
 	runGitE2E(t, repository, "worktree", "remove", candidatePath)
 	if canaryMode {
@@ -519,24 +748,47 @@ func runBetaProcesses(t *testing.T) {
 	beforeReplay := snapshotSideEffects(
 		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
 	)
+	if project != nil && (beforeReplay.reasoning != 2 || beforeReplay.approvals != 1 ||
+		beforeReplay.publications != 1 || beforeReplay.pullRequests != 1) {
+		t.Fatalf("installed operator repeated a lifecycle effect: %#v", beforeReplay)
+	}
 
 	api.stop(t)
 	api = startProcess(t, ctx, apiBinary, apiConfig)
 	processes = append(processes, api)
 	waitHTTP(t, "http://"+apiAddress+"/healthz", "", http.StatusOK)
-	replayedApproval := client.mutateWithKey(
-		t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
-	)
-	if !reflect.DeepEqual(replayedApproval, approvalResponse) {
-		t.Fatalf("approval replay changed response: first=%#v replay=%#v",
-			approvalResponse, replayedApproval)
-	}
-	replayedPublication := client.mutateWithKey(
-		t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
-	)
-	if !reflect.DeepEqual(replayedPublication, publicationValue) {
-		t.Fatalf("publication replay changed response: first=%#v replay=%#v",
-			publicationValue, replayedPublication)
+	if project != nil {
+		_, replayedApproval := runOperatorCLI(t, operatorExecutable,
+			"operator", "approve", "--gate", "candidate", "--config", operatorConfig,
+			"--state-file", operatorState, "--idempotency-key", approvalKey)
+		_, replayedPublication := runOperatorCLI(t, operatorExecutable,
+			"operator", "submit", "--config", operatorConfig, "--state-file", operatorState,
+			"--idempotency-key", submitKey)
+		if !bytes.Equal(replayedApproval, firstOperatorApproval) ||
+			!bytes.Equal(replayedPublication, firstOperatorPublication) {
+			t.Fatalf("operator replay changed bytes: approval=%t publication=%t",
+				bytes.Equal(replayedApproval, firstOperatorApproval),
+				bytes.Equal(replayedPublication, firstOperatorPublication))
+		}
+		pythonReport.ReplayCounts["approval"] = 1
+		pythonReport.ReplayCounts["publication"] = 1
+		assertFileMode(t, operatorConfig, 0o600)
+		assertFileMode(t, operatorState, 0o600)
+	} else {
+		replayedApproval := client.mutateWithKey(
+			t, approvalPath, approvalRevision, approvalKey, approvalRequest, http.StatusOK,
+		)
+		if !reflect.DeepEqual(replayedApproval, approvalResponse) {
+			t.Fatalf("approval replay changed response: first=%#v replay=%#v",
+				approvalResponse, replayedApproval)
+		}
+		replayedPublication := client.mutateWithKey(
+			t, submitPath, submitRevision, submitKey, submitRequest, http.StatusOK,
+		)
+		if !reflect.DeepEqual(replayedPublication, publicationValue) {
+			t.Fatalf("publication replay changed response: first=%#v replay=%#v",
+				publicationValue, replayedPublication)
+		}
 	}
 	afterReplay := snapshotSideEffects(
 		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
@@ -557,11 +809,26 @@ func runBetaProcesses(t *testing.T) {
 	if packaged {
 		makePackagedPathAccessible(t, artifactRoot)
 	}
-	assertSecretAbsent(t, apiKey, pool, artifactRoot, repository,
-		[]string{
-			apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
-			manifestPaths[0], manifestPaths[1],
-		}, processes)
+	secretScanFiles := []string{
+		apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
+		manifestPaths[0], manifestPaths[1],
+	}
+	if project != nil {
+		secretScanFiles = append(secretScanFiles, operatorConfig, operatorState, operatorExport)
+	}
+	assertSecretAbsent(t, apiKey, pool, artifactRoot, repository, secretScanFiles, processes)
+	if project != nil {
+		assertSecretAbsent(t, token, pool, artifactRoot, repository,
+			[]string{operatorConfig, operatorState, operatorExport}, processes)
+		for name, body := range map[string][]byte{
+			"run": firstOperatorRun, "approval": firstOperatorApproval,
+			"publication": firstOperatorPublication,
+		} {
+			if bytes.Contains(body, []byte(apiKey)) || bytes.Contains(body, []byte(token)) {
+				t.Fatalf("credential found in installed operator %s output", name)
+			}
+		}
+	}
 	if canaryMode {
 		for _, secret := range canaryCredentialValues {
 			assertSecretAbsent(t, secret, pool, artifactRoot,
@@ -597,6 +864,9 @@ func runBetaProcesses(t *testing.T) {
 			t.Fatal(err)
 		}
 		fmt.Println(string(encoded))
+	}
+	if pythonReport != nil {
+		pythonReport.markPassed()
 	}
 }
 
@@ -990,26 +1260,32 @@ func fixtureRepository(t *testing.T, root string) (string, string, string) {
 
 func fixturePythonRepository(
 	t *testing.T, root, sourceRoot string,
-) (string, string, string) {
+) (string, string, string, *pythonProjectMetadata) {
 	t.Helper()
 	repository := filepath.Join(root, "repository")
 	remote := filepath.Join(root, "remote.git")
-	specification := filepath.Join(root, "project-spec.json")
-	checks := filepath.Join(root, "checks")
-	if err := os.Mkdir(checks, 0o700); err != nil {
-		t.Fatal(err)
+	specification, checks := os.Getenv("PROJECT_SPEC"), os.Getenv("CHECKS")
+	golden := specification == "" && checks == ""
+	if golden {
+		specification = filepath.Join(root, "project-spec.json")
+		checks = filepath.Join(root, "checks")
+		if err := os.Mkdir(checks, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeJSONFile(t, specification, map[string]any{
+			"schema_version": "harness_python_project.v1",
+			"name":           "live-demo", "package_name": "live_demo",
+			"objective": "Implement main so it returns the exact string ready.",
+			"acceptance_criteria": []map[string]string{{
+				"id": "AC-001", "description": "main returns the exact string ready",
+			}},
+		})
+		writeFile(t, filepath.Join(checks, "test_acceptance.py"),
+			"from live_demo import main\n\n\ndef test_main_returns_ready() -> None:\n"+
+				"    assert main() == \"ready\"\n")
+	} else if specification == "" || checks == "" {
+		t.Fatal("PROJECT_SPEC and CHECKS must be set together")
 	}
-	writeJSONFile(t, specification, map[string]any{
-		"schema_version": "harness_python_project.v1",
-		"name":           "live-demo", "package_name": "live_demo",
-		"objective": "Implement main so it returns the exact string ready.",
-		"acceptance_criteria": []map[string]string{{
-			"id": "AC-001", "description": "main returns the exact string ready",
-		}},
-	})
-	writeFile(t, filepath.Join(checks, "test_acceptance.py"),
-		"from live_demo import main\n\n\ndef test_main_returns_ready() -> None:\n"+
-			"    assert main() == \"ready\"\n")
 	command := exec.Command("uv", "run", "--frozen", "harness-agents", "init", repository,
 		"--project-spec", specification, "--checks", checks)
 	command.Dir = sourceRoot
@@ -1020,7 +1296,59 @@ func fixturePythonRepository(
 	runGitE2E(t, repository, "remote", "add", "origin", remote)
 	runGitE2E(t, repository, "push", "-q", "origin", "main:main")
 	base := strings.TrimSpace(runGitOutput(t, repository, "rev-parse", "HEAD"))
-	return repository, "origin", base
+	project := loadPythonProjectMetadata(t, repository, base)
+	project.Golden = golden
+	return repository, "origin", base, project
+}
+
+func loadPythonProjectMetadata(t *testing.T, repository, commit string) *pythonProjectMetadata {
+	t.Helper()
+	body := runGitOutput(t, repository, "show", commit+":.harness/project.json")
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.DisallowUnknownFields()
+	var project pythonProjectMetadata
+	if err := decoder.Decode(&project); err != nil {
+		t.Fatalf("decode committed Python project metadata: %v", err)
+	}
+	if project.SchemaVersion != "harness_python_project.v1" || project.Name == "" ||
+		project.PackageName == "" || project.Objective == "" || project.MaximumTasks != 1 ||
+		len(project.AcceptanceCriteria) == 0 ||
+		!slices.Equal(project.TrustedChecks, []string{"make-check-v1"}) ||
+		len(project.Paths.Readable) == 0 || len(project.Paths.Writable) == 0 {
+		t.Fatalf("unsupported committed Python project metadata: %#v", project)
+	}
+	for _, paths := range [][]string{
+		project.Paths.Readable, project.Paths.Writable, project.Paths.Prohibited,
+	} {
+		for _, path := range paths {
+			if !cleanRelativePath(path) {
+				t.Fatalf("unsafe committed project path %q", path)
+			}
+		}
+	}
+	for _, criterion := range project.AcceptanceCriteria {
+		if criterion.ID == "" || criterion.Description == "" {
+			t.Fatalf("invalid committed acceptance criterion: %#v", criterion)
+		}
+	}
+	return &project
+}
+
+func cleanRelativePath(path string) bool {
+	return path != "" && path != "." && !filepath.IsAbs(path) && filepath.Clean(path) == path &&
+		path != ".." && !strings.HasPrefix(path, ".."+string(filepath.Separator))
+}
+
+func pathWithinPolicy(path string, roots []string) bool {
+	if !cleanRelativePath(path) {
+		return false
+	}
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 func smartGitRemote(t *testing.T, repository string) *httptest.Server {
@@ -1079,7 +1407,9 @@ func smartGitRemote(t *testing.T, repository string) *httptest.Server {
 	return server
 }
 
-func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
+func runtimeManifests(
+	t *testing.T, root string, project *pythonProjectMetadata,
+) ([2]string, [2]string) {
 	t.Helper()
 	var prompts [2]string
 	var manifests [2]string
@@ -1091,7 +1421,7 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 			"a non-empty rationale, and acceptance_criterion_ids exactly [\"AC-001\"]. " +
 			"Set requested_declared_check_ids exactly [\"make-check-v1\"]. Do not request a " +
 			"scope change and do not change tests or any other file."
-		if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
+		if project != nil && project.Golden {
 			prompt = "Return only a valid implementation_proposal.v1 JSON object for the " +
 				"approved task. Set a non-empty summary and exactly one changes item: path " +
 				"src/live_demo/__init__.py, operation update, expected_original_sha256 equal " +
@@ -1103,6 +1433,22 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 				"exactly [\"AC-001\"]. Set requested_declared_check_ids exactly " +
 				"[\"make-check-v1\"]. Do not request a scope change and do not change tests, " +
 				"lockfiles, configuration, metadata, or any other file."
+		} else if project != nil {
+			criteria, err := json.Marshal(project.AcceptanceCriteria)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt = fmt.Sprintf(
+				"Return only a valid implementation_proposal.v1 JSON object for the approved task. "+
+					"Implement the operator objective %q for Python distribution %q and package %q. "+
+					"The acceptance criteria are %s. Inspect the supplied repository context and "+
+					"return a non-empty set of complete-file changes entirely within the committed "+
+					"writable paths %v. Set a non-empty rationale, set acceptance_criterion_ids to "+
+					"exactly the committed criterion IDs, set requested_declared_check_ids exactly "+
+					"[\"make-check-v1\"], do not request a scope change, and do not change any "+
+					"prohibited path.", project.Objective, project.Name, project.PackageName,
+				criteria, project.Paths.Writable,
+			)
 		}
 		if stageName == "review" {
 			prompt = "Independently review the exact candidate diff and verification evidence. " +
@@ -1144,7 +1490,7 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 }
 
 func specificationPair(
-	runID string, now time.Time,
+	runID string, now time.Time, project *pythonProjectMetadata,
 ) (*reasoningv1.SpecificationRequest, *reasoningv1.SpecificationProposal) {
 	envelope := reasoningEnvelope(runID, nil,
 		reasoningv1.ReasoningStage_REASONING_STAGE_SPECIFICATION, now)
@@ -1159,12 +1505,17 @@ func specificationPair(
 			VerificationMethod: "make check",
 		}},
 	}
-	if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
-		request.ProblemStatement = "The trusted Python main function is not implemented"
-		request.DesiredOutcome = "main returns the exact string ready"
-		proposal.Title = "Implement live demo"
-		proposal.Goal = "Return ready from main"
-		proposal.AcceptanceCriteria[0].Description = "main returns the exact string ready"
+	if project != nil {
+		request.ProblemStatement = "The trusted Python project requires the operator objective"
+		request.DesiredOutcome = project.Objective
+		proposal.Title = "Implement " + project.Name
+		proposal.Goal = project.Objective
+		proposal.AcceptanceCriteria = make([]*reasoningv1.AcceptanceCriterion, 0, len(project.AcceptanceCriteria))
+		for _, criterion := range project.AcceptanceCriteria {
+			proposal.AcceptanceCriteria = append(proposal.AcceptanceCriteria,
+				&reasoningv1.AcceptanceCriterion{CriterionId: criterion.ID,
+					Description: criterion.Description, VerificationMethod: "make check"})
+		}
 	}
 	return request, proposal
 }
@@ -1172,6 +1523,7 @@ func specificationPair(
 func planningPair(
 	runID, taskID string, now time.Time,
 	repository string, snapshot RepositorySnapshot, specificationDigest string,
+	project *pythonProjectMetadata,
 ) (*reasoningv1.TaskPlanningRequest, *reasoningv1.TaskGraphProposal) {
 	envelope := reasoningEnvelope(runID, nil,
 		reasoningv1.ReasoningStage_REASONING_STAGE_PLANNING, now.Add(time.Second))
@@ -1197,14 +1549,21 @@ func planningPair(
 			StopConditions:         []string{"make check passes"},
 		}},
 	}
-	if os.Getenv("BETA_PYTHON_PROJECT") == "1" {
-		request.ReadablePaths = []string{"Makefile", "pyproject.toml", "src", "tests", "uv.lock"}
-		request.WritablePaths = []string{"src"}
-		request.ProhibitedPaths = []string{".harness", "Makefile", "pyproject.toml", "tests", "uv.lock"}
-		graph.Tasks[0].Objective = "Implement main so it returns ready"
+	if project != nil {
+		criterionIDs := make([]string, 0, len(project.AcceptanceCriteria))
+		for _, criterion := range project.AcceptanceCriteria {
+			criterionIDs = append(criterionIDs, criterion.ID)
+		}
+		request.ReadablePaths = slices.Clone(project.Paths.Readable)
+		request.WritablePaths = slices.Clone(project.Paths.Writable)
+		request.ProhibitedPaths = slices.Clone(project.Paths.Prohibited)
+		request.AcceptanceCriterionIds = criterionIDs
+		graph.Tasks[0].Objective = project.Objective
+		graph.Tasks[0].AcceptanceCriterionIds = slices.Clone(criterionIDs)
 		graph.Tasks[0].ReadablePaths = slices.Clone(request.ReadablePaths)
 		graph.Tasks[0].WritablePaths = slices.Clone(request.WritablePaths)
 		graph.Tasks[0].ProhibitedPaths = slices.Clone(request.ProhibitedPaths)
+		graph.Tasks[0].RequiredCheckIds = slices.Clone(project.TrustedChecks)
 	}
 	return request, graph
 }
@@ -1333,6 +1692,88 @@ func dockerImageID(t *testing.T, image string) string {
 	t.Helper()
 	body := runCommandOutput(t, "docker", "image", "inspect", "--format", "{{.Id}}", image)
 	return strings.TrimSpace(body)
+}
+
+func installHarnessCLI(t *testing.T, root, sourceRoot string) (string, string) {
+	t.Helper()
+	wheelhouse := filepath.Join(root, "operator-wheel")
+	if err := os.Mkdir(wheelhouse, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.CommandContext(t.Context(), "uv", "build", "--wheel", "--out-dir", wheelhouse)
+	build.Dir = sourceRoot
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build operator wheel: %v: %s", err, output)
+	}
+	wheels, err := filepath.Glob(filepath.Join(wheelhouse, "*.whl"))
+	if err != nil || len(wheels) != 1 {
+		t.Fatalf("operator wheel outputs = %v, %v", wheels, err)
+	}
+	environment := filepath.Join(root, "operator-environment")
+	runCommandOutput(t, "uv", "venv", "--python", "3.14", environment)
+	runCommandOutput(t, "uv", "pip", "install", "--python",
+		filepath.Join(environment, "bin", "python"), wheels[0])
+	executable := filepath.Join(environment, "bin", "harness-agents")
+	if info, statErr := os.Stat(executable); statErr != nil || info.Mode()&0o111 == 0 {
+		t.Fatalf("installed operator executable is unavailable: %v", statErr)
+	}
+	version := strings.TrimSpace(runCommandOutput(t, filepath.Join(environment, "bin", "python"),
+		"-c", "import importlib.metadata; print(importlib.metadata.version('harness-agents'))"))
+	if version == "" {
+		t.Fatal("installed harness version is empty")
+	}
+	return executable, version
+}
+
+func runOperatorCLI(t *testing.T, executable string, arguments ...string) (map[string]any, []byte) {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), executable, arguments...)
+	body, err := command.Output()
+	if err != nil {
+		var diagnostics string
+		if exit, ok := err.(*exec.ExitError); ok {
+			diagnostics = string(exit.Stderr)
+		}
+		t.Fatalf("installed operator %v: %v: %s", arguments, err, diagnostics)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("installed operator returned invalid JSON: %v: %s", err, body)
+	}
+	return value, body
+}
+
+func readJSONObject(t *testing.T, path string) map[string]any {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("decode JSON object %s: %v", path, err)
+	}
+	return value
+}
+
+func requireJSONString(t *testing.T, value map[string]any, field string) string {
+	t.Helper()
+	result, ok := value[field].(string)
+	if !ok || result == "" {
+		t.Fatalf("JSON field %q is not a non-empty string: %#v", field, value[field])
+	}
+	return result
+}
+
+func assertFileMode(t *testing.T, path string, expected os.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != expected || !info.Mode().IsRegular() {
+		t.Fatalf("file %s mode = %s; want regular %s", path, info.Mode(), expected)
+	}
 }
 
 func runCommandOutput(t *testing.T, name string, arguments ...string) string {
