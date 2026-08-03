@@ -5,9 +5,7 @@
   "branch": "harness/python-project-inputs",
   "checkpoints_count": 1,
   "files_touched": [
-    "Makefile",
     "go/internal/runtime/process_e2e_test.go",
-    "python/src/harness_agents/project_inputs.py",
     "python/tests/test_python_project_inputs.py"
   ],
   "sessions": [
@@ -20,10 +18,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 60437,
+    "input_tokens": 499767,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1999360,
-    "output_tokens": 12356,
-    "api_call_count": 22
+    "cache_read_tokens": 26724864,
+    "output_tokens": 76038,
+    "api_call_count": 231
   }
 }
