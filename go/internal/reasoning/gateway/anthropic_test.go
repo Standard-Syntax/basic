@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -337,6 +338,10 @@ func TestAnthropicImplementationRejectsUnknownOutputFieldsDeterministically(t *t
 	if result.MalformedOutput == nil || result.Proposal != nil ||
 		len(result.ProviderResponse) == 0 {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.MalformedOutput.Kind != "unknown_field" ||
+		!reflect.DeepEqual(result.MalformedOutput.UnknownFields, []string{"unknown"}) {
+		t.Fatalf("diagnostic=%+v", result.MalformedOutput)
 	}
 }
 

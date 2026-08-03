@@ -207,9 +207,7 @@ func decodeReviewMessage(
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&projection); err != nil {
-		return reviewProjection{}, &MalformedOutput{
-			Message: "provider response is not valid review JSON",
-		}
+		return reviewProjection{}, malformedJSON("review", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {

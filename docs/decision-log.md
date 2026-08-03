@@ -738,3 +738,36 @@ and deadlock conflicts retry the complete transaction.
 
 ### Date
 2026-08-02
+
+## DEC-031: Review prompts include one exact minimal closed response
+
+### Decision
+Version the independent-review agent as `1.2.0`, include the exact six-field
+advisory-accept object in its prompt, and retain only structural diagnostics for
+malformed provider output.
+
+### Options considered
+Rely only on the provider JSON schema; retain malformed provider text in
+operator diagnostics; add a minimal valid example plus redacted structure.
+
+### Pros
+The live provider receives an unambiguous successful shape. Failures identify
+content shape, JSON class, byte offset, or a bounded safe unknown field without
+copying provider values into errors or logs.
+
+### Cons
+The prompt digest and immutable review-agent version change, and structural
+diagnostics cannot explain semantic provider reasoning.
+
+### Why this option
+The Python-project evaluation exhausted live review retries despite trusted
+verification passing. A concrete example addresses the observed ambiguity
+without weakening the closed schema or retaining sensitive response text.
+
+### Consequences
+Existing `1.1.0` registrations remain immutable. The raw provider response
+continues to exist only in its bounded content-addressed evidence artifact;
+logs and rejections expose structural metadata only.
+
+### Date
+2026-08-03

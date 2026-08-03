@@ -129,6 +129,10 @@ configuration. `make check` also runs `scripts/no-fake-provider-adapters.sh`,
 which rejects removed fake symbols, proposal-path loaders, and alternate
 production provider branches.
 
+The review `1.2.0` prompt contains one exact minimal advisory-accept object.
+Malformed responses expose only structural diagnostics; inspect their class,
+safe field name, or byte offset without copying raw provider text into logs.
+
 The local suite uses loopback HTTP and no provider credential. Run the explicit
 live smoke separately:
 

@@ -967,7 +967,10 @@ func runtimeManifests(t *testing.T, root string) ([2]string, [2]string) {
 		if stageName == "review" {
 			prompt = "Independently review the exact candidate diff and verification evidence. " +
 				"Return advisory accept only when the candidate is in scope and all assigned " +
-				"acceptance criteria are proven by the trusted check."
+				"acceptance criteria are proven by the trusted check. Return exactly this JSON " +
+				"when accepting without findings: {\"recommendation\":\"advisory_accept\"," +
+				"\"findings\":[],\"required_actions\":[],\"unrequested_changes\":[]," +
+				"\"residual_risks\":[],\"assumptions\":[]}"
 		}
 		prompts[index] = filepath.Join(root, stageName+".md")
 		writeFile(t, prompts[index], prompt)

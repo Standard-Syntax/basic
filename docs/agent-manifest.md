@@ -27,7 +27,9 @@ digest sidecar only after the definition and prompt validate completely.
 Definitions and prompts for all four stages live in `python/agents` and
 `python/prompts`. Their generated fixtures live in
 `tests/contracts/v1/manifest` and are covered by `make generate-check`.
-The four golden definitions use matched prompt protocol `1.1.0`. Shared
+The specification, planning, and implementation definitions use prompt
+protocol `1.1.0`; review uses `1.2.0` to add the exact minimal closed response
+example without changing its wire contract. Shared
 fragments are rendered deterministically into the checked-in UTF-8/LF prompt
 artifacts before manifests are compiled. Generation rejects missing fragments,
 unknown placeholders or fragments, duplicate sections, invalid line endings,

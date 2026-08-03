@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,11 @@ func TestAnthropicReviewMalformedOutputIsTypedResult(t *testing.T) {
 	if result.MalformedOutput == nil || result.Proposal != nil ||
 		len(result.ProviderResponse) == 0 {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.MalformedOutput.Kind != "unknown_field" ||
+		!reflect.DeepEqual(result.MalformedOutput.UnknownFields, []string{"extra"}) ||
+		!strings.Contains(result.MalformedOutput.Message, "unknown_field=extra") {
+		t.Fatalf("diagnostic=%+v", result.MalformedOutput)
 	}
 }
 

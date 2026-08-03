@@ -155,6 +155,9 @@ facts and completed rows are protected by PostgreSQL triggers.
   persist as exact, deterministic `SCHEMA_INVALID` outcomes.
 - Exact replay verifies the stored provider response and performs no credential
   lookup or provider request.
+- Malformed structured-output diagnostics contain only a closed failure class,
+  bounded byte offset, normalized content-block classes, and safe identifier-
+  shaped unknown field names. They never include provider text or field values.
 
 ## Phase 11 runtime boundary
 

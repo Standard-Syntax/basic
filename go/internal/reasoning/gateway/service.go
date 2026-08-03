@@ -76,7 +76,11 @@ type AdapterResult struct {
 // projected into the closed stage schema. Adapters return transport and
 // provider failures as errors instead.
 type MalformedOutput struct {
-	Message string
+	Message           string
+	Kind              string
+	JSONOffset        int64
+	UnknownFields     []string
+	ContentBlockTypes []string
 }
 
 type InvocationMetadata struct {
