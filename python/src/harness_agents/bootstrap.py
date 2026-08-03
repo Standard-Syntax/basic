@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from importlib.resources import files
+from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any, cast
 
@@ -188,7 +188,9 @@ def _metadata(spec: ProjectSpec) -> bytes:
 
 
 def _lockfile(spec: ProjectSpec) -> str:
-    template = files("harness_agents.templates").joinpath("uv.lock").read_text(encoding="utf-8")
+    template = (
+        resource_files("harness_agents.templates").joinpath("uv.lock").read_text(encoding="utf-8")
+    )
     marker = 'name = "harness-bootstrap-template"'
     if template.count(marker) != 1:
         raise ManifestError("packaged bootstrap lockfile is invalid")
