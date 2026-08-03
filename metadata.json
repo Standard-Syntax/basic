@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3QDKTFEP79NNHF0RTWH17E",
+  "strategy": "manual-commit",
+  "branch": "harness/review-output-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/agent-manifest.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/security.md",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_review.go",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/service.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "python/agents/review.json",
+    "python/prompts/review.md",
+    "python/src/harness_agents/prompt_protocol.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": "/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 464480,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6982656,
+    "output_tokens": 24464,
+    "api_call_count": 56
+  }
+}

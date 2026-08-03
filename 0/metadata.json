@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ3QDKTFEP79NNHF0RTWH17E",
+  "session_id": "019fc596-29d0-7933-bc8c-ac8992109273",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T11:51:21.057872528Z",
+  "branch": "harness/review-output-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/agent-manifest.md",
+    "docs/decision-log.md",
+    "docs/development.md",
+    "docs/security.md",
+    "go/internal/reasoning/gateway/anthropic.go",
+    "go/internal/reasoning/gateway/anthropic_review.go",
+    "go/internal/reasoning/gateway/anthropic_review_test.go",
+    "go/internal/reasoning/gateway/anthropic_test.go",
+    "go/internal/reasoning/gateway/service.go",
+    "go/internal/runtime/process_e2e_test.go",
+    "python/agents/review.json",
+    "python/prompts/review.md",
+    "python/src/harness_agents/prompt_protocol.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "68d30e342a4f",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 464480,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 6982656,
+    "output_tokens": 24464,
+    "api_call_count": 56
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T11:51:21.009353346Z",
+    "agent_lines": 137,
+    "agent_removed": 15,
+    "human_added": 2,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 139,
+    "total_lines_changed": 156,
+    "agent_percentage": 97.43589743589743,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}
