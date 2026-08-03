@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4KRRBP3GKGZK0094N45PS8",
+  "strategy": "manual-commit",
+  "branch": "harness/python-lifecycle-evidence",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/runtime/python_report_test.go",
+    "python/src/harness_agents/project_inputs.py",
+    "python/tests/test_python_project_inputs.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 54945,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 4404992,
+    "output_tokens": 21327,
+    "api_call_count": 25
+  }
+}
