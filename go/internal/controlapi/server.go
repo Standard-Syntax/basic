@@ -523,16 +523,7 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 		writeRawJSON(w, reservation.StatusCode, reservation.Response)
 		return
 	}
-	var operationParent context.Context
-	var operationCancel context.CancelFunc
-	if _, suffix, ok := parseRunPath(request.URL.Path); ok &&
-		(suffix == "/approval" || suffix == "/submit") {
-		operationParent, operationCancel = context.WithTimeout(
-			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
-		)
-	} else {
-		operationParent, operationCancel = context.WithCancel(request.Context())
-	}
+	operationParent, operationCancel := mutationOperationParent(request)
 	operationCtx, stopRenewal := s.startReservationRenewal(
 		operationParent, key, reservation.FencingToken, idem.ReservationTTL,
 	)
@@ -545,42 +536,49 @@ func (s *Server) handleMutation(w http.ResponseWriter, request *http.Request, pr
 	if err != nil {
 		status, response = s.domainError(err)
 		if status >= http.StatusInternalServerError {
-			cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
-			defer cleanupCancel()
-			if abandonErr := s.runtime.AbandonIdempotency(
-				cleanupCtx, key, reservation.FencingToken,
-			); abandonErr != nil {
-				s.writeDomainError(w, abandonErr)
-				return
-			}
-			writeJSON(w, status, response)
+			s.abandonMutation(w, request.Context(), key, reservation.FencingToken, status, response)
 			return
 		}
-		encoded, marshalErr := json.Marshal(response)
-		if marshalErr != nil {
-			writeError(w, http.StatusInternalServerError, "internal", "encode response")
-			return
-		}
-		cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
-		defer cleanupCancel()
-		if completeErr := s.runtime.CompleteIdempotency(
-			cleanupCtx, key, reservation.FencingToken, status, encoded,
-		); completeErr != nil {
-			s.writeDomainError(w, completeErr)
-			return
-		}
-		writeRawJSON(w, status, encoded)
+	}
+	s.completeMutation(w, request.Context(), key, reservation.FencingToken, status, response)
+}
+
+func mutationOperationParent(request *http.Request) (context.Context, context.CancelFunc) {
+	if _, suffix, ok := parseRunPath(request.URL.Path); ok &&
+		(suffix == "/approval" || suffix == "/submit") {
+		return context.WithTimeout(
+			context.WithoutCancel(request.Context()), MaximumDetachedOperationTimeout,
+		)
+	}
+	return context.WithCancel(request.Context())
+}
+
+func (s *Server) abandonMutation(
+	w http.ResponseWriter, ctx context.Context, key string, fence uint64,
+	status int, response any,
+) {
+	cleanupCtx, cleanupCancel := detachedIdempotencyContext(ctx)
+	defer cleanupCancel()
+	if err := s.runtime.AbandonIdempotency(cleanupCtx, key, fence); err != nil {
+		s.writeDomainError(w, err)
 		return
 	}
+	writeJSON(w, status, response)
+}
+
+func (s *Server) completeMutation(
+	w http.ResponseWriter, ctx context.Context, key string, fence uint64,
+	status int, response any,
+) {
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "encode response")
 		return
 	}
-	cleanupCtx, cleanupCancel := detachedIdempotencyContext(request.Context())
+	cleanupCtx, cleanupCancel := detachedIdempotencyContext(ctx)
 	defer cleanupCancel()
 	if err := s.runtime.CompleteIdempotency(
-		cleanupCtx, key, reservation.FencingToken, status, encoded,
+		cleanupCtx, key, fence, status, encoded,
 	); err != nil {
 		s.writeDomainError(w, err)
 		return
