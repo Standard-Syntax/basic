@@ -792,8 +792,8 @@ build configuration, policy metadata, or `make check`.
 
 ### Cons
 Operators must author acceptance tests and provision a remote and beta service
-configuration separately. Bootstrap invokes installed `uv` and Git and targets
-Python 3.13 or 3.14 only.
+configuration separately. Bootstrap requires installed Git and targets Python
+3.13 or 3.14 only.
 
 ### Why this option
 Generic lint and build health cannot prove an arbitrary natural-language goal,
