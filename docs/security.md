@@ -169,6 +169,9 @@ composite approval, a fresh revision precondition, and its own idempotency key.
 - Malformed structured-output diagnostics contain only a closed failure class,
   bounded byte offset, normalized content-block classes, and safe identifier-
   shaped unknown field names. They never include provider text or field values.
+- Support bundles never load provider evidence artifacts. Their reasoning view
+  excludes prompt and response content, provider request IDs, artifact paths,
+  and legacy free-form rejection summaries or messages.
 
 ## Phase 11 runtime boundary
 

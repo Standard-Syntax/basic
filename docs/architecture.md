@@ -131,6 +131,13 @@ mutations. Approval checkpoints the human decision and advances the run to
 reloads the immutable approval binding and exact task evidence before invoking
 the publication boundary.
 
+The authenticated support endpoint composes workflow snapshots, durable stage
+status, events, and a bounded projection of reasoning invocations. That
+projection deliberately omits prompts, raw provider responses, free-form
+provider diagnostics, provider request identifiers, and artifact locations;
+rejections expose only a stable category, code, retryability, and safe field
+names.
+
 Phase 10 adds constructor-selected Anthropic Messages adapters behind the
 existing implementation and review gateway seams. The official Go SDK is
 pinned at `v1.61.0` with SDK retries disabled. Trusted capability

@@ -772,6 +772,39 @@ logs and rejections expose structural metadata only.
 ### Date
 2026-08-03
 
+## DEC-034: Export structural support bundles without provider content
+
+### Decision
+Add an authenticated `support_bundle.v1` read endpoint that composes workflow,
+stage, event, and bounded reasoning status. Project reasoning failures into a
+closed structural diagnostic and never load or export raw provider artifacts.
+
+### Options considered
+Export all linked artifacts; export workflow state only; export workflow state
+plus a redacted reasoning projection.
+
+### Pros
+Operators can diagnose lifecycle and schema failures from one durable document
+without copying prompts, responses, credentials, provider request identifiers,
+or free-form legacy messages into routine support channels.
+
+### Cons
+The bundle cannot explain semantic provider reasoning and referenced evidence
+still requires separately authorized CAS inspection.
+
+### Why this option
+Raw provider output is immutable evidence, not routine diagnostic material.
+Structural status is sufficient to distinguish lifecycle, retry, and closed-
+schema failures while preserving that authority boundary.
+
+### Consequences
+The endpoint fails closed on malformed stored diagnostics or more than 1,000
+reasoning rows. Rejection details retain only sorted safe field names and stable
+categories; stored summaries and messages are intentionally ignored.
+
+### Date
+2026-08-03
+
 ## DEC-033: Separate human approval from draft submission
 
 ### Decision

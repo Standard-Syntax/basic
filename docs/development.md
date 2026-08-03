@@ -285,6 +285,11 @@ is `POST /v1/runs/{run_id}/approval` and records no Git or GitHub effect.
 An operator separately invokes `POST /v1/runs/{run_id}/submit` with the new
 `MERGE_READY` revision to publish the exact approval-bound candidate as a draft.
 Both operations have independent idempotency keys and exact replay responses.
+`GET /v1/runs/{run_id}/support-bundle` returns `support_bundle.v1` for an
+authenticated operator. It is safe to retain with an incident because it
+contains workflow evidence references and structural reasoning diagnostics,
+never raw provider request or response content. Treat referenced CAS artifacts
+as separately controlled evidence; the bundle does not retrieve them.
 `make beta-live-e2e` is the full two-process MiniMax
 gate: it builds both service binaries and worker images, starts disposable
 PostgreSQL, uses a disposable Git repository and loopback GitHub publication,

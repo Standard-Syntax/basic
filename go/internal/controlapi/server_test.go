@@ -78,6 +78,14 @@ type fakeRuntime struct {
 	enqueueErr        error
 }
 
+type fakeSupport struct{ diagnostics []ReasoningDiagnostic }
+
+func (f fakeSupport) ReasoningDiagnostics(
+	context.Context, string,
+) ([]ReasoningDiagnostic, error) {
+	return f.diagnostics, nil
+}
+
 type fakeRunIntake struct {
 	workflow *fakeWorkflow
 	runtime  *fakeRuntime
@@ -294,7 +302,7 @@ func testServer(t *testing.T, roles ...Role) (*Server, *fakeWorkflow, *fakeRunti
 	}, workflowStore, runtimeLedger, &fakeRunIntake{
 		workflow: workflowStore, runtime: runtimeLedger,
 	}, fakeArtifacts{}, &fakeBindings{},
-		fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+		fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,59 +330,63 @@ func TestNewRejectsEachRequiredNilDependency(t *testing.T) {
 		call func() error
 	}{
 		{name: "workflow", want: "workflow store is required", call: func() error {
-			_, err := New(config, nil, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, nil, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "runtime", want: "runtime ledger is required", call: func() error {
-			_, err := New(config, workflowStore, nil, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, nil, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "intake", want: "run intake is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, nil, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, nil, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "artifacts", want: "artifact store is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, nil, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, nil, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "bindings", want: "binding store is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, nil, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, nil, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "approval", want: "approval service is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, nil, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, nil, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "task graph approval", want: "task graph approval service is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, nil, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, nil, nil, fakeSupport{}, nil)
+			return err
+		}},
+		{name: "support", want: "support reader is required", call: func() error {
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil, nil)
 			return err
 		}},
 		{name: "typed nil workflow", want: "workflow store is required", call: func() error {
-			_, err := New(config, (*fakeWorkflow)(nil), runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, (*fakeWorkflow)(nil), runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil runtime", want: "runtime ledger is required", call: func() error {
-			_, err := New(config, workflowStore, (*fakeRuntime)(nil), intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, (*fakeRuntime)(nil), intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil intake", want: "run intake is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, (*fakeRunIntake)(nil), fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, (*fakeRunIntake)(nil), fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil artifacts", want: "artifact store is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, (*fakeArtifacts)(nil), &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, (*fakeArtifacts)(nil), &fakeBindings{}, fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil bindings", want: "binding store is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, (*fakeBindings)(nil), fakeApproval{}, fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, (*fakeBindings)(nil), fakeApproval{}, fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil approval", want: "approval service is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, (*fakeApproval)(nil), fakeTaskGraphApproval{}, nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, (*fakeApproval)(nil), fakeTaskGraphApproval{}, nil, fakeSupport{}, nil)
 			return err
 		}},
 		{name: "typed nil task graph approval", want: "task graph approval service is required", call: func() error {
-			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, (*fakeTaskGraphApproval)(nil), nil, nil)
+			_, err := New(config, workflowStore, runtimeLedger, intake, fakeArtifacts{}, &fakeBindings{}, fakeApproval{}, (*fakeTaskGraphApproval)(nil), nil, fakeSupport{}, nil)
 			return err
 		}},
 	}
@@ -564,6 +576,31 @@ func TestGetRunExposesTerminalFailureArtifactWithoutBody(t *testing.T) {
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"state":"FAILED"`) ||
 		!strings.Contains(response.Body.String(), strings.Repeat("a", 64)) || strings.Contains(response.Body.String(), "proposal") {
 		t.Fatalf("terminal run response = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSupportBundleReturnsOnlyRedactedReasoningDiagnostics(t *testing.T) {
+	server, workflowStore, _, token := testServer(t, RoleOperator)
+	runID := uuid.NewString()
+	workflowStore.run = &workflow.Run{ID: runID, Revision: 3}
+	provider, model, status := "minimax_anthropic", "MiniMax-M2.7", "rejected"
+	server.support = fakeSupport{diagnostics: []ReasoningDiagnostic{{
+		Stage: "review", Attempt: 1, Provider: &provider, Model: &model,
+		FinalStatus: &status, ProviderRequests: 1,
+		Rejection: &RejectionDiagnostic{
+			Code: 1, Category: "schema_invalid", Fields: []string{"provider_response"},
+		},
+	}}}
+	request := httptest.NewRequest(
+		http.MethodGet, "/v1/runs/"+runID+"/support-bundle", http.NoBody,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"schema_version":"support_bundle.v1"`) ||
+		!strings.Contains(response.Body.String(), `"category":"schema_invalid"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body)
 	}
 }
 

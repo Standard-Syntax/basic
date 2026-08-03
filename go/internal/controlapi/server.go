@@ -124,6 +124,7 @@ type Server struct {
 	taskGraphs  TaskGraphApproval
 	approval    ApprovalService
 	publication PublicationService
+	support     SupportReader
 	principals  []principalDigest
 	checks      map[string]struct{}
 	logger      *slog.Logger
@@ -153,7 +154,8 @@ func isNilDependency(value any) bool {
 func New(
 	config Config, workflowStore WorkflowStore, runtimeLedger IdempotencyLedger,
 	runIntake RunIntake, artifacts ArtifactStore, bindings BindingStore, approvalService ApprovalService,
-	taskGraphApproval TaskGraphApproval, publicationService PublicationService, logger *slog.Logger,
+	taskGraphApproval TaskGraphApproval, publicationService PublicationService, support SupportReader,
+	logger *slog.Logger,
 ) (*Server, error) {
 	normalized, err := normalizeServerConfig(config)
 	if err != nil {
@@ -187,6 +189,9 @@ func New(
 	if isNilDependency(taskGraphApproval) {
 		return nil, errors.New("task graph approval service is required")
 	}
+	if isNilDependency(support) {
+		return nil, errors.New("support reader is required")
+	}
 	checks, err := compileTrustedChecks(normalized.TrustedChecks)
 	if err != nil {
 		return nil, err
@@ -203,7 +208,7 @@ func New(
 	return &Server{
 		config: normalized, workflow: workflowStore, runtime: runtimeLedger, intake: runIntake,
 		artifacts: artifacts, bindings: bindings, taskGraphs: taskGraphApproval, approval: approvalService,
-		publication: publicationService, principals: principals,
+		publication: publicationService, support: support, principals: principals,
 		checks: checks, logger: logger,
 	}, nil
 }
@@ -398,7 +403,7 @@ func isMutationRoute(path string) bool {
 		return suffix == "/retry"
 	}
 	_, suffix, ok := parseRunPath(path)
-	return ok && suffix != "" && suffix != "/events"
+	return ok && suffix != "" && suffix != "/events" && suffix != "/support-bundle"
 }
 
 type statusWriter struct {
@@ -477,7 +482,45 @@ func (s *Server) handleGet(w http.ResponseWriter, request *http.Request, princip
 		writeJSON(w, http.StatusOK, map[string]any{"events": events})
 		return
 	}
+	if suffix == "/support-bundle" {
+		s.writeSupportBundle(w, request, runID)
+		return
+	}
 	writeError(w, http.StatusNotFound, "not_found", "route not found")
+}
+
+func (s *Server) writeSupportBundle(
+	w http.ResponseWriter, request *http.Request, runID string,
+) {
+	run, err := s.workflow.GetRun(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	tasks, err := s.workflow.ListTasks(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	stages, err := s.runtime.RunStages(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	events, err := s.workflow.ListEvents(request.Context(), "RUN", runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	diagnostics, err := s.support.ReasoningDiagnostics(request.Context(), runID)
+	if err != nil {
+		s.writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"schema_version": "support_bundle.v1", "run": run, "tasks": tasks,
+		"stages": stages, "events": events, "reasoning_diagnostics": diagnostics,
+	})
 }
 
 type mutationBody struct {
