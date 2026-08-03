@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4SPK85PMCFF8P96TMSH268",
+  "session_id": "019fc98c-8916-7cf1-9e7a-38b3c6fd5562",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-03T21:50:27.023338767Z",
+  "branch": "harness/live-planning",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "go/internal/reasoning/gateway/anthropic_planning.go",
+    "go/internal/reasoning/gateway/migrations/0023_planning_invocations.sql",
+    "go/internal/reasoning/gateway/planning_service.go",
+    "go/internal/reasoning/gateway/planning_service_test.go",
+    "python/agents/planning.json",
+    "python/src/harness_agents/prompt_protocol.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "83bc0b41c07c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 217635,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 9363712,
+    "output_tokens": 40100,
+    "api_call_count": 75
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-03T21:50:26.963623628Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 802,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 802,
+    "total_lines_changed": 807,
+    "agent_percentage": 0,
+    "metric_version": 2
+  }
+}
