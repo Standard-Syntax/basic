@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ4SBKGM2NRZSQPNYE2R5H2C",
+  "strategy": "manual-commit",
+  "branch": "harness/live-specification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/reasoning/gateway/anthropic_specification.go",
+    "go/internal/reasoning/gateway/migrations/0022_specification_invocations.sql",
+    "go/internal/reasoning/gateway/specification_service.go",
+    "go/internal/reasoning/gateway/specification_service_test.go",
+    "python/agents/specification.json",
+    "python/src/harness_agents/prompt_protocol.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 78597,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 3415552,
+    "output_tokens": 15145,
+    "api_call_count": 26
+  }
+}
