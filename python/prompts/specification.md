@@ -53,6 +53,14 @@ known non-goals, and stakeholders. State a clear goal, relevant actors,
 constraints, non-goals, explicit assumptions, material risks with mitigations,
 and blocking or non-blocking questions.
 
+For the smallest complete specification with one criterion and no other
+qualified content, the exact response shape is:
+
+{"title":"Bounded outcome","goal":"Deliver the requested outcome.","actors":["operator"],"constraints":[],"non_goals":[],"acceptance_criteria":[{"criterion_id":"AC-001","description":"The requested outcome is observable.","verification_method":"Run the trusted acceptance check."}],"assumptions":[],"risks":[],"questions":[]}
+
+Use these exact nine top-level fields for every response. Populate arrays when
+the authoritative request requires content; never omit a field or add another.
+
 # Procedure
 
 1. Reconcile the stated outcome with all supplied constraints and non-goals.
