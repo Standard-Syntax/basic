@@ -19,7 +19,7 @@
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
-      "prompt": "/0/prompt.txt"
+      "prompt": ""
     },
     {
       "metadata": "/1/metadata.json",
@@ -30,10 +30,10 @@
     }
   ],
   "token_usage": {
-    "input_tokens": 97442,
+    "input_tokens": 0,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 1335040,
-    "output_tokens": 9328,
-    "api_call_count": 22
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 1
   }
 }
