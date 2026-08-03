@@ -3,8 +3,10 @@
   "checkpoint_id": "01KZ2AAY04H5T4TTNGZX4E8JXP",
   "strategy": "manual-commit",
   "branch": "beta/task-graph-atomicity",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
+    "go/internal/controlapi/server.go",
+    "go/internal/controlapi/server_test.go",
     "go/internal/controlapi/task_graph_integration_test.go"
   ],
   "sessions": [
@@ -13,14 +15,14 @@
       "transcript": "/0/full.jsonl",
       "compact_transcript": "/0/transcript.jsonl",
       "content_hash": "/0/content_hash.txt",
-      "prompt": ""
+      "prompt": "/0/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 30189,
+    "input_tokens": 608619,
     "cache_creation_tokens": 0,
-    "cache_read_tokens": 4716032,
-    "output_tokens": 3308,
-    "api_call_count": 26
+    "cache_read_tokens": 21747456,
+    "output_tokens": 45143,
+    "api_call_count": 162
   }
 }
