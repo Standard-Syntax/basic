@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ5149K065S94AECQNZ09MTS",
+  "session_id": "019fc98c-8916-7cf1-9e7a-38b3c6fd5562",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-04T00:00:18.04886563Z",
+  "branch": "harness/python-project-handoff",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    "go/internal/runtime/process_e2e_test.go",
+    "go/internal/runtime/python_report_test.go",
+    "python/src/harness_agents/bootstrap.py"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "21ec1fdbf144",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1087826,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 59492096,
+    "output_tokens": 114220,
+    "api_call_count": 407
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-04T00:00:17.829362909Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 143,
+    "human_removed": 10,
+    "total_committed": 0,
+    "total_lines_changed": 153,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 327,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".codex/config.toml": 3,
+        ".codex/hooks.json": 52,
+        ".opencode/plugins/entire.ts": 272
+      }
+    }
+  ]
+}
