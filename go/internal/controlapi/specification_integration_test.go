@@ -32,7 +32,7 @@ func TestSpecificationApprovalRollsBackEveryWriteAndReplaysExactly(t *testing.T)
 			at := intake.request.Command.Meta.Timestamp.Add(time.Second)
 			if _, err := store.ExecuteRun(t.Context(), workflow.ProposeSpecification{
 				Meta: workflow.CommandEnvelope{CommandID: uuid.NewString(),
-					Actor:            workflow.Actor{ID: uuid.NewString(), Kind: workflow.ActorReasoningService},
+					Actor:            workflow.Actor{ID: uuid.NewString(), Kind: workflow.ActorWorkflowService},
 					ExpectedRevision: 1, Timestamp: at, CorrelationID: uuid.NewString(), CausationID: uuid.NewString()},
 				ID: runID, Specification: ref,
 			}); err != nil {
