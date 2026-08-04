@@ -723,8 +723,9 @@ func TestPythonProjectPreservationRejectsDanglingRevision(t *testing.T) {
 	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
 		"commit", "-qm", "candidate")
 	revision := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runGitOutput(t, source, "branch", "--show-current"))
 	runGitE2E(t, source, "checkout", "--detach", "-q", revision)
-	runGitE2E(t, source, "update-ref", "-d", "refs/heads/main")
+	runGitE2E(t, source, "update-ref", "-d", "refs/heads/"+branch)
 
 	if err := scanAndPreserveProject(source, filepath.Join(root, "preserved"), revision, nil); err == nil ||
 		!strings.Contains(err.Error(), "repository ref") {
