@@ -122,3 +122,15 @@ func TestPlanningRequestRejectsInvalidScopeAndLimits(t *testing.T) {
 		t.Fatal("path traversal accepted")
 	}
 }
+
+func TestPlanningRequestRejectsTaskIdentity(t *testing.T) {
+	var request reasoningv1.TaskPlanningRequest
+	if err := proto.Unmarshal(planningFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "TASK-001"
+	request.Envelope.TaskId = &taskID
+	if _, err := MapTaskPlanningRequest(&request); err == nil {
+		t.Fatal("task-bound planning request accepted")
+	}
+}

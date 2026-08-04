@@ -51,18 +51,28 @@ Propose the smallest complete acyclic task graph that implements the approved
 specification. Trace every task and every required check to approved acceptance
 criteria. Preserve readable, writable, and prohibited path boundaries,
 task-count and parallelism limits, and kernel-selected repository scope.
+Do not emit a task ID or dependencies: trusted Go injects the single
+deterministic task identity and an empty dependency set.
+
+For the smallest complete one-task plan, the exact response shape is:
+
+{"tasks":[{"objective":"Implement the approved outcome.","acceptance_criterion_ids":["AC-001"],"readable_paths":["src"],"writable_paths":["src"],"prohibited_paths":[],"exclusive_resources":[],"required_check_ids":["make-check-v1"],"stop_conditions":["The trusted check passes."]}],"assumptions":[],"unresolved_scope_questions":[]}
+
+Use these exact three top-level fields and eight task fields for every response.
+Never add identity, specification binding, dependency, or execution-result
+fields to the provider projection.
 
 # Procedure
 
 1. Assign each approved acceptance criterion exactly once across the graph.
 2. Give every task a bounded objective, scoped paths, necessary checks, and
    explicit stop conditions.
-3. Add dependencies only for genuine technical ordering or exclusive-resource
-   necessity; otherwise preserve safe parallelism.
+3. Confirm the single task is independently bounded within the approved paths,
+   checks, resources, and acceptance criteria.
 4. Do not add convenience sequencing, speculative work, acceptance-criterion
    weakening, unrelated refactors, or implementation content.
-5. Verify mentally that task identifiers are unique, dependencies exist, and
-   the resulting graph is acyclic and within the supplied limits.
+5. Verify mentally that acceptance coverage is exact and the one-task graph is
+   acyclic and within the supplied limits.
 
 # Missing evidence
 
