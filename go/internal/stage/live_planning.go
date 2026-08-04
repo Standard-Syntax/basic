@@ -116,7 +116,8 @@ func (h *LivePlanningHandlers) specify(ctx context.Context, job runtime.Job,
 	return orchestration.HandlerResult{Artifact: ref, Continue: false}, err
 }
 
-func (h *LivePlanningHandlers) plan(ctx context.Context, job runtime.Job,
+func (h *LivePlanningHandlers) plan( // skipcq: GO-R1005 -- explicit fail-closed planning evidence path
+	ctx context.Context, job runtime.Job,
 	ids orchestration.Identities) (orchestration.HandlerResult, error) {
 	if job.TaskID != nil {
 		return orchestration.HandlerResult{}, runtime.ErrConflict
@@ -145,7 +146,7 @@ func (h *LivePlanningHandlers) plan(ctx context.Context, job runtime.Job,
 		return orchestration.HandlerResult{}, h.fail(ctx, job.RunID, ids.CommandID, "invalid repository map", nil)
 	}
 	created := h.now().UTC()
-	request, err := runtime.BuildPlanningReasoningRequest(runtime.PlanningReasoningInput{
+	request, err := runtime.BuildPlanningReasoningRequest(&runtime.PlanningReasoningInput{
 		RequestID: ids.InvocationID, RunID: job.RunID, Attempt: job.Attempt,
 		ManifestDigest: h.config.PlanningManifestDigest, CreatedAt: created,
 		ExpiresAt: created.Add(h.config.ReasoningTimeout), ApprovedSpecification: *binding.ApprovedSpecification,

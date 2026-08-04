@@ -111,8 +111,11 @@ type PlanningReasoningInput struct {
 }
 
 func BuildPlanningReasoningRequest(
-	input PlanningReasoningInput,
+	input *PlanningReasoningInput,
 ) (*reasoningv1.TaskPlanningRequest, error) {
+	if input == nil {
+		return nil, ErrConflict
+	}
 	if input.Specification == nil || len(input.Specification.GetAcceptanceCriteria()) == 0 ||
 		input.RunID == "" || input.RequestID == "" || input.ManifestDigest == "" ||
 		input.Attempt == 0 || !input.ExpiresAt.After(input.CreatedAt) ||

@@ -391,7 +391,9 @@ def _write_state(path: Path, value: dict[str, Any], *, replace: bool = False) ->
         temporary.unlink(missing_ok=True)
 
 
-def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
+def load_state(  # skipcq: PYL-R0912 -- compatibility migration validates both closed state schemas
+    path: Path, config: OperatorConfig
+) -> dict[str, Any]:
     raw = _json_file(path, "operator state")
     if isinstance(raw, dict) and raw.get("schema_version") == LEGACY_STATE_SCHEMA:
         legacy = _object(raw, "operator state", _LEGACY_STATE_FIELDS)
