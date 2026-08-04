@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ543NWFJMEF3GP948EMZW0Z",
+  "strategy": "manual-commit",
+  "branch": "harness/live-planning-runtime",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Makefile",
+    "go/internal/controlapi/specification_integration_test.go",
+    "go/internal/publication/ledger.go",
+    "go/internal/runtime/ledger_integration_test.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 150263,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 11755264,
+    "output_tokens": 15498,
+    "api_call_count": 117
+  }
+}
