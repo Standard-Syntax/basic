@@ -32,6 +32,13 @@ class ProjectSpec:
     acceptance_criteria: tuple[dict[str, str], ...]
 
 
+@dataclass(frozen=True)
+class BootstrapResult:
+    destination: Path
+    trusted_base_commit: str
+    console_command: str
+
+
 def _object(value: object, name: str, fields: frozenset[str]) -> dict[str, Any]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ManifestError(f"{name} must be an object")
@@ -223,9 +230,13 @@ def _run(arguments: list[str], root: Path) -> None:
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
     }
+    command_name = arguments[0]
+    executable = shutil.which(command_name, path=environment["PATH"])
+    if executable is None:
+        raise ManifestError(f"bootstrap command is unavailable: {command_name}")
     try:
         result = subprocess.run(
-            arguments,
+            [executable, *arguments[1:]],
             cwd=root,
             env=environment,
             check=False,
@@ -234,13 +245,38 @@ def _run(arguments: list[str], root: Path) -> None:
             timeout=30,
         )
     except subprocess.TimeoutExpired as error:
-        raise ManifestError(f"bootstrap command timed out: {arguments[0]}") from error
+        raise ManifestError(f"bootstrap command timed out: {command_name}") from error
     if result.returncode != 0:
-        diagnostic = result.stderr.strip() or result.stdout.strip() or arguments[0]
+        diagnostic = result.stderr.strip() or result.stdout.strip() or command_name
         raise ManifestError(f"bootstrap command failed: {diagnostic}")
 
 
-def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> None:
+def _trusted_base_commit(root: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/git", "rev-parse", "HEAD"],
+            cwd=root,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_SYSTEM": os.devnull,
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ManifestError("bootstrap command timed out: git rev-parse HEAD") from error
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stderr or "").strip() or (error.stdout or "").strip()
+        diagnostic = diagnostic or "git rev-parse HEAD"
+        raise ManifestError(f"bootstrap command failed: {diagnostic}") from error
+    return completed.stdout.strip()
+
+
+def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> BootstrapResult:
     destination = destination.resolve()
     if destination.exists():
         raise ManifestError("destination must not exist")
@@ -302,7 +338,13 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             ],
             temporary,
         )
+        trusted_base_commit = _trusted_base_commit(temporary)
         temporary.rename(destination)
+        return BootstrapResult(
+            destination=destination,
+            trusted_base_commit=trusted_base_commit,
+            console_command=f"uv run --frozen {spec.name}",
+        )
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)

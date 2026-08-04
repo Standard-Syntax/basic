@@ -23,30 +23,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const pythonProjectReportSchema = "harness_python_project_e2e_report.v1"
+const pythonProjectReportSchema = "harness_python_project_e2e_report.v2"
 
 type pythonProjectReport struct {
-	SchemaVersion    string                    `json:"schema_version"`
-	Status           string                    `json:"status"`
-	Failure          pythonReportFailure       `json:"failure"`
-	RunID            string                    `json:"run_id"`
-	TaskID           string                    `json:"task_id"`
-	BaseCommit       string                    `json:"base_commit"`
-	CandidateCommit  string                    `json:"candidate_commit"`
-	ArtifactDigests  []string                  `json:"artifact_digests"`
-	LifecycleStates  map[string]string         `json:"lifecycle_states"`
-	StageTimings     []pythonReportStageTiming `json:"stage_timings"`
-	HarnessVersion   string                    `json:"installed_harness_version"`
-	SourceCommit     string                    `json:"source_commit"`
-	WorkerImageIDs   map[string]string         `json:"worker_image_ids"`
-	ReplayCounts     map[string]int            `json:"replay_counts"`
-	ConsoleResult    pythonReportCommandResult `json:"console_result"`
-	CheckResult      pythonReportCommandResult `json:"check_result"`
-	output           string
-	databaseURL      string
-	repository       string
-	preserveProject  string
-	credentialValues []string
+	SchemaVersion           string                    `json:"schema_version"`
+	Status                  string                    `json:"status"`
+	Failure                 pythonReportFailure       `json:"failure"`
+	RunID                   string                    `json:"run_id"`
+	TaskID                  string                    `json:"task_id"`
+	BaseCommit              string                    `json:"base_commit"`
+	CandidateCommit         string                    `json:"candidate_commit"`
+	ArtifactDigests         []string                  `json:"artifact_digests"`
+	LifecycleStates         map[string]string         `json:"lifecycle_states"`
+	StageTimings            []pythonReportStageTiming `json:"stage_timings"`
+	HarnessVersion          string                    `json:"installed_harness_version"`
+	SourceCommit            string                    `json:"source_commit"`
+	WorkerImageIDs          map[string]string         `json:"worker_image_ids"`
+	ReplayCounts            map[string]int            `json:"replay_counts"`
+	ConsoleResult           pythonReportCommandResult `json:"console_result"`
+	CheckResult             pythonReportCommandResult `json:"check_result"`
+	GeneratedCommand        string                    `json:"generated_command"`
+	InvocationCounts        map[string]int            `json:"reasoning_invocation_counts"`
+	PreservationStatus      string                    `json:"preservation_status"`
+	PreservedCheckoutCommit string                    `json:"preserved_checkout_commit"`
+	output                  string
+	databaseURL             string
+	repository              string
+	preserveProject         string
+	credentialValues        []string
 }
 
 type pythonReportFailure struct {
@@ -72,10 +76,12 @@ func newPythonProjectReport(output, databaseURL, repository, preserveProject str
 		SchemaVersion: pythonProjectReportSchema, Status: "failed",
 		Failure:         pythonReportFailure{Stage: "setup", Code: "setup_failed"},
 		ArtifactDigests: []string{}, LifecycleStates: map[string]string{},
-		StageTimings:   []pythonReportStageTiming{},
-		WorkerImageIDs: map[string]string{"execution": "", "verification": ""},
-		ReplayCounts:   map[string]int{"run": 0, "approval": 0, "publication": 0},
-		output:         output, databaseURL: databaseURL, repository: repository,
+		StageTimings:       []pythonReportStageTiming{},
+		WorkerImageIDs:     map[string]string{"execution": "", "verification": ""},
+		ReplayCounts:       map[string]int{"run": 0, "approval": 0, "publication": 0},
+		InvocationCounts:   map[string]int{"specification": 0, "planning": 0, "implementation": 0, "review": 0},
+		PreservationStatus: "not_requested",
+		output:             output, databaseURL: databaseURL, repository: repository,
 		preserveProject: preserveProject,
 	}
 }
@@ -92,10 +98,15 @@ func (r *pythonProjectReport) markPassed() {
 func (r *pythonProjectReport) finish() error {
 	r.collectDurableEvidence()
 	if r.preserveProject != "" {
+		r.PreservationStatus = "failed"
 		_, sourceErr := os.Lstat(r.repository)
 		if sourceErr == nil {
+			revision := r.BaseCommit
+			if r.CandidateCommit != "" {
+				revision = r.CandidateCommit
+			}
 			if err := scanAndPreserveProject(
-				r.repository, r.preserveProject, r.credentialValues,
+				r.repository, r.preserveProject, revision, r.credentialValues,
 			); err != nil {
 				if r.Status == "passed" {
 					r.Status = "failed"
@@ -106,6 +117,8 @@ func (r *pythonProjectReport) finish() error {
 				}
 				return err
 			}
+			r.PreservationStatus = "preserved"
+			r.PreservedCheckoutCommit = revision
 		} else if !errors.Is(sourceErr, os.ErrNotExist) {
 			if writeErr := writePythonProjectReport(r.output, r, r.credentialValues); writeErr != nil {
 				return errors.Join(sourceErr, writeErr)
@@ -313,7 +326,8 @@ func validatePythonProjectReport(report *pythonProjectReport) error {
 	if report.Status == "passed" {
 		if !validCommit(report.SourceCommit) || !validCommit(report.BaseCommit) ||
 			!validCommit(report.CandidateCommit) || report.RunID == "" || report.TaskID == "" ||
-			report.HarnessVersion == "" || !report.CheckResult.Executed || !report.CheckResult.Passed ||
+			report.HarnessVersion == "" || report.GeneratedCommand == "" ||
+			!report.CheckResult.Executed || !report.CheckResult.Passed ||
 			len(report.ArtifactDigests) == 0 || len(report.StageTimings) == 0 ||
 			report.LifecycleStates["run"] == "" || report.LifecycleStates["task"] == "" ||
 			report.ReplayCounts["run"] != 1 || report.ReplayCounts["approval"] != 1 ||
@@ -322,6 +336,11 @@ func validatePythonProjectReport(report *pythonProjectReport) error {
 			!validImageID(report.WorkerImageIDs["verification"]) {
 			return errors.New("passing Python project report is incomplete")
 		}
+	}
+	if (report.PreservationStatus != "not_requested" && report.PreservationStatus != "preserved" &&
+		report.PreservationStatus != "failed") ||
+		(report.PreservationStatus == "preserved" && !validCommit(report.PreservedCheckoutCommit)) {
+		return errors.New("Python project report contains invalid handoff metadata")
 	}
 	for _, digest := range report.ArtifactDigests {
 		if !validArtifactDigest(digest) {
@@ -343,7 +362,7 @@ func validImageID(value string) bool {
 	return strings.HasPrefix(value, "sha256:") && validArtifactDigest(strings.TrimPrefix(value, "sha256:"))
 }
 
-func scanAndPreserveProject(source, destination string, secrets []string) error {
+func scanAndPreserveProject(source, destination, revision string, secrets []string) error {
 	if source == "" {
 		return errors.New("generated project is unavailable")
 	}
@@ -359,8 +378,22 @@ func scanAndPreserveProject(source, destination string, secrets []string) error 
 	if err := validateNonSymlinkedDirectoryChain(parent); err != nil {
 		return err
 	}
+	status, err := preservationGitOutput(source, "status", "--porcelain")
+	if err != nil || status != "" {
+		return errors.New("generated project worktree must be clean")
+	}
 	if err := scanProject(source, secrets); err != nil {
 		return err
+	}
+	if !validCommit(revision) {
+		return errors.New("preservation revision is invalid")
+	}
+	if err := runPreservationGit(source, "cat-file", "-e", revision+"^{commit}"); err != nil {
+		return errors.New("preservation revision is unreachable")
+	}
+	refs, err := preservationGitOutput(source, "for-each-ref", "--contains="+revision, "--format=%(refname)")
+	if err != nil || refs == "" {
+		return errors.New("preservation revision is not reachable from a repository ref")
 	}
 	temporary, err := os.MkdirTemp(parent, ".preserved-project-*.tmp")
 	if err != nil {
@@ -370,8 +403,80 @@ func scanAndPreserveProject(source, destination string, secrets []string) error 
 	if err := copyProjectTree(source, temporary); err != nil {
 		return err
 	}
+	if err := sanitizePreservationGitConfig(temporary); err != nil {
+		return err
+	}
+	if err := runPreservationGit(temporary, "checkout", "--detach", "--force", revision); err != nil {
+		return err
+	}
+	head, err := preservationGitOutput(temporary, "rev-parse", "HEAD")
+	if err != nil || strings.TrimSpace(head) != revision {
+		return errors.New("preserved checkout does not match requested revision")
+	}
+	status, err = preservationGitOutput(temporary, "status", "--porcelain")
+	if err != nil || status != "" {
+		return errors.New("preserved checkout is not clean")
+	}
+	if err := runPreservationGit(temporary, "fsck", "--full", "--no-reflogs"); err != nil {
+		return errors.New("preserved repository has invalid Git objects")
+	}
+	if err := scanProject(temporary, secrets); err != nil {
+		return err
+	}
+	if err := scanGitObjects(temporary, revision, secrets); err != nil {
+		return err
+	}
 	if err := os.Rename(temporary, destination); err != nil {
 		return err
+	}
+	return nil
+}
+
+func preservationGitCommand(repository string, arguments ...string) *exec.Cmd {
+	trustedArguments := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false", "-C", repository}
+	command := exec.Command("git", append(trustedArguments, arguments...)...)
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=" + os.DevNull,
+		"GIT_CONFIG_SYSTEM=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
+	return command
+}
+
+func sanitizePreservationGitConfig(repository string) error {
+	config := []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tlogallrefupdates = true\n")
+	if err := os.WriteFile(filepath.Join(repository, ".git", "config"), config, 0o600); err != nil {
+		return fmt.Errorf("sanitize preserved Git configuration: %w", err)
+	}
+	return nil
+}
+
+func runPreservationGit(repository string, arguments ...string) error {
+	return preservationGitCommand(repository, arguments...).Run()
+}
+
+func preservationGitOutput(repository string, arguments ...string) (string, error) {
+	body, err := preservationGitCommand(repository, arguments...).Output()
+	return strings.TrimSpace(string(body)), err
+}
+
+func scanGitObjects(repository, revision string, secrets []string) error {
+	objects, err := preservationGitOutput(repository, "rev-list", "--objects", "--all", revision)
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(objects, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		body, err := preservationGitCommand(repository, "cat-file", "-p", fields[0]).Output()
+		if err != nil {
+			return err
+		}
+		for _, secret := range secrets {
+			if secret != "" && bytes.Contains(body, []byte(secret)) {
+				return errors.New("credential found while scanning generated Git objects")
+			}
+		}
 	}
 	return nil
 }
@@ -462,7 +567,8 @@ func TestPythonProjectReportShapeAtomicReplacementAndRedaction(t *testing.T) {
 	report.BaseCommit = strings.Repeat("b", 40)
 	report.CandidateCommit = strings.Repeat("c", 40)
 	report.RunID, report.TaskID = "run-id", "task-id"
-	report.HarnessVersion = "0.2.0"
+	report.HarnessVersion = "0.3.0"
+	report.GeneratedCommand = "uv run --frozen live-demo"
 	report.ArtifactDigests = []string{strings.Repeat("d", 64)}
 	report.LifecycleStates = map[string]string{"run": "MERGE_READY", "task": "ACCEPTED"}
 	report.StageTimings = []pythonReportStageTiming{{
@@ -491,7 +597,8 @@ func TestPythonProjectReportShapeAtomicReplacementAndRedaction(t *testing.T) {
 		t.Fatal("report is not JSON")
 	}
 	expected := []string{"artifact_digests", "base_commit", "candidate_commit", "check_result",
-		"console_result", "failure", "installed_harness_version", "lifecycle_states",
+		"console_result", "failure", "generated_command", "installed_harness_version", "lifecycle_states",
+		"preservation_status", "preserved_checkout_commit", "reasoning_invocation_counts",
 		"replay_counts", "run_id", "schema_version", "source_commit", "stage_timings",
 		"status", "task_id", "worker_image_ids"}
 	actual := make([]string, 0, len(value))
@@ -537,22 +644,126 @@ func TestPythonProjectPreservationRequiresScannedNonexistentDestination(t *testi
 	}
 	writeFile(t, filepath.Join(source, "app.py"), "safe\n")
 	destination := filepath.Join(root, "preserved")
-	if err := scanAndPreserveProject(source, destination, []string{"credential"}); err != nil {
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "fixture")
+	revision := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	if err := scanAndPreserveProject(source, destination, revision, []string{"credential"}); err != nil {
 		t.Fatal(err)
 	}
 	if body, err := os.ReadFile(filepath.Join(destination, "app.py")); err != nil || string(body) != "safe\n" {
 		t.Fatalf("preserved project = %q, %v", body, err)
 	}
-	if err := scanAndPreserveProject(source, destination, nil); err == nil {
+	if err := scanAndPreserveProject(source, destination, revision, nil); err == nil {
 		t.Fatal("existing preservation destination was accepted")
 	}
 	unsafe := filepath.Join(root, "unsafe")
 	writeFile(t, filepath.Join(source, "secret"), "credential")
-	if err := scanAndPreserveProject(source, unsafe, []string{"credential"}); err == nil {
+	if err := scanAndPreserveProject(source, unsafe, revision, []string{"credential"}); err == nil {
 		t.Fatal("credentialed project was preserved")
 	}
 	if _, err := os.Lstat(unsafe); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unsafe preservation destination exists: %v", err)
+	}
+}
+
+func TestPythonProjectPreservationChecksOutExactReachableRevision(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "app.py"), "base\n")
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "base")
+	base := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(source, "app.py"), "candidate\n")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "candidate")
+	candidate := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	runGitE2E(t, source, "checkout", "-q", base)
+
+	destination := filepath.Join(root, "preserved")
+	if err := scanAndPreserveProject(source, destination, candidate, nil); err != nil {
+		t.Fatal(err)
+	}
+	if head := strings.TrimSpace(runGitOutput(t, destination, "rev-parse", "HEAD")); head != candidate {
+		t.Fatalf("preserved HEAD=%s want=%s", head, candidate)
+	}
+	if branch := strings.TrimSpace(runGitOutput(t, destination, "branch", "--show-current")); branch != "" {
+		t.Fatalf("preserved checkout is attached to %q", branch)
+	}
+	if body, err := os.ReadFile(filepath.Join(destination, "app.py")); err != nil || string(body) != "candidate\n" {
+		t.Fatalf("preserved candidate body=%q err=%v", body, err)
+	}
+
+	if err := scanAndPreserveProject(source, filepath.Join(root, "missing"),
+		strings.Repeat("f", 40), nil); err == nil {
+		t.Fatal("unreachable candidate was accepted")
+	}
+	writeFile(t, filepath.Join(source, "dirty.py"), "dirty\n")
+	if err := scanAndPreserveProject(source, filepath.Join(root, "dirty"), base, nil); err == nil {
+		t.Fatal("dirty source was accepted")
+	}
+}
+
+func TestPythonProjectPreservationRejectsDanglingRevision(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "app.py"), "candidate\n")
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "candidate")
+	revision := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	branch := strings.TrimSpace(runGitOutput(t, source, "branch", "--show-current"))
+	runGitE2E(t, source, "checkout", "--detach", "-q", revision)
+	runGitE2E(t, source, "update-ref", "-d", "refs/heads/"+branch)
+
+	if err := scanAndPreserveProject(source, filepath.Join(root, "preserved"), revision, nil); err == nil ||
+		!strings.Contains(err.Error(), "repository ref") {
+		t.Fatalf("dangling preservation error=%v", err)
+	}
+}
+
+func TestPythonProjectPreservationIgnoresRepositoryLocalFilters(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "app.py"), "base\n")
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "base")
+	base := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(source, ".gitattributes"), "app.py filter=attack\n")
+	writeFile(t, filepath.Join(source, "app.py"), "candidate\n")
+	runGitE2E(t, source, "add", ".gitattributes", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "candidate")
+	candidate := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	runGitE2E(t, source, "checkout", "-q", base)
+	marker := filepath.Join(root, "smudge-executed")
+	runGitE2E(t, source, "config", "filter.attack.smudge", "sh -c 'touch "+marker+"; cat'")
+
+	destination := filepath.Join(root, "preserved")
+	if err := scanAndPreserveProject(source, destination, candidate, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository-local smudge filter executed: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(destination, "app.py")); err != nil || string(body) != "candidate\n" {
+		t.Fatalf("preserved candidate body=%q err=%v", body, err)
 	}
 }
 

@@ -282,6 +282,18 @@ def test_cli_init_bootstraps_project_from_installed_wheel(tmp_path: Path) -> Non
     )
     assert result.returncode == 0, result.stderr
     assert (destination / ".harness/project.json").is_file()
+    init_result = json.loads(result.stdout)
+    assert init_result == {
+        "schema_version": "harness_python_project_init.v1",
+        "destination": str(destination.resolve()),
+        "trusted_base_commit": subprocess.run(
+            ["git", "-C", str(destination), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip(),
+        "console_command": "uv run --frozen installed-demo",
+    }
 
 
 def test_cli_init_reports_malformed_project_json(

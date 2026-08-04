@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -239,7 +240,7 @@ func runBetaProcesses(t *testing.T) {
 	} else {
 		if pythonProject {
 			pythonReport.setStage("bootstrap")
-			repository, remote, baseCommit, project = fixturePythonRepository(
+			repository, remote, baseCommit, project, pythonReport.GeneratedCommand = fixturePythonRepository(
 				t, root, requireEnvironment(t, "RUNTIME_SOURCE_ROOT"),
 			)
 		} else {
@@ -1260,7 +1261,7 @@ func fixtureRepository(t *testing.T, root string) (string, string, string) {
 
 func fixturePythonRepository(
 	t *testing.T, root, sourceRoot string,
-) (string, string, string, *pythonProjectMetadata) {
+) (string, string, string, *pythonProjectMetadata, string) {
 	t.Helper()
 	repository := filepath.Join(root, "repository")
 	remote := filepath.Join(root, "remote.git")
@@ -1289,16 +1290,37 @@ func fixturePythonRepository(
 	command := exec.Command("uv", "run", "--frozen", "harness-agents", "init", repository,
 		"--project-spec", specification, "--checks", checks)
 	command.Dir = sourceRoot
-	if output, err := command.CombinedOutput(); err != nil {
+	output, err := command.CombinedOutput()
+	if err != nil {
 		t.Fatalf("bootstrap generated Python fixture: %v: %s", err, output)
+	}
+	var initialized struct {
+		SchemaVersion     string `json:"schema_version"`
+		Destination       string `json:"destination"`
+		TrustedBaseCommit string `json:"trusted_base_commit"`
+		ConsoleCommand    string `json:"console_command"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&initialized)
+	var trailing any
+	trailingErr := decoder.Decode(&trailing)
+	if decodeErr != nil || !errors.Is(trailingErr, io.EOF) ||
+		initialized.SchemaVersion != "harness_python_project_init.v1" ||
+		initialized.Destination != repository || initialized.ConsoleCommand == "" {
+		t.Fatalf("invalid bootstrap result: err=%v trailing=%v result=%#v",
+			decodeErr, trailingErr, initialized)
 	}
 	runGitE2E(t, root, "init", "--bare", "-q", remote)
 	runGitE2E(t, repository, "remote", "add", "origin", remote)
 	runGitE2E(t, repository, "push", "-q", "origin", "main:main")
 	base := strings.TrimSpace(runGitOutput(t, repository, "rev-parse", "HEAD"))
+	if initialized.TrustedBaseCommit != base {
+		t.Fatalf("bootstrap trusted base=%s checkout=%s", initialized.TrustedBaseCommit, base)
+	}
 	project := loadPythonProjectMetadata(t, repository, base)
 	project.Golden = golden
-	return repository, "origin", base, project
+	return repository, "origin", base, project, initialized.ConsoleCommand
 }
 
 func loadPythonProjectMetadata(t *testing.T, repository, commit string) *pythonProjectMetadata {
