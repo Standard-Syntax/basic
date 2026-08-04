@@ -69,6 +69,9 @@ func MapTaskPlanningRequest(value *reasoningv1.TaskPlanningRequest) (TaskPlannin
 	if err != nil {
 		return TaskPlanningRequest{}, err
 	}
+	if envelope.TaskID != nil {
+		return TaskPlanningRequest{}, errors.New("planning request must not contain a task ID")
+	}
 	if value.GetApprovedSpecificationId() == "" ||
 		!digestPattern.MatchString(value.GetApprovedSpecificationDigest()) ||
 		value.GetTaskCountLimit() == 0 || value.GetParallelismLimit() == 0 ||

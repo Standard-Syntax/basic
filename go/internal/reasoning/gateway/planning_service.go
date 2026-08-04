@@ -91,7 +91,7 @@ func NewPlanningService(
 		invocations: invocations, clock: clock, limits: limits, checks: checks}, nil
 }
 
-func (s *PlanningService) ProposeTaskGraph(
+func (s *PlanningService) ProposeTaskGraph( // skipcq: GO-R1005 -- explicit fail-closed gateway audit path
 	ctx context.Context, request *reasoningv1.TaskPlanningRequest,
 ) (PlanningOutcome, error) {
 	if err := ctx.Err(); err != nil {
@@ -107,7 +107,7 @@ func (s *PlanningService) ProposeTaskGraph(
 			"serialized request exceeds byte limit", nil, started)}, nil
 	}
 	if request == nil || request.GetEnvelope() == nil || request.GetEnvelope().GetRequestId() == "" ||
-		request.GetEnvelope().GetAttempt() == 0 {
+		request.GetEnvelope().GetAttempt() == 0 || request.GetEnvelope().TaskId != nil {
 		_, mapErr := contracts.MapTaskPlanningRequest(request)
 		return PlanningOutcome{Rejection: planningRejection(request, "request",
 			errorMessage(mapErr, "invalid planning request"), nil, started)}, nil

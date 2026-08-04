@@ -188,6 +188,30 @@ func TestPlanningServiceMalformedAndProviderFailureAreBounded(t *testing.T) {
 	}
 }
 
+func TestPlanningServiceRejectsTaskIdentityBeforePersistence(t *testing.T) {
+	request := planningRequestFixture(t)
+	taskID := "TASK-001"
+	request.Envelope.TaskId = &taskID
+	store := newMemoryArtifactStore()
+	repository := newMemoryInvocationRepository()
+	var calls atomic.Int32
+	service, err := NewPlanningService(&fakeResolver{}, planningAdapterFunc(func(
+		context.Context, manifest.Manifest, *reasoningv1.TaskPlanningRequest,
+	) (PlanningAdapterResult, error) {
+		calls.Add(1)
+		return PlanningAdapterResult{}, nil
+	}), store, repository, fixedClock{now: time.Now()}, PlanningPolicy{TrustedCheckIDs: []string{"CHECK-DOCS"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := service.ProposeTaskGraph(t.Context(), request)
+	if err != nil || outcome.Rejection.GetCode() != reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		calls.Load() != 0 || store.puts != 0 || len(repository.records) != 0 {
+		t.Fatalf("task-bound outcome=%+v calls=%d puts=%d records=%d err=%v",
+			outcome, calls.Load(), store.puts, len(repository.records), err)
+	}
+}
+
 func TestMiniMaxPlanningAdapterProjectionExcludesTaskAuthority(t *testing.T) {
 	request := planningRequestFixture(t)
 	request.Envelope.InputArtifacts = nil
