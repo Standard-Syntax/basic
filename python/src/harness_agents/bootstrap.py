@@ -313,11 +313,8 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             ],
             temporary,
         )
-        git_executable = shutil.which("git", path=os.environ.get("PATH", ""))
-        if git_executable is None:
-            raise ManifestError("bootstrap command is unavailable: git")
         completed = subprocess.run(
-            [git_executable, "rev-parse", "HEAD"],
+            ["/usr/bin/git", "rev-parse", "HEAD"],
             cwd=temporary,
             env={
                 "PATH": os.environ.get("PATH", ""),
