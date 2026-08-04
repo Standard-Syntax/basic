@@ -163,7 +163,7 @@ func assertNoTaskGraphApproval(t *testing.T, fixture *taskGraphFixture) {
 		(SELECT count(*) FROM workflow_commands WHERE command_id=$2),
 		(SELECT count(*) FROM workflow_tasks WHERE run_id=$1),
 		(SELECT count(*) FROM runtime_task_bindings WHERE run_id=$1),
-		(SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1)
+		(SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1 AND task_id IS NOT NULL)
 		FROM workflow_runs WHERE run_id=$1`, fixture.request.Command.ID,
 		fixture.request.Command.Meta.CommandID).Scan(
 		&state, &revision, &commandCount, &taskCount, &bindingCount, &jobCount)
@@ -194,7 +194,7 @@ func assertCompleteTaskGraphApproval(t *testing.T, fixture *taskGraphFixture) {
 		(SELECT count(*) FROM workflow_commands WHERE command_id=$2),
 		(SELECT count(*) FROM workflow_tasks WHERE run_id=$1),
 		(SELECT count(*) FROM runtime_task_bindings WHERE run_id=$1),
-		(SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1)
+		(SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1 AND task_id IS NOT NULL)
 		FROM workflow_runs WHERE run_id=$1`, fixture.request.Command.ID,
 		fixture.request.Command.Meta.CommandID).Scan(
 		&state, &revision, &commandCount, &taskCount, &bindingCount, &jobCount)
@@ -223,7 +223,7 @@ func assertCompleteTaskGraphApproval(t *testing.T, fixture *taskGraphFixture) {
 	var jobID, jobTaskID, stage string
 	var attempt uint32
 	err = fixture.intake.pool.QueryRow(t.Context(), `SELECT
-		job_id::text,task_id::text,attempt,stage FROM runtime_stage_jobs WHERE run_id=$1`,
+		job_id::text,task_id::text,attempt,stage FROM runtime_stage_jobs WHERE run_id=$1 AND task_id IS NOT NULL`,
 		fixture.request.Command.ID).Scan(&jobID, &jobTaskID, &attempt, &stage)
 	if err != nil {
 		t.Fatal(err)

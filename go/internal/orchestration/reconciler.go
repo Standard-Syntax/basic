@@ -16,13 +16,15 @@ import (
 )
 
 const (
-	StageStart                 = "start"
-	StageImplementationRequest = "implementation_request"
-	StageReasoning             = "implementation_reasoning"
-	StageExecution             = "execution"
-	StageVerification          = "verification"
-	StageReview                = "review"
-	StageAwaitingApproval      = "awaiting_approval"
+	StageSpecificationReasoning = "specification_reasoning"
+	StagePlanningReasoning      = "planning_reasoning"
+	StageStart                  = "start"
+	StageImplementationRequest  = "implementation_request"
+	StageReasoning              = "implementation_reasoning"
+	StageExecution              = "execution"
+	StageVerification           = "verification"
+	StageReview                 = "review"
+	StageAwaitingApproval       = "awaiting_approval"
 )
 
 var orderedStages = []string{

@@ -34,7 +34,7 @@ func TestPostgresClaimExpiryAndFencing(t *testing.T) {
 	}
 	defer pool.Close()
 	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	at := time.Now().UTC().Truncate(time.Microsecond)
+	at := time.Date(1999, time.January, 1, 0, 0, 0, 0, time.UTC)
 	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
 		Meta: workflow.CommandEnvelope{
 			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
@@ -111,7 +111,7 @@ func TestPostgresCompleteAndEnqueueIsAtomic(t *testing.T) {
 	defer pool.Close()
 
 	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	at := time.Now().UTC().Truncate(time.Microsecond)
+	at := time.Date(1998, time.January, 1, 0, 0, 0, 0, time.UTC)
 	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
 		Meta: workflow.CommandEnvelope{
 			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},
@@ -188,7 +188,7 @@ func TestPostgresTransientRescheduleUsesSeparateCounter(t *testing.T) {
 	}
 	defer pool.Close()
 	runID, actorID, commandID := uuid.NewString(), uuid.NewString(), uuid.NewString()
-	at := time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Date(1997, time.January, 1, 0, 0, 0, 0, time.UTC)
 	_, err = workflow.NewStore(pool).ExecuteRun(ctx, workflow.CreateRun{
 		Meta: workflow.CommandEnvelope{
 			CommandID: commandID, Actor: workflow.Actor{ID: actorID, Kind: workflow.ActorHuman},

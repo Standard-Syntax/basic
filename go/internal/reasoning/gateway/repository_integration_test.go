@@ -229,6 +229,23 @@ func TestReasoningMigrationReplays(t *testing.T) {
 	if providerOutcomeMigration != 1 {
 		t.Fatal("provider outcome migration was not recorded exactly once")
 	}
+	var livePlanningValidationMigration, validatedConstraints int
+	if err := pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM schema_migrations WHERE version=25`,
+	).Scan(&livePlanningValidationMigration); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(t.Context(), `SELECT count(*) FROM pg_constraint
+		WHERE conname IN ('reasoning_invocations_stage_check',
+		'reasoning_invocations_specification_task_check',
+		'reasoning_invocations_planning_task_check') AND convalidated`,
+	).Scan(&validatedConstraints); err != nil {
+		t.Fatal(err)
+	}
+	if livePlanningValidationMigration != 1 || validatedConstraints != 3 {
+		t.Fatalf("live planning migration=%d validated constraints=%d",
+			livePlanningValidationMigration, validatedConstraints)
+	}
 }
 
 func TestPostgresConcurrentIdenticalAndConflictingRequests(t *testing.T) {

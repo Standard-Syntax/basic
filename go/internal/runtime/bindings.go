@@ -180,6 +180,19 @@ func (r *BindingRepository) CheckpointSpecification(
 	)
 }
 
+func CheckpointSpecificationTx(
+	ctx context.Context, tx pgx.Tx, runID string, ref workflow.ArtifactRef,
+) error {
+	if tx == nil {
+		return ErrConflict
+	}
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	return checkpointRunTx(ctx, tx, runID,
+		"approved_specification_uri", "approved_specification_digest", ref)
+}
+
 func (r *BindingRepository) CheckpointTaskGraph(
 	ctx context.Context, runID string, graph workflow.ArtifactRef, task TaskBinding,
 ) error {

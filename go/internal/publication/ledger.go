@@ -107,7 +107,13 @@ func (h *memoryPublicationHandle) SavePullRequest(
 ) error {
 	h.ledger.mu.Lock()
 	defer h.ledger.mu.Unlock()
-	if h.entry.branch == nil || h.entry.pull != nil || h.entry.result != nil {
+	if h.entry.pull != nil {
+		if *h.entry.pull == checkpoint {
+			return nil
+		}
+		return ErrPublicationState
+	}
+	if h.entry.branch == nil || h.entry.result != nil {
 		return ErrPublicationState
 	}
 	value := checkpoint

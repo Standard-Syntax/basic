@@ -124,6 +124,7 @@ func (s EnvironmentCredentialSource) Credential(ctx context.Context) (string, er
 
 func MiniMaxModels() StaticCapabilityModels {
 	return StaticCapabilityModels{
+		"general_reasoning":  MiniMaxModel,
 		"strong_coding":      MiniMaxModel,
 		"independent_review": MiniMaxModel,
 	}

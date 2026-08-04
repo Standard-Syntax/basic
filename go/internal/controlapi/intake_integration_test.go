@@ -114,7 +114,7 @@ func newIntakeFixture(t *testing.T) *intakeFixture {
 	}
 	key, principal, runID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	content := json.RawMessage(`{"objective":"atomic"}`)
+	content := json.RawMessage(`{"schema_version":"run_intake_specification.v1","problem_statement":"atomic","desired_outcome":"atomic run","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]}`)
 	requestDigest := runtime.Digest([]byte(`{"wire":"request"}`))
 	request := RunIntakeRequest{
 		Idempotency: runtime.IdempotencyRequest{
@@ -137,7 +137,8 @@ func TestAtomicRunIntakeRollsBackEveryPrecommitFailure(t *testing.T) {
 	points := []IntakeFaultPoint{
 		FaultAfterReservation, FaultAfterIntakeCAS, FaultAfterRepositoryCAS,
 		FaultAfterPolicyCAS,
-		FaultAfterWorkflow, FaultAfterBinding, FaultAfterResponse, FaultIntakeBeforeCommit,
+		FaultAfterWorkflow, FaultAfterBinding, FaultAfterSpecEnqueue,
+		FaultAfterResponse, FaultIntakeBeforeCommit,
 	}
 	for _, point := range points {
 		t.Run(string(point), func(t *testing.T) {
@@ -275,7 +276,7 @@ func TestPostRunsExactHTTPReplaySkipsGitAndRejectsChangedBytes(t *testing.T) {
 	}
 	key, runID := uuid.NewString(), uuid.NewString()
 	body := []byte(`{"run_id":"` + runID + `","base_commit":"` + fixture.baseCommit +
-		`","content":{"objective":"atomic"},"decision_timestamp":"2026-07-31T12:00:00Z"}`)
+		`","content":{"schema_version":"run_intake_specification.v1","problem_statement":"atomic","desired_outcome":"atomic run","known_constraints":[],"known_non_goals":[],"stakeholders":["operator"]},"decision_timestamp":"2026-07-31T12:00:00Z"}`)
 	call := func(value []byte) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewReader(value))
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -440,21 +441,22 @@ func assertNoAcceptedRun(t *testing.T, fixture *intakeFixture) {
 func assertCompleteRun(t *testing.T, fixture *intakeFixture) {
 	t.Helper()
 	var state string
-	var runCount, bindingCount, commandCount, eventCount int
+	var runCount, bindingCount, commandCount, eventCount, jobCount int
 	err := fixture.pool.QueryRow(t.Context(), `SELECT state,
 		(SELECT count(*) FROM workflow_runs WHERE run_id=$1),
 		(SELECT count(*) FROM runtime_run_bindings WHERE run_id=$1),
 		(SELECT count(*) FROM workflow_commands WHERE aggregate_id=$1),
-		(SELECT count(*) FROM workflow_events WHERE aggregate_id=$1)
+		(SELECT count(*) FROM workflow_events WHERE aggregate_id=$1),
+		(SELECT count(*) FROM runtime_stage_jobs WHERE run_id=$1)
 		FROM workflow_runs WHERE run_id=$1`, fixture.request.Command.ID).Scan(
-		&state, &runCount, &bindingCount, &commandCount, &eventCount)
+		&state, &runCount, &bindingCount, &commandCount, &eventCount, &jobCount)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state != string(workflow.RunStateDraft) || runCount != 1 || bindingCount != 1 ||
-		commandCount != 1 || eventCount != 1 {
-		t.Fatalf("state=%s run=%d binding=%d command=%d event=%d",
-			state, runCount, bindingCount, commandCount, eventCount)
+		commandCount != 1 || eventCount != 1 || jobCount != 1 {
+		t.Fatalf("state=%s run=%d binding=%d command=%d event=%d job=%d",
+			state, runCount, bindingCount, commandCount, eventCount, jobCount)
 	}
 	var baseCommit, repositoryDigest string
 	if err := fixture.pool.QueryRow(t.Context(), `SELECT base_commit,repository_map_digest

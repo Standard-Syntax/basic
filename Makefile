@@ -65,7 +65,7 @@ integration-test: buildx-check
 	docker compose up -d --wait postgres
 	@status=0; \
 	cd go && TEST_DATABASE_URL='postgres://workflow:workflow@127.0.0.1:55433/workflow_test?sslmode=disable' \
-		go test -tags=integration -count=1 \
+		go test -tags=integration -count=1 -p=1 \
 			./internal/migration ./internal/workflow ./internal/registry ./internal/reasoning/gateway \
 			./internal/execution ./internal/verification ./internal/release ./internal/approval \
 			./internal/publication ./internal/controlapi ./internal/runtime ./internal/postgres || status=$$?; \
