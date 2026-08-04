@@ -230,9 +230,13 @@ def _run(arguments: list[str], root: Path) -> None:
         "GIT_CONFIG_SYSTEM": os.devnull,
         "GIT_TERMINAL_PROMPT": "0",
     }
+    command_name = arguments[0]
+    executable = shutil.which(command_name, path=environment["PATH"])
+    if executable is None:
+        raise ManifestError(f"bootstrap command is unavailable: {command_name}")
     try:
         result = subprocess.run(
-            arguments,
+            [executable, *arguments[1:]],
             cwd=root,
             env=environment,
             check=False,
@@ -241,9 +245,9 @@ def _run(arguments: list[str], root: Path) -> None:
             timeout=30,
         )
     except subprocess.TimeoutExpired as error:
-        raise ManifestError(f"bootstrap command timed out: {arguments[0]}") from error
+        raise ManifestError(f"bootstrap command timed out: {command_name}") from error
     if result.returncode != 0:
-        diagnostic = result.stderr.strip() or result.stdout.strip() or arguments[0]
+        diagnostic = result.stderr.strip() or result.stdout.strip() or command_name
         raise ManifestError(f"bootstrap command failed: {diagnostic}")
 
 
@@ -309,8 +313,11 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             ],
             temporary,
         )
+        git_executable = shutil.which("git", path=os.environ.get("PATH", ""))
+        if git_executable is None:
+            raise ManifestError("bootstrap command is unavailable: git")
         completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            [git_executable, "rev-parse", "HEAD"],
             cwd=temporary,
             env={
                 "PATH": os.environ.get("PATH", ""),

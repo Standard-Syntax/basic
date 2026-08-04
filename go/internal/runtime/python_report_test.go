@@ -391,12 +391,19 @@ func scanAndPreserveProject(source, destination, revision string, secrets []stri
 	if err := runPreservationGit(source, "cat-file", "-e", revision+"^{commit}"); err != nil {
 		return errors.New("preservation revision is unreachable")
 	}
+	refs, err := preservationGitOutput(source, "for-each-ref", "--contains="+revision, "--format=%(refname)")
+	if err != nil || refs == "" {
+		return errors.New("preservation revision is not reachable from a repository ref")
+	}
 	temporary, err := os.MkdirTemp(parent, ".preserved-project-*.tmp")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(temporary)
 	if err := copyProjectTree(source, temporary); err != nil {
+		return err
+	}
+	if err := sanitizePreservationGitConfig(temporary); err != nil {
 		return err
 	}
 	if err := runPreservationGit(temporary, "checkout", "--detach", "--force", revision); err != nil {
@@ -416,7 +423,7 @@ func scanAndPreserveProject(source, destination, revision string, secrets []stri
 	if err := scanProject(temporary, secrets); err != nil {
 		return err
 	}
-	if err := scanGitObjects(temporary, secrets); err != nil {
+	if err := scanGitObjects(temporary, revision, secrets); err != nil {
 		return err
 	}
 	if err := os.Rename(temporary, destination); err != nil {
@@ -426,10 +433,20 @@ func scanAndPreserveProject(source, destination, revision string, secrets []stri
 }
 
 func preservationGitCommand(repository string, arguments ...string) *exec.Cmd {
-	command := exec.Command("git", append([]string{"-C", repository}, arguments...)...)
+	trustedArguments := []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+		"-c", "core.untrackedCache=false", "-C", repository}
+	command := exec.Command("git", append(trustedArguments, arguments...)...)
 	command.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=" + os.DevNull,
-		"GIT_CONFIG_SYSTEM=" + os.DevNull, "GIT_TERMINAL_PROMPT=0"}
+		"GIT_CONFIG_SYSTEM=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
 	return command
+}
+
+func sanitizePreservationGitConfig(repository string) error {
+	config := []byte("[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tlogallrefupdates = true\n")
+	if err := os.WriteFile(filepath.Join(repository, ".git", "config"), config, 0o600); err != nil {
+		return fmt.Errorf("sanitize preserved Git configuration: %w", err)
+	}
+	return nil
 }
 
 func runPreservationGit(repository string, arguments ...string) error {
@@ -441,8 +458,8 @@ func preservationGitOutput(repository string, arguments ...string) (string, erro
 	return strings.TrimSpace(string(body)), err
 }
 
-func scanGitObjects(repository string, secrets []string) error {
-	objects, err := preservationGitOutput(repository, "rev-list", "--objects", "--all")
+func scanGitObjects(repository, revision string, secrets []string) error {
+	objects, err := preservationGitOutput(repository, "rev-list", "--objects", "--all", revision)
 	if err != nil {
 		return err
 	}
@@ -691,6 +708,61 @@ func TestPythonProjectPreservationChecksOutExactReachableRevision(t *testing.T) 
 	writeFile(t, filepath.Join(source, "dirty.py"), "dirty\n")
 	if err := scanAndPreserveProject(source, filepath.Join(root, "dirty"), base, nil); err == nil {
 		t.Fatal("dirty source was accepted")
+	}
+}
+
+func TestPythonProjectPreservationRejectsDanglingRevision(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "app.py"), "candidate\n")
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "candidate")
+	revision := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	runGitE2E(t, source, "checkout", "--detach", "-q", revision)
+	runGitE2E(t, source, "update-ref", "-d", "refs/heads/main")
+
+	if err := scanAndPreserveProject(source, filepath.Join(root, "preserved"), revision, nil); err == nil ||
+		!strings.Contains(err.Error(), "repository ref") {
+		t.Fatalf("dangling preservation error=%v", err)
+	}
+}
+
+func TestPythonProjectPreservationIgnoresRepositoryLocalFilters(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(source, "app.py"), "base\n")
+	runGitE2E(t, source, "init", "-q")
+	runGitE2E(t, source, "add", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "base")
+	base := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(source, ".gitattributes"), "app.py filter=attack\n")
+	writeFile(t, filepath.Join(source, "app.py"), "candidate\n")
+	runGitE2E(t, source, "add", ".gitattributes", "app.py")
+	runGitE2E(t, source, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+		"commit", "-qm", "candidate")
+	candidate := strings.TrimSpace(runGitOutput(t, source, "rev-parse", "HEAD"))
+	runGitE2E(t, source, "checkout", "-q", base)
+	marker := filepath.Join(root, "smudge-executed")
+	runGitE2E(t, source, "config", "filter.attack.smudge", "sh -c 'touch "+marker+"; cat'")
+
+	destination := filepath.Join(root, "preserved")
+	if err := scanAndPreserveProject(source, destination, candidate, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository-local smudge filter executed: %v", err)
+	}
+	if body, err := os.ReadFile(filepath.Join(destination, "app.py")); err != nil || string(body) != "candidate\n" {
+		t.Fatalf("preserved candidate body=%q err=%v", body, err)
 	}
 }
 

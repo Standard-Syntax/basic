@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1301,9 +1302,14 @@ func fixturePythonRepository(
 	}
 	decoder := json.NewDecoder(bytes.NewReader(output))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&initialized); err != nil || initialized.SchemaVersion != "harness_python_project_init.v1" ||
+	decodeErr := decoder.Decode(&initialized)
+	var trailing any
+	trailingErr := decoder.Decode(&trailing)
+	if decodeErr != nil || !errors.Is(trailingErr, io.EOF) ||
+		initialized.SchemaVersion != "harness_python_project_init.v1" ||
 		initialized.Destination != repository || initialized.ConsoleCommand == "" {
-		t.Fatalf("invalid bootstrap result: err=%v result=%#v", err, initialized)
+		t.Fatalf("invalid bootstrap result: err=%v trailing=%v result=%#v",
+			decodeErr, trailingErr, initialized)
 	}
 	runGitE2E(t, root, "init", "--bare", "-q", remote)
 	runGitE2E(t, repository, "remote", "add", "origin", remote)
