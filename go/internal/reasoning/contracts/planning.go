@@ -78,18 +78,9 @@ func MapTaskPlanningRequest(value *reasoningv1.TaskPlanningRequest) (TaskPlannin
 		len(value.GetAcceptanceCriterionIds()) == 0 {
 		return TaskPlanningRequest{}, errors.New("incomplete task planning request")
 	}
-	if len(value.GetRepositoryMap()) == 0 {
-		return TaskPlanningRequest{}, errors.New("repository map is required")
-	}
-	repositoryMap := make([]RepositoryEntry, 0, len(value.GetRepositoryMap()))
-	for _, entry := range value.GetRepositoryMap() {
-		if !validRepoPath(entry.GetPath()) || entry.GetKind() == "" ||
-			!digestPattern.MatchString(entry.GetSha256()) {
-			return TaskPlanningRequest{}, errors.New("invalid repository map entry")
-		}
-		repositoryMap = append(repositoryMap, RepositoryEntry{
-			Path: entry.GetPath(), Kind: entry.GetKind(), SHA256: entry.GetSha256(),
-		})
+	repositoryMap, err := mapRepositoryEntries(value.GetRepositoryMap())
+	if err != nil {
+		return TaskPlanningRequest{}, err
 	}
 	if err := validatePathScopes(
 		value.GetReadablePaths(), value.GetWritablePaths(), value.GetProhibitedPaths(),
@@ -111,6 +102,23 @@ func MapTaskPlanningRequest(value *reasoningv1.TaskPlanningRequest) (TaskPlannin
 		ParallelismLimit:            value.GetParallelismLimit(),
 		AcceptanceCriterionIDs:      value.GetAcceptanceCriterionIds(),
 	}, nil
+}
+
+func mapRepositoryEntries(values []*reasoningv1.RepositoryEntry) ([]RepositoryEntry, error) {
+	if len(values) == 0 {
+		return nil, errors.New("repository map is required")
+	}
+	entries := make([]RepositoryEntry, 0, len(values))
+	for _, entry := range values {
+		if !validRepoPath(entry.GetPath()) || entry.GetKind() == "" ||
+			!digestPattern.MatchString(entry.GetSha256()) {
+			return nil, errors.New("invalid repository map entry")
+		}
+		entries = append(entries, RepositoryEntry{
+			Path: entry.GetPath(), Kind: entry.GetKind(), SHA256: entry.GetSha256(),
+		})
+	}
+	return entries, nil
 }
 
 func MapTaskGraphProposal(
