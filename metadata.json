@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ52TCPY4YVMHN1CYT3Z0VH7",
+  "strategy": "manual-commit",
+  "branch": "harness/python-project-handoff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "python/src/harness_agents/bootstrap.py",
+    "python/tests/test_bootstrap.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 50394,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 1516800,
+    "output_tokens": 4923,
+    "api_call_count": 31
+  }
+}
