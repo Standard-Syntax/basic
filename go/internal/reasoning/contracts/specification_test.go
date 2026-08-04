@@ -124,6 +124,18 @@ func TestMalformedSpecificationEnvelopeIsRejected(t *testing.T) {
 	}
 }
 
+func TestSpecificationEnvelopeRejectsTaskIdentity(t *testing.T) {
+	var request reasoningv1.SpecificationRequest
+	if err := proto.Unmarshal(contractFixture(t, "request.bin"), &request); err != nil {
+		t.Fatal(err)
+	}
+	taskID := "TASK-001"
+	request.Envelope.TaskId = &taskID
+	if _, err := MapSpecificationRequest(&request); err == nil {
+		t.Fatal("task-bound specification request accepted")
+	}
+}
+
 func TestSpecificationEnvelopeRejectsUnboundArtifactURI(t *testing.T) {
 	var request reasoningv1.SpecificationRequest
 	if err := proto.Unmarshal(contractFixture(t, "request.bin"), &request); err != nil {
