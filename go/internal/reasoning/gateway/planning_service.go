@@ -118,7 +118,7 @@ func (s *PlanningService) ProposeTaskGraph( // skipcq: GO-R1005 -- explicit fail
 	}
 	envelope := request.GetEnvelope()
 	handle, err := s.invocations.Begin(ctx, InvocationStart{RequestID: envelope.GetRequestId(),
-		RequestArtifact: requestArtifact, RunID: envelope.GetRunId(), TaskID: envelope.TaskId,
+		RequestArtifact: requestArtifact, RunID: envelope.GetRunId(), TaskID: nil,
 		Stage: planningStage, Attempt: envelope.GetAttempt(),
 		AgentManifestDigest: envelope.GetAgentManifestDigest(), StartedAt: started})
 	if err != nil {
