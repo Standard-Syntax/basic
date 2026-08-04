@@ -251,6 +251,31 @@ def _run(arguments: list[str], root: Path) -> None:
         raise ManifestError(f"bootstrap command failed: {diagnostic}")
 
 
+def _trusted_base_commit(root: Path) -> str:
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/git", "rev-parse", "HEAD"],
+            cwd=root,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "GIT_CONFIG_GLOBAL": os.devnull,
+                "GIT_CONFIG_SYSTEM": os.devnull,
+                "GIT_TERMINAL_PROMPT": "0",
+            },
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ManifestError("bootstrap command timed out: git rev-parse HEAD") from error
+    except subprocess.CalledProcessError as error:
+        diagnostic = (error.stderr or "").strip() or (error.stdout or "").strip()
+        diagnostic = diagnostic or "git rev-parse HEAD"
+        raise ManifestError(f"bootstrap command failed: {diagnostic}") from error
+    return completed.stdout.strip()
+
+
 def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> BootstrapResult:
     destination = destination.resolve()
     if destination.exists():
@@ -313,21 +338,7 @@ def bootstrap_project(destination: Path, spec_path: Path, checks_path: Path) -> 
             ],
             temporary,
         )
-        completed = subprocess.run(
-            ["/usr/bin/git", "rev-parse", "HEAD"],
-            cwd=temporary,
-            env={
-                "PATH": os.environ.get("PATH", ""),
-                "GIT_CONFIG_GLOBAL": os.devnull,
-                "GIT_CONFIG_SYSTEM": os.devnull,
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        trusted_base_commit = completed.stdout.strip()
+        trusted_base_commit = _trusted_base_commit(temporary)
         temporary.rename(destination)
         return BootstrapResult(
             destination=destination,

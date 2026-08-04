@@ -4,7 +4,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from harness_agents.bootstrap import _run, bootstrap_project, load_project_spec
+from harness_agents.bootstrap import (
+    _run,
+    _trusted_base_commit,
+    bootstrap_project,
+    load_project_spec,
+)
 from harness_agents.manifest import ManifestError
 
 
@@ -102,6 +107,38 @@ def test_bootstrap_command_timeout_is_bounded(
     monkeypatch.setattr(subprocess, "run", time_out)
     with pytest.raises(ManifestError, match="bootstrap command timed out: git"):
         _run(["git", "init"], tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (
+            subprocess.CalledProcessError(
+                returncode=128,
+                cmd=["/usr/bin/git", "rev-parse", "HEAD"],
+                stderr="fatal: invalid repository",
+                output="",
+            ),
+            "bootstrap command failed: fatal: invalid repository",
+        ),
+        (
+            subprocess.TimeoutExpired(cmd=["/usr/bin/git", "rev-parse", "HEAD"], timeout=30),
+            "bootstrap command timed out: git rev-parse HEAD",
+        ),
+    ],
+)
+def test_trusted_base_commit_normalizes_subprocess_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: subprocess.SubprocessError,
+    message: str,
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(ManifestError, match=message):
+        _trusted_base_commit(tmp_path)
 
 
 def test_bootstrap_creates_committed_trusted_project(tmp_path: Path) -> None:
