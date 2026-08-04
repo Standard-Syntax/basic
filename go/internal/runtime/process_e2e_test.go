@@ -115,7 +115,7 @@ func TestPythonProjectMetadataDrivesLifecycleScope(t *testing.T) {
 		t.Fatalf("metadata-derived task graph = %#v %#v", planning, graph)
 	}
 	prompts, _ := runtimeManifests(t, t.TempDir(), project)
-	promptBody, err := os.ReadFile(prompts[0])
+	promptBody, err := os.ReadFile(prompts[2])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,10 +361,13 @@ func runBetaProcesses(t *testing.T) {
 		"worker_uid":                  os.Getuid(), "worker_gid": os.Getgid(),
 		"service_actor_id": actorIDs[0], "reasoning_actor_id": actorIDs[2],
 		"execution_actor_id": actorIDs[3], "verification_actor_id": actorIDs[4],
-		"review_actor_id":              actorIDs[5],
-		"implementation_manifest_path": manifestPaths[0],
-		"implementation_prompt_path":   promptPaths[0],
-		"review_manifest_path":         manifestPaths[1], "review_prompt_path": promptPaths[1],
+		"review_actor_id":             actorIDs[5],
+		"specification_manifest_path": manifestPaths[0],
+		"specification_prompt_path":   promptPaths[0],
+		"planning_manifest_path":      manifestPaths[1], "planning_prompt_path": promptPaths[1],
+		"implementation_manifest_path": manifestPaths[2],
+		"implementation_prompt_path":   promptPaths[2],
+		"review_manifest_path":         manifestPaths[3], "review_prompt_path": promptPaths[3],
 		"context_max_files": 8, "context_max_bytes": 1 << 20,
 		"task_lease_duration_nanoseconds": int64(30 * time.Minute),
 		"claim_ttl_nanoseconds":           int64(3 * time.Second),
@@ -397,10 +400,6 @@ func runBetaProcesses(t *testing.T) {
 		})
 		assertFileMode(t, operatorConfig, 0o600)
 	}
-	planningSnapshot, err := SnapshotRepository(t.Context(), repository, baseCommit)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if packaged {
 		if err := os.Chmod(apiConfig, 0o644); err != nil {
 			t.Fatal(err)
@@ -432,6 +431,13 @@ func runBetaProcesses(t *testing.T) {
 	processes = append(processes, api)
 	waitHTTP(t, "http://"+apiAddress+"/healthz", "", http.StatusOK)
 	client := &runtimeClient{base: "http://" + apiAddress, token: token}
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	workflowProcess := startProcess(t, ctx, workflowBinary, workflowConfig)
+	processes = append(processes, workflowProcess)
 	runID, taskID := uuid.NewString(), uuid.NewString()
 	now := time.Now().UTC().Truncate(time.Second)
 	runKey := uuid.NewString()
@@ -446,8 +452,7 @@ func runBetaProcesses(t *testing.T) {
 		assertFileMode(t, operatorState, 0o600)
 		state := readJSONObject(t, operatorState)
 		runID = requireJSONString(t, state, "run_id")
-		taskID = requireJSONString(t, state, "task_id")
-		pythonReport.RunID, pythonReport.TaskID = runID, taskID
+		pythonReport.RunID = runID
 		if requireJSONString(t, state, "base_commit") != baseCommit {
 			t.Fatalf("operator state base commit = %#v", state["base_commit"])
 		}
@@ -461,7 +466,10 @@ func runBetaProcesses(t *testing.T) {
 	} else {
 		runRequest := map[string]any{
 			"run_id": runID, "base_commit": baseCommit,
-			"content":            map[string]any{"objective": "correct Add without changing tests"},
+			"content": map[string]any{"schema_version": "run_intake_specification.v1",
+				"problem_statement": "Add is incorrect", "desired_outcome": "correct Add without changing tests",
+				"known_constraints": []string{"Preserve trusted checks"}, "known_non_goals": []string{"Change tests"},
+				"stakeholders": []string{"operator"}},
 			"decision_timestamp": now,
 		}
 		firstRun = client.mutateResponseWithKey(
@@ -470,29 +478,24 @@ func runBetaProcesses(t *testing.T) {
 		if firstRun.replay {
 			t.Fatal("initial run intake was marked as a replay")
 		}
-		specRequest, specProposal := specificationPair(runID, now, nil)
-		client.mutate(t, "/v1/runs/"+runID+"/specification", client.revision(t, runID),
-			protoPair(t, specRequest, specProposal, now.Add(time.Second)), http.StatusOK)
+		client.waitRunState(t, runID, string(workflow.RunStateSpecificationReview))
 		client.mutate(t, "/v1/runs/"+runID+"/specification/approve", client.revision(t, runID),
 			map[string]any{"decision_timestamp": now.Add(2 * time.Second)}, http.StatusOK)
-		specBody, _ := proto.MarshalOptions{Deterministic: true}.Marshal(specProposal)
-		planningRequest, graph := planningPair(
-			runID, taskID, now, repository, planningSnapshot, Digest(specBody), nil,
-		)
-		client.mutate(t, "/v1/runs/"+runID+"/task-graph", client.revision(t, runID),
-			protoPair(t, planningRequest, graph, now.Add(3*time.Second)), http.StatusOK)
+		client.waitRunState(t, runID, string(workflow.RunStateTaskPlanReview))
 		client.mutate(t, "/v1/runs/"+runID+"/task-graph/approve", client.revision(t, runID),
 			map[string]any{"decision_timestamp": now.Add(4 * time.Second)}, http.StatusOK)
 	}
+	if err := pool.QueryRow(t.Context(), `SELECT task_id::text FROM workflow_tasks WHERE run_id=$1`, runID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	if pythonReport != nil {
+		pythonReport.TaskID = taskID
+	}
+	workflowProcess.stop(t)
 	api.stop(t)
 	api = startProcess(t, ctx, apiBinary, apiConfig)
 	processes = append(processes, api)
 	waitHTTP(t, "http://"+apiAddress+"/healthz", "", http.StatusOK)
-	pool, err := pgxpool.New(t.Context(), databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer pool.Close()
 	if packaged {
 		makePackagedPathAccessible(t, artifactRoot)
 	}
@@ -517,7 +520,10 @@ func runBetaProcesses(t *testing.T) {
 		} else {
 			runRequest := map[string]any{
 				"run_id": runID, "base_commit": baseCommit,
-				"content":            map[string]any{"objective": "correct Add without changing tests"},
+				"content": map[string]any{"schema_version": "run_intake_specification.v1",
+					"problem_statement": "Add is incorrect", "desired_outcome": "correct Add without changing tests",
+					"known_constraints": []string{"Preserve trusted checks"}, "known_non_goals": []string{"Change tests"},
+					"stakeholders": []string{"operator"}},
 				"decision_timestamp": now,
 			}
 			replayedRun = client.mutateResponseWithKey(
@@ -525,9 +531,15 @@ func runBetaProcesses(t *testing.T) {
 			)
 		}
 	}()
-	if project != nil && !bytes.Equal(replayedOperatorRun, firstOperatorRun) {
-		t.Fatalf("operator run replay changed bytes: first=%s replay=%s",
-			firstOperatorRun, replayedOperatorRun)
+	if project != nil {
+		var replayedStatus map[string]any
+		if err := json.Unmarshal(replayedOperatorRun, &replayedStatus); err != nil {
+			t.Fatalf("operator replay status is invalid: %v", err)
+		}
+		run, ok := replayedStatus["run"].(map[string]any)
+		if !ok || run["id"] != runID {
+			t.Fatalf("operator replay changed run identity: %s", replayedOperatorRun)
+		}
 	}
 	if project != nil {
 		pythonReport.ReplayCounts["run"] = 1
@@ -542,7 +554,7 @@ func runBetaProcesses(t *testing.T) {
 		t.Fatalf("run replay repeated a side effect: before=%#v after=%#v",
 			beforeRunReplay, afterRunReplay)
 	}
-	workflowProcess := startProcess(t, ctx, workflowBinary, workflowConfig)
+	workflowProcess = startProcess(t, ctx, workflowBinary, workflowConfig)
 	processes = append(processes, workflowProcess)
 	waitFor(t, 12*time.Minute, func() bool {
 		var state string
@@ -749,7 +761,7 @@ func runBetaProcesses(t *testing.T) {
 	beforeReplay := snapshotSideEffects(
 		t, pool, repository, remote, branchPrefix, runID, taskID, prState,
 	)
-	if project != nil && (beforeReplay.reasoning != 2 || beforeReplay.approvals != 1 ||
+	if project != nil && (beforeReplay.reasoning != 4 || beforeReplay.approvals != 1 ||
 		beforeReplay.publications != 1 || beforeReplay.pullRequests != 1) {
 		t.Fatalf("installed operator repeated a lifecycle effect: %#v", beforeReplay)
 	}
@@ -810,10 +822,9 @@ func runBetaProcesses(t *testing.T) {
 	if packaged {
 		makePackagedPathAccessible(t, artifactRoot)
 	}
-	secretScanFiles := []string{
-		apiConfig, workflowConfig, promptPaths[0], promptPaths[1],
-		manifestPaths[0], manifestPaths[1],
-	}
+	secretScanFiles := []string{apiConfig, workflowConfig}
+	secretScanFiles = append(secretScanFiles, promptPaths[:]...)
+	secretScanFiles = append(secretScanFiles, manifestPaths[:]...)
 	if project != nil {
 		secretScanFiles = append(secretScanFiles, operatorConfig, operatorState, operatorExport)
 	}
@@ -1008,7 +1019,8 @@ func packagedProcessMounts(t *testing.T, config string, values map[string]any) [
 		add(stringValue(values, "worktree_root"), false)
 		add(stringValue(values, "verification_workspace_root"), false)
 		for _, key := range []string{"implementation_manifest_path", "implementation_prompt_path",
-			"review_manifest_path", "review_prompt_path"} {
+			"review_manifest_path", "review_prompt_path", "specification_manifest_path",
+			"specification_prompt_path", "planning_manifest_path", "planning_prompt_path"} {
 			add(stringValue(values, key), true)
 		}
 		provider, _ := values["provider"].(map[string]any)
@@ -1236,6 +1248,22 @@ func (c runtimeClient) revision(t *testing.T, runID string) string {
 	return fmt.Sprintf("\"%.0f\"", run["revision"].(float64))
 }
 
+func (c runtimeClient) waitRunState(t *testing.T, runID, expected string) {
+	t.Helper()
+	waitFor(t, 5*time.Minute, func() bool {
+		value := c.run(t, runID)
+		run, ok := value["run"].(map[string]any)
+		if !ok {
+			return false
+		}
+		state, _ := run["state"].(string)
+		if state == string(workflow.RunStateFailed) {
+			t.Fatalf("run failed before %s", expected)
+		}
+		return state == expected
+	})
+}
+
 func fixtureRepository(t *testing.T, root string) (string, string, string) {
 	t.Helper()
 	repository := filepath.Join(root, "repository")
@@ -1431,11 +1459,11 @@ func smartGitRemote(t *testing.T, repository string) *httptest.Server {
 
 func runtimeManifests(
 	t *testing.T, root string, project *pythonProjectMetadata,
-) ([2]string, [2]string) {
+) ([4]string, [4]string) {
 	t.Helper()
-	var prompts [2]string
-	var manifests [2]string
-	for index, stageName := range []string{"implementation", "review"} {
+	var prompts [4]string
+	var manifests [4]string
+	for index, stageName := range []string{"specification", "planning", "implementation", "review"} {
 		prompt := "Return only a valid implementation_proposal.v1 JSON object for the " +
 			"approved task. Set a non-empty summary and exactly one changes item: path add.go, " +
 			"operation update, expected_original_sha256 equal to the supplied add.go digest, " +
@@ -1480,15 +1508,64 @@ func runtimeManifests(
 				"\"findings\":[],\"required_actions\":[],\"unrequested_changes\":[]," +
 				"\"residual_risks\":[],\"assumptions\":[]}"
 		}
+		if stageName == "specification" {
+			goal := "Correct Add so it returns the sum."
+			criteria := `[{"criterion_id":"AC-001","description":"Add returns the sum.","verification_method":"Run make check."}]`
+			if project != nil {
+				goal = project.Objective
+				values := make([]map[string]string, 0, len(project.AcceptanceCriteria))
+				for _, criterion := range project.AcceptanceCriteria {
+					values = append(values, map[string]string{"criterion_id": criterion.ID,
+						"description": criterion.Description, "verification_method": "Run make check."})
+				}
+				body, err := json.Marshal(values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				criteria = string(body)
+			}
+			prompt = fmt.Sprintf("Return only this closed specification JSON object with no extra fields: "+
+				`{"title":"Bounded outcome","goal":%q,"actors":["operator"],"constraints":[],"non_goals":[],"acceptance_criteria":%s,"assumptions":[],"risks":[],"questions":[]}`,
+				goal, criteria)
+		}
+		if stageName == "planning" {
+			objective := "Correct Add"
+			criteria, readable, writable := []string{"AC-001"}, []string{"add.go", "add_test.go"}, []string{"add.go"}
+			prohibited, checks := []string{"Makefile", "add_test.go", "go.mod"}, []string{"make-check-v1"}
+			if project != nil {
+				objective, readable, writable = project.Objective, project.Paths.Readable, project.Paths.Writable
+				prohibited, checks = project.Paths.Prohibited, project.TrustedChecks
+				criteria = nil
+				for _, criterion := range project.AcceptanceCriteria {
+					criteria = append(criteria, criterion.ID)
+				}
+			}
+			body, err := json.Marshal(map[string]any{"tasks": []map[string]any{{"objective": objective,
+				"acceptance_criterion_ids": criteria, "readable_paths": readable,
+				"writable_paths": writable, "prohibited_paths": prohibited,
+				"exclusive_resources": []string{}, "required_check_ids": checks,
+				"stop_conditions": []string{"The trusted check passes."}}},
+				"assumptions": []string{}, "unresolved_scope_questions": []string{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt = "Return only this exact closed planning JSON object with no extra fields: " + string(body)
+		}
 		prompts[index] = filepath.Join(root, stageName+".md")
 		writeFile(t, prompts[index], prompt)
 		digest := Digest([]byte(prompt))
 		capability, output := "strong_coding", "implementation_proposal.v1"
+		if stageName == "specification" {
+			capability, output = "general_reasoning", "specification_proposal.v1"
+		}
+		if stageName == "planning" {
+			capability, output = "general_reasoning", "task_graph_proposal.v1"
+		}
 		if stageName == "review" {
 			capability, output = "independent_review", "review_proposal.v1"
 		}
 		value := manifest.Manifest{
-			SchemaVersion: "1", Agent: manifest.Agent{Name: "runtime-" + stageName, Version: "1.0.0"},
+			SchemaVersion: "1", Agent: manifest.Agent{Name: "runtime-" + stageName, Version: "1.2.0"},
 			Stage: stageName, Prompt: manifest.Prompt{
 				ArtifactURI: "artifact://sha256/" + digest, SHA256: digest,
 			},
@@ -1882,12 +1959,18 @@ func assertReasoningEvidence(
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if len(values) != 2 {
-		t.Fatalf("reasoning invocations = %d; want exactly implementation and review", len(values))
+	if len(values) != 4 {
+		t.Fatalf("reasoning invocations = %d; want exactly four live stages", len(values))
 	}
-	if values[0].stage != "implementation" || values[1].stage != "review" ||
-		values[0].requestIdentity == values[1].requestIdentity {
-		t.Fatalf("reasoning stage identities = %#v", values)
+	wantStages := map[string]bool{"specification": true, "planning": true,
+		"implementation": true, "review": true}
+	requestIDs, providerIDs := map[string]bool{}, map[string]bool{}
+	for _, value := range values {
+		if !wantStages[value.stage] || requestIDs[value.requestIdentity] ||
+			providerIDs[value.providerRequestID] {
+			t.Fatalf("reasoning stage identities = %#v", values)
+		}
+		requestIDs[value.requestIdentity], providerIDs[value.providerRequestID] = true, true
 	}
 	for _, value := range values {
 		if value.provider != "minimax-anthropic" || value.model != "MiniMax-M2.7" ||

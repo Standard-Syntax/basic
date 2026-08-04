@@ -450,6 +450,14 @@ func verifyStageEvidence(
 	if err != nil {
 		return failed(checkReasoning, err)
 	}
+	var specification, taskGraph workflow.ArtifactRef
+	if err := pool.QueryRow(ctx, `SELECT specification_uri,specification_digest,
+		task_graph_uri,task_graph_digest FROM workflow_runs WHERE run_id=$1`,
+		manifest.Canary.RunID).Scan(&specification.URI, &specification.Digest,
+		&taskGraph.URI, &taskGraph.Digest); err != nil || len(invocations) != 4 ||
+		!invocations[0].proposal.Equal(specification) || !invocations[1].proposal.Equal(taskGraph) {
+		return failed(checkReasoning, errors.New("planning proposal binding mismatch"))
+	}
 	reviewInvocation, err := verifyReasoningEvidence(ctx, store, invocations, task)
 	if err != nil {
 		return failed(checkReasoning, err)
@@ -472,8 +480,10 @@ func loadReasoningEvidence(
 	rows, err := pool.Query(ctx, `SELECT stage,provider,model,request_id,provider_request_id,
 		proposal_artifact_uri,proposal_digest,provider_response_artifact_uri,
 		provider_response_digest,provider_requests,input_tokens,output_tokens
-		FROM reasoning_invocations WHERE run_id=$1 AND task_id=$2 AND state='completed'
-		AND final_status='accepted' ORDER BY stage`, manifest.Canary.RunID, manifest.Canary.TaskID)
+		FROM reasoning_invocations WHERE run_id=$1 AND (task_id=$2 OR task_id IS NULL) AND state='completed'
+		AND final_status='accepted' ORDER BY CASE stage WHEN 'specification' THEN 1
+		WHEN 'planning' THEN 2 WHEN 'implementation' THEN 3 WHEN 'review' THEN 4 ELSE 5 END`,
+		manifest.Canary.RunID, manifest.Canary.TaskID)
 	if err != nil {
 		return nil, errors.New("read reasoning evidence")
 	}
@@ -498,7 +508,7 @@ func verifyReasoningEvidence(
 	ctx context.Context, store *artifact.Store, invocations []invocationEvidence, task *workflow.Task,
 ) (*invocationEvidence, error) {
 	if !validInvocationSet(invocations, task) {
-		return nil, errors.New("exactly two distinct reasoning stages are required")
+		return nil, errors.New("exactly four distinct reasoning stages are required")
 	}
 	for index := range invocations {
 		if !validLiveInvocation(&invocations[index]) {
@@ -508,13 +518,30 @@ func verifyReasoningEvidence(
 			return nil, errors.New("reasoning artifact unavailable")
 		}
 	}
-	return &invocations[1], nil
+	return &invocations[3], nil
 }
 
 func validInvocationSet(invocations []invocationEvidence, task *workflow.Task) bool {
-	return len(invocations) == 2 && invocations[0].stage == "implementation" && invocations[1].stage == "review" &&
-		invocations[0].requestID != invocations[1].requestID && task.Proposal != nil &&
-		task.Proposal.Equal(invocations[0].proposal)
+	if len(invocations) != 4 || task.Proposal == nil ||
+		!task.Proposal.Equal(invocations[2].proposal) {
+		return false
+	}
+	want := []string{"specification", "planning", "implementation", "review"}
+	requestIDs, providerIDs := map[string]struct{}{}, map[string]struct{}{}
+	for index := range invocations {
+		if invocations[index].stage != want[index] {
+			return false
+		}
+		if _, exists := requestIDs[invocations[index].requestID]; exists {
+			return false
+		}
+		if _, exists := providerIDs[invocations[index].providerRequestID]; exists {
+			return false
+		}
+		requestIDs[invocations[index].requestID] = struct{}{}
+		providerIDs[invocations[index].providerRequestID] = struct{}{}
+	}
+	return true
 }
 
 func validLiveInvocation(value *invocationEvidence) bool {

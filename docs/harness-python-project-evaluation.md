@@ -4,6 +4,18 @@ Date: 2026-08-03
 Source: `b22b888` (`harness/python-live-gate`)
 Harness package: `harness-agents==0.2.0`
 
+## Current v0.3 four-stage contract
+
+The remediation replaces client-fabricated specification and task-graph
+proposals with live MiniMax-M2.7 calls. The installed operator submits only a
+closed trusted intake, then waits at separate specification and task-plan human
+review gates. Successful preservation checks out the exact accepted candidate
+in detached-HEAD state, and the v2 report records the generated command, four
+per-stage invocation counts, preservation status, and preserved checkout
+commit. The historical run evidence below predates this remediation; new live
+evidence is established only by actually running `make beta-live-e2e` and
+`make beta-python-project-e2e`.
+
 ## Outcome
 
 The requested end state was achieved. The current harness wheel installed, the
@@ -254,7 +266,7 @@ The earlier target printed only the Go test name and duration, so its temporary
 repository, run ID, candidate commit, artifact digests, stage timings, and
 redacted lifecycle summary disappeared with the test directory. The gate now
 atomically writes a mode-`0600`
-`harness_python_project_e2e_report.v1` report on pass or in-process failure and
+`harness_python_project_e2e_report.v2` report on pass or in-process failure and
 can preserve only a fully scanned generated repository at an explicitly safe,
 nonexistent destination. Deterministic shape, redaction, replacement, failure,
 and preservation tests pass. Both credentialed profiles produced passing,

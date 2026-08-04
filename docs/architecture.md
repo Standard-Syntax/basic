@@ -95,7 +95,11 @@ integrity-checking in-memory artifact store.
 
 Phase 8 extends the same gateway with a deterministic `review` adapter and the
 unchanged `review_proposal.v1` transport. Migration `0011` permits only
-`implementation` and `review` invocation stages. `go/internal/review`
+`specification`, `planning`, `implementation`, and `review` invocation stages.
+Run intake atomically enqueues specification reasoning; human specification
+approval atomically binds the approved proposal and enqueues planning. Trusted
+Go injects proposal identities and the single deterministic task ID.
+`go/internal/review`
 reconstructs the Phase 6 diff and Phase 7 evidence from content-addressed
 reports, enforces fixed high/critical blocking policy, stores
 `review_report.v1`, and emits only `RecordTaskReview`.

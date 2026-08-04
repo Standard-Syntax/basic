@@ -227,3 +227,52 @@ def test_operator_refuses_dirty_project_before_network(
         check=False,
         capture_output=True,
     ).stdout
+
+
+def test_operator_recovers_v1_state_without_submitting_stored_proposals(
+    operator_fixture: tuple[Any, Path, Path, ThreadingHTTPServer], tmp_path: Path
+) -> None:
+    config, project, _, _ = operator_fixture
+    state_path = (tmp_path / "legacy-state.json").resolve()
+    root_key = uuid.uuid4()
+    run_id = str(uuid.uuid5(root_key, "run"))
+    base_commit = subprocess.run(
+        ["git", "-C", project, "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "harness_operator_state.v1",
+                "endpoint": config.endpoint,
+                "project_root": str(project.resolve()),
+                "run_id": run_id,
+                "task_id": str(uuid.uuid4()),
+                "base_commit": base_commit,
+                "specification_request": {
+                    "problem_statement": "legacy problem",
+                    "desired_outcome": "legacy outcome",
+                    "known_constraints": [],
+                    "known_non_goals": [],
+                    "stakeholders": ["operator"],
+                },
+                "specification_proposal": {"must_not": "submit"},
+                "planning_request": {"must_not": "submit"},
+                "planning_proposal": {"must_not": "submit"},
+                "operations": {},
+            }
+        )
+    )
+    state_path.chmod(0o600)
+
+    run_lifecycle(config, project.resolve(), state_path, root_key)
+
+    migrated = json.loads(state_path.read_text())
+    assert migrated["schema_version"] == "harness_operator_state.v2"
+    assert migrated["specification_input"]["desired_outcome"] == "legacy outcome"
+    encoded_calls = json.dumps(LifecycleHandler.calls)
+    assert "must_not" not in encoded_calls
+    assert not any(call[1].endswith("/specification") for call in LifecycleHandler.calls)
+    assert not any(call[1].endswith("/task-graph") for call in LifecycleHandler.calls)

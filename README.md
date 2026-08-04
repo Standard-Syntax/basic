@@ -28,8 +28,9 @@ project specification and operator-supplied trusted Python checks. It commits
 the checks, fixed `make check` entry point, lockfile, and path policy before any
 model call; an existing destination or symlinked check fails closed.
 
-The in-process Go reasoning gateway executes implementation and review stages
-only through the runtime's closed MiniMax-M2.7 Anthropic-compatible adapter.
+The in-process Go reasoning gateway executes specification, planning,
+implementation, and review stages only through the runtime's closed
+MiniMax-M2.7 Anthropic-compatible adapter.
 It resolves exact registered manifest digests, validates proposals into five
 stable rejection codes, stores payloads through a content-addressed artifact
 interface, and records immutable PostgreSQL invocation metadata. The gateway
@@ -83,8 +84,9 @@ Production repository readiness is checked without mutation with
 same immutable `beta_policy` is consumed by both services. The beta supports
 exactly one dependency-free task per run.
 
-After trusted Python bootstrap, `harness-agents operator` drives run creation,
-the three explicit approval gates, separate draft submission, status reads,
+After trusted Python bootstrap, `harness-agents operator` submits only trusted
+specification intake, waits for live specification and one-task planning
+proposals, drives the three explicit approval gates, separate draft submission, status reads,
 and redacted support export against a configured loopback control API. See the
 development guide for the strict configuration and command sequence.
 `make beta-python-project-e2e` is the credentialed acceptance gate for a newly

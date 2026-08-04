@@ -28,7 +28,7 @@ verification ledger row per verification ID.
 | Review | bounded MiniMax Anthropic-compatible request plus content-addressed request, raw response, proposal, and report artifacts |
 | Approval | one small immutable row and one content-addressed decision artifact per approval ID |
 | Publication | bounded Git/API subprocesses, one branch ref, one draft PR, one artifact, and one immutable ledger row |
-| MiniMax Anthropic compatibility | at most three non-streaming Messages attempts per implementation or review request |
+| MiniMax Anthropic compatibility | four accepted lifecycle invocations; at most three non-streaming Messages attempts per stage request |
 
 The integration suite uses disposable PostgreSQL 18.1 on
 `127.0.0.1:55433`, backed by tmpfs and removed after every run. Production

@@ -46,8 +46,9 @@ func TestPostgresClaimExpiryAndFencing(t *testing.T) {
 		t.Fatal(err)
 	}
 	ledger := NewLedger(pool)
+	claimAt := time.Unix(1, 0).UTC()
 	job := Job{
-		ID: uuid.NewString(), RunID: runID, Attempt: 1, Stage: "start", AvailableAt: at,
+		ID: uuid.NewString(), RunID: runID, Attempt: 1, Stage: "start", AvailableAt: claimAt,
 	}
 	if err := ledger.Enqueue(ctx, job); err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestPostgresClaimExpiryAndFencing(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			claimed, found, claimErr := ledger.Claim(ctx, owner, at, time.Second)
+			claimed, found, claimErr := ledger.Claim(ctx, owner, claimAt, time.Second)
 			if claimErr != nil {
 				t.Errorf("claim: %v", claimErr)
 			} else if found {
@@ -78,7 +79,7 @@ func TestPostgresClaimExpiryAndFencing(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("claim winners = %d", count)
 	}
-	second, found, err := ledger.Claim(ctx, owners[1], at.Add(2*time.Second), time.Second)
+	second, found, err := ledger.Claim(ctx, owners[1], claimAt.Add(2*time.Second), time.Second)
 	if err != nil || !found || second.FencingToken != first.FencingToken+1 {
 		t.Fatalf("takeover = %#v, %v, %v", second, found, err)
 	}
@@ -87,10 +88,10 @@ func TestPostgresClaimExpiryAndFencing(t *testing.T) {
 	if err := ledger.Complete(ctx, job.ID, *first.ClaimOwner, first.FencingToken, ref, at); !errors.Is(err, ErrStaleFence) {
 		t.Fatalf("stale completion = %v", err)
 	}
-	if err := ledger.Complete(ctx, job.ID, owners[1], second.FencingToken, ref, at.Add(2*time.Second)); err != nil {
+	if err := ledger.Complete(ctx, job.ID, owners[1], second.FencingToken, ref, claimAt.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := ledger.Claim(ctx, owners[0], at.Add(4*time.Second), time.Second); err != nil || found {
+	if _, found, err := ledger.Claim(ctx, owners[0], claimAt.Add(4*time.Second), time.Second); err != nil || found {
 		t.Fatalf("terminal reclaim = %v, %v", found, err)
 	}
 }
