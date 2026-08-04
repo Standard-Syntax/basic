@@ -62,6 +62,9 @@ func MapSpecificationRequest(value *reasoningv1.SpecificationRequest) (Specifica
 	if err != nil {
 		return SpecificationRequest{}, err
 	}
+	if envelope.TaskID != nil {
+		return SpecificationRequest{}, errors.New("specification request must not contain a task ID")
+	}
 	if value.GetProblemStatement() == "" || value.GetDesiredOutcome() == "" ||
 		len(value.GetStakeholders()) == 0 {
 		return SpecificationRequest{}, errors.New("incomplete specification request")

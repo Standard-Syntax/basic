@@ -51,7 +51,7 @@ func specificationManifest(t *testing.T) manifest.Manifest {
 	return value
 }
 
-func TestSpecificationServiceInjectsIdentityAndReplaysExactly(t *testing.T) {
+func TestSpecificationServiceInjectsIdentityAndReplaysExactly(t *testing.T) { // skipcq: GO-R1005 -- replay identity assertions are intentionally coupled
 	request := specificationRequestFixture(t)
 	proposal := specificationProposalFixture(t)
 	store := newMemoryArtifactStore()
@@ -163,8 +163,42 @@ func TestSpecificationServiceProviderFailureRollsBack(t *testing.T) {
 	if _, err := service.ProposeSpecification(t.Context(), request); err == nil {
 		t.Fatal("provider failure was accepted")
 	}
-	if outcome, err := service.ProposeSpecification(t.Context(), request); err != nil || outcome.Proposal == nil {
+	repository.mu.Lock()
+	invocationCount := len(repository.records)
+	repository.mu.Unlock()
+	store.mu.Lock()
+	artifactCount := len(store.values)
+	store.mu.Unlock()
+	if invocationCount != 0 || artifactCount != 1 {
+		t.Fatalf("failed attempt retained invocation=%d artifacts=%d", invocationCount, artifactCount)
+	}
+	if outcome, err := service.ProposeSpecification(t.Context(), request); err != nil ||
+		outcome.Proposal == nil || outcome.Replay {
 		t.Fatalf("retry outcome=%+v err=%v", outcome, err)
+	}
+}
+
+func TestSpecificationServiceRejectsTaskIdentityBeforePersistence(t *testing.T) {
+	request := specificationRequestFixture(t)
+	taskID := "TASK-001"
+	request.Envelope.TaskId = &taskID
+	store := newMemoryArtifactStore()
+	repository := newMemoryInvocationRepository()
+	var calls atomic.Int32
+	service, err := NewSpecificationService(&fakeResolver{}, specificationAdapterFunc(func(
+		context.Context, manifest.Manifest, *reasoningv1.SpecificationRequest,
+	) (SpecificationAdapterResult, error) {
+		calls.Add(1)
+		return SpecificationAdapterResult{}, nil
+	}), store, repository, fixedClock{now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := service.ProposeSpecification(t.Context(), request)
+	if err != nil || outcome.Rejection.GetCode() != reasoningv1.RejectionCode_REJECTION_CODE_SCHEMA_INVALID ||
+		calls.Load() != 0 || store.puts != 0 || len(repository.records) != 0 {
+		t.Fatalf("task-bound outcome=%+v calls=%d puts=%d records=%d err=%v",
+			outcome, calls.Load(), store.puts, len(repository.records), err)
 	}
 }
 
@@ -199,7 +233,11 @@ func TestMiniMaxSpecificationAdapterUsesClosedProjection(t *testing.T) {
 	}
 	result, err := adapter.ProposeSpecification(t.Context(), manifestValue, request)
 	if err != nil || result.Proposal == nil || result.Proposal.GetIdentity().GetRequestId() != request.GetEnvelope().GetRequestId() ||
+		result.Proposal.GetTitle() != projection.Title || result.Proposal.GetGoal() != projection.Goal ||
+		len(result.Proposal.GetAcceptanceCriteria()) != 1 ||
+		result.Proposal.GetAcceptanceCriteria()[0].GetCriterionId() != "AC-001" ||
 		sender.calls.Load() != 1 || sender.key != "credential" ||
+		len(sender.params.System) == 0 ||
 		!strings.Contains(sender.params.System[0].Text, `"additionalProperties":false`) {
 		t.Fatalf("adapter result=%+v calls=%d err=%v", result, sender.calls.Load(), err)
 	}

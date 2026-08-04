@@ -74,7 +74,7 @@ func NewSpecificationService(
 		invocations: invocations, clock: clock, limits: limits}, nil
 }
 
-func (s *SpecificationService) ProposeSpecification(
+func (s *SpecificationService) ProposeSpecification( // skipcq: GO-R1005 -- explicit fail-closed gateway audit path
 	ctx context.Context, request *reasoningv1.SpecificationRequest,
 ) (SpecificationOutcome, error) {
 	if err := ctx.Err(); err != nil {
@@ -90,7 +90,7 @@ func (s *SpecificationService) ProposeSpecification(
 			"request", "serialized request exceeds byte limit", nil, started)}, nil
 	}
 	if request == nil || request.GetEnvelope() == nil || request.GetEnvelope().GetRequestId() == "" ||
-		request.GetEnvelope().GetAttempt() == 0 {
+		request.GetEnvelope().GetAttempt() == 0 || request.GetEnvelope().TaskId != nil {
 		_, mapErr := contracts.MapSpecificationRequest(request)
 		return SpecificationOutcome{Rejection: specificationRejection(request,
 			"request", errorMessage(mapErr, "invalid specification request"), nil, started)}, nil
