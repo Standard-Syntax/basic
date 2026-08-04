@@ -391,50 +391,45 @@ def _write_state(path: Path, value: dict[str, Any], *, replace: bool = False) ->
         temporary.unlink(missing_ok=True)
 
 
-def load_state(  # skipcq: PYL-R0912 -- compatibility migration validates both closed state schemas
-    path: Path, config: OperatorConfig
-) -> dict[str, Any]:
-    raw = _json_file(path, "operator state")
-    if isinstance(raw, dict) and raw.get("schema_version") == LEGACY_STATE_SCHEMA:
-        legacy = _object(raw, "operator state", _LEGACY_STATE_FIELDS)
-        request = legacy["specification_request"]
-        if not isinstance(request, dict):
-            raise OperatorError("legacy operator state contains invalid specification input")
-        root = {
-            "schema_version": STATE_SCHEMA,
-            "endpoint": legacy["endpoint"],
-            "project_root": legacy["project_root"],
-            "run_id": legacy["run_id"],
-            "base_commit": legacy["base_commit"],
-            "specification_input": {
-                "schema_version": "run_intake_specification.v1",
-                "problem_statement": request.get("problem_statement"),
-                "desired_outcome": request.get("desired_outcome"),
-                "known_constraints": request.get("known_constraints", []),
-                "known_non_goals": request.get("known_non_goals", []),
-                "stakeholders": request.get("stakeholders", []),
-                **(
-                    {"repository_summary": request["repository_summary"]}
-                    if "repository_summary" in request
-                    else {}
-                ),
-            },
-            "operations": legacy["operations"],
-        }
-        _write_state(path, root, replace=True)
-    else:
-        root = _object(raw, "operator state", _STATE_FIELDS)
+def _upgrade_legacy_state(path: Path, raw: dict[str, Any]) -> dict[str, Any]:
+    legacy = _object(raw, "operator state", _LEGACY_STATE_FIELDS)
+    request = legacy["specification_request"]
+    if not isinstance(request, dict):
+        raise OperatorError("legacy operator state contains invalid specification input")
+    specification_input = {
+        "schema_version": "run_intake_specification.v1",
+        "problem_statement": request.get("problem_statement"),
+        "desired_outcome": request.get("desired_outcome"),
+        "known_constraints": request.get("known_constraints", []),
+        "known_non_goals": request.get("known_non_goals", []),
+        "stakeholders": request.get("stakeholders", []),
+    }
+    if "repository_summary" in request:
+        specification_input["repository_summary"] = request["repository_summary"]
+    root = {
+        "schema_version": STATE_SCHEMA,
+        "endpoint": legacy["endpoint"],
+        "project_root": legacy["project_root"],
+        "run_id": legacy["run_id"],
+        "base_commit": legacy["base_commit"],
+        "specification_input": specification_input,
+        "operations": legacy["operations"],
+    }
+    _write_state(path, root, replace=True)
+    return root
+
+
+def _validate_state(root: dict[str, Any], config: OperatorConfig) -> None:
     if (
         root["schema_version"] != STATE_SCHEMA
         or root["endpoint"] != config.endpoint
         or root["project_root"] != str(config.project_root)
     ):
         raise OperatorError("operator state does not match configuration")
-    for field in ("run_id",):
-        try:
-            uuid.UUID(cast(str, root[field]))
-        except (TypeError, ValueError) as error:
-            raise OperatorError("operator state contains an invalid identity") from error
+    try:
+        uuid.UUID(cast(str, root["run_id"]))
+    except (TypeError, ValueError) as error:
+        raise OperatorError("operator state contains an invalid identity") from error
     operations = root["operations"]
     if not isinstance(operations, dict) or not all(
         isinstance(name, str)
@@ -451,6 +446,15 @@ def load_state(  # skipcq: PYL-R0912 -- compatibility migration validates both c
         or specification_input.get("schema_version") != "run_intake_specification.v1"
     ):
         raise OperatorError("operator state contains invalid specification input")
+
+
+def load_state(path: Path, config: OperatorConfig) -> dict[str, Any]:
+    raw = _json_file(path, "operator state")
+    if isinstance(raw, dict) and raw.get("schema_version") == LEGACY_STATE_SCHEMA:
+        root = _upgrade_legacy_state(path, cast(dict[str, Any], raw))
+    else:
+        root = _object(raw, "operator state", _STATE_FIELDS)
+    _validate_state(root, config)
     return root
 
 
