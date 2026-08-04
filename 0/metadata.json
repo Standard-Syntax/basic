@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ525MVV901Z9CV5GBK10QA4",
+  "session_id": "019fc98c-8916-7cf1-9e7a-38b3c6fd5562",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-04T00:18:31.144762619Z",
+  "branch": "harness/live-planning",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/reasoning/contracts/planning.go"
+  ],
+  "agent": "Codex",
+  "model": "gpt-5.6-sol",
+  "turn_id": "21ec1fdbf144",
+  "checkpoint_transcript_start": 2123,
+  "transcript_lines_at_start": 2123,
+  "compact_transcript_start": 503,
+  "token_usage": {
+    "input_tokens": 262464,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8849920,
+    "output_tokens": 6137,
+    "api_call_count": 42
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-04T00:18:30.899425888Z",
+    "agent_lines": 20,
+    "agent_removed": 12,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "total_lines_changed": 32,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

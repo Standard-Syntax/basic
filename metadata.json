@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "01KZ525MVV901Z9CV5GBK10QA4",
+  "strategy": "manual-commit",
+  "branch": "harness/live-planning",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "go/internal/reasoning/contracts/planning.go"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0/metadata.json",
+      "transcript": "/0/full.jsonl",
+      "compact_transcript": "/0/transcript.jsonl",
+      "content_hash": "/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 262464,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 8849920,
+    "output_tokens": 6137,
+    "api_call_count": 42
+  }
+}
